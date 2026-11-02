@@ -6,6 +6,7 @@ WHAT IT DOES
   Chat   knowledge database + exact calculator/counter + live web search + plan/solve/verify
   Code   write, fix, explain, convert, review code in 16 languages (HTML and JavaScript can run)
   Photo  photo editor that runs in the browser (looks, sliders, rotate, crop, caption, download)
+  Lab    image maker, photo vision, data analyst, business, robot, storyboard, music, farming, energy
   Video  trim, speed, resize, rotate, looks, MP4 / GIF / MP3 output (needs ffmpeg, see below)
 
 RUN ON YOUR COMPUTER
@@ -806,6 +807,7 @@ a.primary{text-decoration:none;display:inline-block}
     <button class="tab" type="button" data-view="code">Code</button>
     <button class="tab" type="button" data-view="photo">Photo</button>
     <button class="tab" type="button" data-view="video">Video</button>
+    <button class="tab" type="button" data-view="lab">Lab</button>
   </nav>
   <div class="tools" id="chatTools">
     <button class="btn" id="kbBtn" type="button" aria-haspopup="dialog">Knowledge <span class="badge" id="count">0</span></button>
@@ -934,6 +936,41 @@ a.primary{text-decoration:none;display:inline-block}
               <label class="btn" for="pfile" style="cursor:pointer">Change photo</label></div>
           </div>
         </fieldset>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="view studio" id="v-lab">
+  <div class="wrap">
+    <h2 class="st-title">Lab</h2>
+    <p class="st-sub">More skills: pictures, photo vision, data, business, robot, storyboards, music, farming and energy.</p>
+    <div class="grid2 even">
+      <div class="panel">
+        <div class="seg" id="lmods" role="group" aria-label="Skill">
+          <button type="button" data-m="image" aria-pressed="true">Image</button>
+          <button type="button" data-m="vision" aria-pressed="false">Vision</button>
+          <button type="button" data-m="data" aria-pressed="false">Data</button>
+          <button type="button" data-m="enterprise" aria-pressed="false">Business</button>
+          <button type="button" data-m="robot" aria-pressed="false">Robot</button>
+          <button type="button" data-m="media" aria-pressed="false">Storyboard</button>
+          <button type="button" data-m="music" aria-pressed="false">Music</button>
+          <button type="button" data-m="agri" aria-pressed="false">Farming</button>
+          <button type="button" data-m="energy" aria-pressed="false">Energy</button>
+        </div>
+        <label class="lab"><span id="ltextL">Describe the picture</span>
+          <textarea class="in" id="ltext" rows="5"></textarea></label>
+        <div class="row2">
+          <label class="lab" id="lplaceW" hidden>City or village<input class="in" id="lplace" placeholder="Patna"></label>
+          <label class="lab" id="lareaW" hidden><span id="lareaL">Area (m2)</span><input class="in" id="larea" type="number" min="1" value="1000"></label>
+        </div>
+        <label class="lab" id="lfileW" hidden><span id="lfileL">Photo</span>
+          <input class="in" id="lfile" type="file" accept="image/*"></label>
+        <div><button class="primary" id="lgo" type="button">Make image</button></div>
+        <p class="muted" id="lstatus" aria-live="polite"></p>
+      </div>
+      <div class="panel">
+        <div class="outpane" id="lout" aria-live="polite"><p class="muted">Your result appears here.</p></div>
       </div>
     </div>
   </div>
@@ -1139,7 +1176,7 @@ $('#drawer').setAttribute('aria-hidden','true');
 stats();box.focus();
 
 /* ================= tabs ================= */
-const VIEWS=['chat','code','photo','video'];
+const VIEWS=['chat','code','photo','video','lab'];
 function showView(v){
   if(!VIEWS.includes(v))v='chat';
   document.body.dataset.view=v;
@@ -1380,6 +1417,87 @@ function sendVideo(retry){
 }
 $('#v-go').onclick=()=>{if(!vfile)return;$('#v-go').disabled=true;vstatus('Uploading 0%');sendVideo(false)};
 
+/* ================= lab ================= */
+let lmod='image',limg='';
+const LM={
+  image:['Describe the picture','a red fox in a snowy forest, watercolor','Make image'],
+  vision:['What should I look for? (optional)','What is in this photo?','Analyze photo'],
+  data:['Paste CSV data, or choose a .csv file','name,sales\nA,10\nB,20','Analyze data'],
+  enterprise:['Ask using your Knowledge notes','Summarize our refund policy and list action items','Ask'],
+  robot:['Tell the robot what to do on a 10 by 10 grid','Walk to the far right edge, then down to the bottom','Run robot'],
+  media:['Video idea','A 30 second ad for a coffee shop','Write storyboard'],
+  music:['Describe the music','A calm piano tune in C major','Compose'],
+  agri:['Crop (rice, wheat, maize, cotton, tomato, potato...)','rice','Plan irrigation'],
+  energy:['Question (optional)','How much solar power can my roof make?','Check energy and weather']
+};
+const lstatus=m=>$('#lstatus').textContent=m;
+function applyLab(){
+  document.querySelectorAll('#lmods button').forEach(b=>b.setAttribute('aria-pressed',b.dataset.m===lmod));
+  const m=LM[lmod];
+  $('#ltextL').textContent=m[0];$('#ltext').placeholder=m[1];$('#lgo').textContent=m[2];
+  const w=lmod==='agri'||lmod==='energy';
+  $('#lplaceW').hidden=!w;$('#lareaW').hidden=!w;
+  $('#lareaL').textContent=lmod==='agri'?'Field area (m2)':'Solar panel area (m2)';
+  $('#lfileW').hidden=!(lmod==='vision'||lmod==='agri'||lmod==='data');
+  $('#lfile').accept=lmod==='data'?'.csv,text/csv,text/plain':'image/*';
+  $('#lfileL').textContent=lmod==='data'?'CSV file':lmod==='agri'?'Plant photo (optional, checks for disease)':'Photo';
+  $('#lfile').value='';limg='';lstatus('');
+}
+document.querySelectorAll('#lmods button').forEach(b=>b.onclick=()=>{lmod=b.dataset.m;applyLab()});
+applyLab();
+$('#lfile').onchange=e=>{
+  const f=e.target.files[0];if(!f)return;
+  if(lmod==='data'){const r=new FileReader();r.onload=()=>{$('#ltext').value=String(r.result).slice(0,20000);lstatus('File loaded.')};r.readAsText(f);return}
+  const url=URL.createObjectURL(f),img=new Image();
+  img.onload=()=>{
+    const k=Math.min(1,1024/Math.max(img.naturalWidth,img.naturalHeight)),c=document.createElement('canvas');
+    c.width=Math.round(img.naturalWidth*k);c.height=Math.round(img.naturalHeight*k);
+    c.getContext('2d').drawImage(img,0,0,c.width,c.height);URL.revokeObjectURL(url);
+    limg=c.toDataURL('image/jpeg',.85);lstatus('Photo ready.');
+  };
+  img.onerror=()=>{URL.revokeObjectURL(url);lstatus('That file could not be opened as a picture.')};
+  img.src=url;
+};
+function labRobot(cmds){
+  const c=$('#lcan'),g=c.getContext('2d'),s=30;let x=0,y=0,dx=1,dy=0,i=0;
+  g.strokeStyle='#bbb';
+  for(let n=0;n<=10;n++){g.beginPath();g.moveTo(n*s,0);g.lineTo(n*s,300);g.moveTo(0,n*s);g.lineTo(300,n*s);g.stroke()}
+  const t=setInterval(()=>{
+    if(i>=cmds.length){clearInterval(t);return}
+    const k=cmds[i++];
+    if(k==='L')[dx,dy]=[dy,-dx];else if(k==='R')[dx,dy]=[-dy,dx];
+    else{x=Math.max(0,Math.min(9,x+dx));y=Math.max(0,Math.min(9,y+dy))}
+    g.fillStyle='rgba(60,120,255,.35)';g.fillRect(x*s+3,y*s+3,s-6,s-6);
+  },150);
+}
+function labPlay(m){
+  const a=new (window.AudioContext||window.webkitAudioContext)(),b=60/m.tempo;let t=a.currentTime+.1;
+  m.notes.forEach(([n,d])=>{
+    if(n>0){const o=a.createOscillator(),g=a.createGain();o.type='triangle';o.frequency.value=440*Math.pow(2,(n-69)/12);
+      g.gain.setValueAtTime(.2,t);g.gain.exponentialRampToValueAtTime(.001,t+d*b);o.connect(g);g.connect(a.destination);o.start(t);o.stop(t+d*b)}
+    t+=d*b;
+  });
+}
+$('#lgo').onclick=async()=>{
+  const go=$('#lgo');go.disabled=true;lstatus('Working. Pictures and photos can take a little while.');
+  try{
+    const r=await api('/lab',{mod:lmod,text:$('#ltext').value,place:$('#lplace').value,area:$('#larea').value,image:(lmod==='vision'||lmod==='agri')?limg:''});
+    const j=await r.json();
+    if(r.status===401)throw new Error('That access key was not accepted. Reload the page and enter it again.');
+    if(!r.ok||j.error)throw new Error(j.error||'The server did not answer.');
+    const o=$('#lout');
+    o.innerHTML=(j.image?'<img id="limgout" alt="Generated picture" style="max-width:100%;border-radius:12px;margin-bottom:12px">':'')
+      +(j.answer?'<div class="body">'+md(j.answer)+'</div>':'')
+      +(j.music?'<p><button class="btn" id="lplay" type="button">Play</button></p>':'')
+      +(j.robot?'<canvas id="lcan" width="300" height="300" aria-label="Robot path" style="max-width:100%"></canvas>':'');
+    if(j.image){const im=$('#limgout');im.onerror=()=>{im.remove();lstatus('The picture service did not answer. Try again in a moment.')};im.src=j.image}
+    if(j.music)$('#lplay').onclick=()=>labPlay(j.music);
+    if(j.robot)labRobot(j.robot);
+    if(!j.image)lstatus('');
+  }catch(e){lstatus(e.message)}
+  go.disabled=false;
+};
+
 showView(location.hash.slice(1));
 </script>
 </body>
@@ -1390,6 +1508,199 @@ showView(location.hash.slice(1));
 # ==========================================================================
 # MORE ROUTES AND START
 # ==========================================================================
+# ==========================================================================
+# LAB: extra skills (image, photo vision, data, business, robot, media, music, farm, energy)
+# ==========================================================================
+import collections
+import csv
+import random
+import urllib.parse
+import urllib.request
+
+VISION_MODEL = os.environ.get("DEEP_OQ_VISION_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
+LAB_SYS = ("You are Deep OQ, an AI created by Mayank Kumar Saw. Be accurate, practical and concise. "
+           "Use short paragraphs and bullet lists. Never use tables, horizontal lines (---) or HTML tags.")
+KC = {"rice": 1.2, "wheat": 1.15, "maize": 1.2, "corn": 1.2, "cotton": 1.15, "tomato": 1.15,
+      "potato": 1.15, "sugarcane": 1.25, "soybean": 1.1, "banana": 1.2, "vegetables": 1.0}
+
+
+def _get_json(url):
+    with urllib.request.urlopen(url, timeout=15) as r:
+        return json.load(r)
+
+
+def forecast(place):
+    """7-day weather, evapotranspiration and sunshine for a place (free Open-Meteo, no key)."""
+    g = _get_json("https://geocoding-api.open-meteo.com/v1/search?count=1&name=" + urllib.parse.quote(place))
+    if not g.get("results"):
+        raise ValueError("Could not find that place. Try a city name.")
+    p = g["results"][0]
+    w = _get_json("https://api.open-meteo.com/v1/forecast?latitude=%s&longitude=%s&timezone=auto&forecast_days=7"
+                  "&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,wind_speed_10m_max,"
+                  "et0_fao_evapotranspiration,shortwave_radiation_sum" % (p["latitude"], p["longitude"]))
+    d = w["daily"]
+    return p["name"], [{k: (d[k][i] or 0) for k in d if k != "time"} | {"date": day}
+                       for i, day in enumerate(d["time"])]
+
+
+def _json_from(text):
+    m = re.search(r"\{.*\}", text, re.S)
+    try:
+        return json.loads(m.group(0))
+    except (AttributeError, ValueError):
+        raise ValueError("The AI did not return a usable result. Please try again.")
+
+
+def _vision(prompt, image):
+    if not image.startswith("data:image/"):
+        raise ValueError("Choose a photo first.")
+    r = client.chat.completions.create(
+        model=VISION_MODEL, max_tokens=1200, temperature=0.3,
+        messages=[{"role": "user", "content": [
+            {"type": "text", "text": prompt},
+            {"type": "image_url", "image_url": {"url": image}}]}])
+    return (r.choices[0].message.content or "").strip()
+
+
+def _lab(d):
+    mod = d.get("mod")
+    text = str(d.get("text", "")).strip()[:20000]
+    place = str(d.get("place", "")).strip()[:80]
+    image = str(d.get("image", ""))[:6_000_000]
+    try:
+        area = min(max(float(d.get("area") or 100), 1), 1e7)
+    except (TypeError, ValueError):
+        area = 100.0
+
+    def ask(task, smart=False):
+        return chat([{"role": "system", "content": LAB_SYS}, {"role": "user", "content": task}],
+                    0.4, 2048, smart)
+
+    # ---- Agriculture + Energy/Environment: real forecast numbers, then AI advice
+    if mod in ("agri", "energy"):
+        if not place:
+            raise ValueError("Type a city or village name.")
+        name, days = forecast(place)
+        if mod == "agri":
+            kc = KC.get(text.lower(), 1.0)
+            lines, total = [], 0.0
+            for x in days:
+                mm = max(0.0, kc * x["et0_fao_evapotranspiration"] - x["precipitation_sum"])
+                total += mm * area
+                lines.append(f'{x["date"]}: max {x["temperature_2m_max"]}C, rain {x["precipitation_sum"]} mm, '
+                             f'water needed {mm:.1f} mm = {mm * area:.0f} litres')
+            facts = (f"Crop: {text or 'general crop'} (crop factor {kc}). Field {area:.0f} m2 near {name}.\n"
+                     "7-day irrigation need (crop evapotranspiration minus rain):\n" + "\n".join(lines)
+                     + f"\nTotal: {total:.0f} litres.")
+            out = ask(facts + "\n\nExplain this plan simply for a farmer: when to irrigate, how much, "
+                      "and any weather risks. Keep the numbers exactly as given.")
+            if image.startswith("data:image/"):
+                out += "\n\n## Plant health from your photo\n" + _vision(
+                    "You are a plant pathologist. Identify the crop, any visible disease, pest or nutrient "
+                    "problem, how sure you are, and practical treatment and prevention steps. "
+                    "If the photo does not show a plant, say so.", image)
+            return {"answer": out}
+        lines, warn, kwh = [], [], 0.0
+        for x in days:
+            e = x["shortwave_radiation_sum"] / 3.6 * area * 0.18 * 0.75  # MJ/m2 -> kWh, 18% panels, 75% system
+            kwh += e
+            lines.append(f'{x["date"]}: solar {e:.1f} kWh, max {x["temperature_2m_max"]}C, '
+                         f'wind {x["wind_speed_10m_max"]} km/h, rain {x["precipitation_sum"]} mm')
+            if x["temperature_2m_max"] >= 40: warn.append(f'{x["date"]}: extreme heat')
+            if x["temperature_2m_min"] <= 0: warn.append(f'{x["date"]}: frost')
+            if x["precipitation_sum"] >= 50: warn.append(f'{x["date"]}: heavy rain, flood risk')
+            if x["wind_speed_10m_max"] >= 60: warn.append(f'{x["date"]}: strong wind, storm risk')
+        facts = (f"Place: {name}. Solar panels: {area:.0f} m2.\n" + "\n".join(lines)
+                 + f"\nTotal solar this week: {kwh:.0f} kWh.\nEarly warnings: "
+                 + ("; ".join(warn) or "none this week."))
+        return {"answer": ask(facts + "\n\nSummarize the expected solar output, the early warnings and "
+                              "sensible grid or home actions. Keep the numbers exactly as given. "
+                              + (("Also answer: " + text) if text else ""))}
+
+    if mod == "vision":
+        return {"answer": _vision(text or "Describe this photo in detail and point out anything "
+                                  "important or unusual.", image)}
+    if not text:
+        raise ValueError("Type something first.")
+
+    if mod == "image":
+        p = ask("Rewrite this as one vivid, detailed image-generation prompt (max 60 words). "
+                "Output only the prompt:\n" + text)
+        url = ("https://image.pollinations.ai/prompt/" + urllib.parse.quote(p)
+               + "?width=1024&height=1024&nologo=true&seed=" + str(random.randint(1, 10**6)))
+        return {"image": url, "answer": "Prompt used: " + p}
+
+    if mod == "data":
+        rows = list(csv.DictReader(io.StringIO(text)))
+        if not rows:
+            raise ValueError("Paste CSV data with a header row.")
+        stats = []
+        for col in rows[0]:
+            vals = []
+            for r in rows:
+                try:
+                    vals.append(float(str(r.get(col, "")).replace(",", "")))
+                except ValueError:
+                    pass
+            if vals and len(vals) >= len(rows) / 2:
+                stats.append(f"{col}: numeric, n={len(vals)}, min={min(vals):g}, max={max(vals):g}, "
+                             f"mean={sum(vals) / len(vals):.4g}, sum={sum(vals):.6g}")
+            else:
+                top = collections.Counter(str(r.get(col, "")) for r in rows).most_common(3)
+                stats.append(f"{col}: text, top values {top}")
+        return {"answer": ask(f"{len(rows)} rows. Exact column statistics:\n" + "\n".join(stats)
+                              + f"\n\nFirst rows:\n{rows[:5]}\n\nGive key findings, anything unusual, and 3 "
+                              "recommendations. Use the exact statistics.", smart=True)}
+
+    if mod == "enterprise":
+        know = knowledge_block(text)
+        return {"answer": ask((know + "\n\n" if know else "") + "REQUEST:\n" + text
+                              + "\n\nAnswer as a business assistant. Use KNOWLEDGE if relevant and say if "
+                              "nothing relevant was found. End with a short list of action items.", smart=True)}
+
+    if mod == "media":
+        return {"answer": ask("Write a video storyboard for this idea: a title, then 5 to 8 scenes, each with "
+                              "a shot description, narration line and duration in seconds. Finish with music "
+                              "and editing tips.\n\nIDEA: " + text)}
+
+    if mod == "robot":
+        j = _json_from(ask(
+            'A robot is on a 10x10 grid, starting at the top-left cell facing east. Commands: F moves one '
+            'cell forward (walls stop it), L turns left, R turns right. Return ONLY JSON like '
+            '{"commands":["F","R","F"],"explain":"one short sentence"} with at most 150 commands '
+            'for this goal: ' + text))
+        cmds = [c for c in j.get("commands", []) if c in ("F", "L", "R")][:150]
+        return {"robot": cmds, "answer": str(j.get("explain", ""))[:500]}
+
+    if mod == "music":
+        j = _json_from(ask(
+            'Compose a short piece. Return ONLY JSON {"title":"...","tempo":90,"notes":[[midi_note,beats],...]} '
+            'with 32 to 64 notes; midi_note 60 is middle C and 0 is a rest; beats between 0.25 and 4. '
+            'Request: ' + text))
+        try:
+            notes = [[int(n), float(b)] for n, b in j.get("notes", [])
+                     if 0 <= int(n) <= 127 and 0.1 <= float(b) <= 8][:200]
+            tempo = max(40, min(240, int(j.get("tempo", 100))))
+        except (TypeError, ValueError):
+            raise ValueError("The AI did not return usable music. Please try again.")
+        return {"music": {"tempo": tempo, "notes": notes}, "answer": "Title: " + str(j.get("title", "Untitled"))[:80]}
+
+    raise ValueError("Pick one of the Lab skills.")
+
+
+@app.post("/lab")
+def lab_route():
+    if denied():
+        return jsonify(error="locked"), 401
+    try:
+        return jsonify(_lab(request.get_json(silent=True) or {}))
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+    except Exception as e:
+        print("lab failed:", e)
+        return jsonify(error=str(e)[:300]), 500
+
+
 @app.post("/code")
 def code_route():
     if denied():
