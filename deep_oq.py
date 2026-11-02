@@ -292,7 +292,8 @@ def _code():
     msgs = [
         {"role": "system", "content": "You are Deep OQ, an expert software engineer created by "
          "Mayank Kumar Saw. Write correct, modern, readable code. Use fenced code blocks with "
-         "the language name. Be concise outside the code."},
+         "the language name. Be concise outside the code. Never use tables, horizontal lines "
+         "(---) or HTML tags such as <br>; use short bullet lists."},
         {"role": "user", "content": prompt},
     ]
     try:
@@ -453,7 +454,8 @@ SYSTEM = (
     "hard reasoning and math problems step by step, and say so when you are "
     "unsure. Reply in the language the user writes in. Do not add a Sources line. "
     "When KNOWLEDGE is provided, use it if relevant and prefer it over guessing; "
-    "if it is not relevant, ignore it."
+    "if it is not relevant, ignore it. Write in short paragraphs, simple headings and "
+    "bullet lists. Never use tables, horizontal lines (---) or HTML tags such as <br>."
 )
 
 HARD_HINTS = ("code", "function", "bug", "prove", "calculate", "solve", "why",
@@ -788,6 +790,11 @@ a.primary{text-decoration:none;display:inline-block}
 .preview{width:100%;height:340px;border:1px solid var(--line);border-radius:12px;background:#fff}
 .consoleout{font-family:var(--mono);font-size:13.5px;line-height:1.5;background:var(--code-bg);color:var(--code-ink);border-radius:12px;padding:12px;white-space:pre-wrap;min-height:44px;margin:0;overflow-x:auto}
 .note{font-family:var(--ui);font-size:14px;color:var(--err);margin:0}
+.tbl{overflow-x:auto;margin:0 0 1em;border-radius:12px}
+.body table{border-collapse:collapse;width:100%;font-family:var(--ui);font-size:15px;line-height:1.5}
+.body th{text-align:left;font-weight:600;padding:9px 14px;background:rgba(127,130,170,.2)}
+.body td{padding:9px 14px;vertical-align:top}
+.body tbody tr:nth-child(even) td{background:rgba(127,130,170,.09)}
 [hidden]{display:none!important}
 </style>
 </head>
@@ -1004,6 +1011,7 @@ $('#heroMark').innerHTML=mark(92,'hero-mark');
 const esc=s=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 function inline(s){
   s=esc(s);
+  s=s.replace(/&lt;br\s*\/?&gt;/gi,'<br>');
   s=s.replace(/`([^`\n]+)`/g,'<code>$1</code>');
   s=s.replace(/\*\*([^*\n]+)\*\*/g,'<strong>$1</strong>');
   s=s.replace(/(^|[^*])\*([^*\n]+)\*/g,'$1<em>$2</em>');
@@ -1013,9 +1021,24 @@ function block(t){
   let out='',list=null,para=[];
   const fp=()=>{if(para.length){out+='<p>'+inline(para.join(' '))+'</p>';para=[]}};
   const fl=()=>{if(list){out+=`<${list.t}>`+list.items.map(x=>'<li>'+inline(x)+'</li>').join('')+`</${list.t}>`;list=null}};
-  for(const raw of t.split('\n')){
-    const l=raw.trimEnd();let m;
+  const lines=t.split('\n');
+  const isRow=x=>/^\s*\|.*\|\s*$/.test(x);
+  const isSep=x=>/^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(x)&&x.includes('|');
+  const cells=r=>r.trim().replace(/^\|/,'').replace(/\|$/,'').split('|').map(c=>c.trim());
+  for(let i=0;i<lines.length;i++){
+    const l=lines[i].trimEnd();let m;
     if(!l.trim()){fp();fl();continue}
+    if(/^\s*([-*_])\1{2,}\s*$/.test(l)){fp();fl();continue}   /* drop horizontal lines */
+    if(isRow(l)&&i+1<lines.length&&isSep(lines[i+1])){
+      fp();fl();
+      const head=cells(l);let j=i+2;const body=[];
+      while(j<lines.length&&isRow(lines[j])){body.push(cells(lines[j]));j++}
+      i=j-1;
+      out+='<div class="tbl"><table><thead><tr>'+head.map(c=>'<th>'+inline(c)+'</th>').join('')+'</tr></thead><tbody>'
+        +body.map(r=>'<tr>'+r.map(c=>'<td>'+inline(c)+'</td>').join('')+'</tr>').join('')+'</tbody></table></div>';
+      continue;
+    }
+    if(isRow(l)||isSep(l)){continue}   /* stray table pieces: no raw | characters on screen */
     if(m=l.match(/^#{1,4}\s+(.*)/)){fp();fl();out+='<h3>'+inline(m[1])+'</h3>';continue}
     if(m=l.match(/^\s*[-*•]\s+(.*)/)){fp();if(!list||list.t!=='ul'){fl();list={t:'ul',items:[]}}list.items.push(m[1]);continue}
     if(m=l.match(/^\s*\d+[.)]\s+(.*)/)){fp();if(!list||list.t!=='ol'){fl();list={t:'ol',items:[]}}list.items.push(m[1]);continue}
