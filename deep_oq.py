@@ -7,6 +7,7 @@ WHAT IT DOES
   Code   write, fix, explain, convert, review code in 16 languages (HTML and JavaScript can run)
   Photo  photo editor that runs in the browser (looks, sliders, rotate, crop, caption, download)
   Lab    image maker, photo vision, data analyst, business, robot, storyboard, music, farming, energy
+  VR     /vr page for Meta Quest Browser: voice + buttons guide inside the headset
   Video  trim, speed, resize, rotate, looks, MP4 / GIF / MP3 output (needs ffmpeg, see below)
 
 RUN ON YOUR COMPUTER
@@ -812,6 +813,7 @@ a.primary{text-decoration:none;display:inline-block}
     <button class="tab" type="button" data-view="photo">Photo</button>
     <button class="tab" type="button" data-view="video">Video</button>
     <button class="tab" type="button" data-view="lab">Lab</button>
+    <a class="tab" href="/vr" style="text-decoration:none;display:inline-flex;align-items:center">VR</a>
   </nav>
   <div class="tools" id="chatTools">
     <button class="btn" id="kbBtn" type="button" aria-haspopup="dialog">Knowledge <span class="badge" id="count">0</span></button>
@@ -1703,6 +1705,106 @@ def lab_route():
     except Exception as e:
         print("lab failed:", e)
         return jsonify(error=str(e)[:300]), 500
+
+
+# ==========================================================================
+# VR GUIDE (WebXR page for Meta Quest Browser, phones and desktop): open /vr
+# ==========================================================================
+VR_PAGE = r"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Deep OQ VR Guide</title>
+<script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+<style>
+#dom{position:fixed;left:0;right:0;bottom:0;display:flex;gap:8px;padding:10px;background:#0b0b2acc;z-index:9;font-family:system-ui,sans-serif}
+#dom input{flex:1;font-size:16px;padding:10px;border-radius:10px;border:1px solid #556}
+#dom button{font-size:16px;padding:10px 16px;border-radius:10px;border:0;background:#2d3cff;color:#fff}
+</style></head>
+<body>
+<a-scene id="scene" background="color: #0b0b2a" cursor="rayOrigin: mouse" vr-mode-ui="enabled: true">
+  <a-entity position="0 1.6 0"><a-camera look-controls wasd-controls-enabled="false">
+    <a-cursor color="#9ab0ff" fuse="true" fuse-timeout="1500" raycaster="objects: .btn"></a-cursor></a-camera></a-entity>
+  <a-entity laser-controls="hand: right" raycaster="objects: .btn; far: 6"></a-entity>
+  <a-entity laser-controls="hand: left" raycaster="objects: .btn; far: 6"></a-entity>
+  <a-plane position="0 1.55 -2.2" width="3.8" height="2.6" material="shader: flat; color: #14143a"></a-plane>
+  <a-text value="Deep OQ VR Guide" position="-1.7 2.65 -2.18" width="3.4" color="#ffffff" anchor="left" align="left"></a-text>
+  <a-text id="out" value="Pick a button or press Mic and ask me anything." position="-1.7 2.4 -2.18" width="3.4"
+          wrap-count="46" anchor="left" align="left" baseline="top" color="#e8e8ff"></a-text>
+  <a-text id="page" value="" position="1.7 0.9 -2.18" width="1.2" anchor="right" align="right" color="#9aa"></a-text>
+</a-scene>
+<div id="dom"><input id="q" placeholder="Type a question (outside VR)" aria-label="Question"><button id="go" type="button">Ask</button></div>
+<script>
+const scene=document.querySelector('#scene'),out=document.querySelector('#out'),pg=document.querySelector('#page');
+const sid='vr-'+Math.random().toString(36).slice(2);
+let pages=[],idx=0,speak=true;
+function render(){
+  out.setAttribute('value',pages[idx]||'');
+  pg.setAttribute('value',pages.length>1?(idx+1)+' / '+pages.length:'');
+  if(speak&&pages[idx]&&window.speechSynthesis){speechSynthesis.cancel();speechSynthesis.speak(new SpeechSynthesisUtterance(pages[idx]))}
+}
+function show(t){pages=[t];idx=0;out.setAttribute('value',t);pg.setAttribute('value','')}
+function setAnswer(a){
+  const t=a.replace(/[*#`>_]/g,'').replace(/\s+/g,' ').trim();
+  pages=[];let s=t;
+  while(s.length){let c=s.slice(0,520);if(s.length>520){const k=Math.max(c.lastIndexOf('. '),c.lastIndexOf(' '));if(k>200)c=c.slice(0,k+1)}pages.push(c.trim());s=s.slice(c.length).trim()}
+  idx=0;render();
+}
+async function ask(q){
+  if(!q.trim())return;
+  show('Thinking...');
+  try{
+    const r=await fetch('/ask',{method:'POST',headers:{'Content-Type':'application/json','X-Access-Key':localStorage.ak||''},
+      body:JSON.stringify({session:sid,q:'[VR guide mode: answer in under 90 words, short plain sentences, no markdown, no lists.] '+q})});
+    if(r.status===401){
+      if(!scene.is('vr-mode')){const k=prompt('Enter the access key');if(k){localStorage.ak=k;return ask(q)}}
+      return show('Access key needed. Leave VR, reload this page and enter the key once.');
+    }
+    const j=await r.json();
+    if(!r.ok||j.error)throw new Error(j.error||'No answer');
+    setAnswer(j.answer);
+  }catch(e){show('Could not get an answer. '+e.message)}
+}
+function mic(){
+  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  if(!SR){show('Voice input is not available in this browser. Use the buttons or type outside VR.');return}
+  const r=new SR();r.lang=navigator.language||'en-US';
+  show('Listening...');
+  r.onresult=e=>ask(e.results[0][0].transcript);
+  r.onerror=()=>show('I could not hear you. Check the microphone permission and try again.');
+  r.start();
+}
+function addBtn(label,x,y,fn){
+  const e=document.createElement('a-entity');
+  e.setAttribute('class','btn');
+  e.setAttribute('geometry','primitive: plane; width: 0.8; height: 0.2');
+  e.setAttribute('material','shader: flat; color: #2d3cff');
+  e.setAttribute('position',x+' '+y+' -2.15');
+  e.setAttribute('text','value: '+label+'; align: center; width: 1.7; color: #ffffff');
+  e.addEventListener('click',fn);
+  e.addEventListener('mouseenter',()=>e.setAttribute('material','color','#6a76ff'));
+  e.addEventListener('mouseleave',()=>e.setAttribute('material','color','#2d3cff'));
+  scene.appendChild(e);return e;
+}
+addBtn('Mic',-1.3,0.65,mic);
+addBtn('Guide me',-0.43,0.65,()=>ask('Guide me step by step on how to use VR safely and comfortably.'));
+addBtn('Teach me',0.43,0.65,()=>ask('Teach me one interesting thing, simply.'));
+addBtn('Plan my day',1.3,0.65,()=>ask('Help me plan a productive day in 5 short steps.'));
+addBtn('Back',-1.3,0.38,()=>{if(idx>0){idx--;render()}});
+addBtn('Next',-0.43,0.38,()=>{if(idx<pages.length-1){idx++;render()}});
+const vb=addBtn('Voice: on',0.43,0.38,()=>{speak=!speak;vb.setAttribute('text','value',speak?'Voice: on':'Voice: off');if(!speak&&window.speechSynthesis)speechSynthesis.cancel()});
+addBtn('Clear',1.3,0.38,()=>{show('Pick a button or press Mic and ask me anything.');if(window.speechSynthesis)speechSynthesis.cancel()});
+document.querySelector('#go').onclick=()=>{const i=document.querySelector('#q');ask(i.value);i.value=''};
+document.querySelector('#q').addEventListener('keydown',e=>{if(e.key==='Enter')document.querySelector('#go').click()});
+scene.addEventListener('enter-vr',()=>document.querySelector('#dom').style.display='none');
+scene.addEventListener('exit-vr',()=>document.querySelector('#dom').style.display='flex');
+</script>
+</body></html>
+"""
+
+
+@app.get("/vr")
+def vr_page():
+    return VR_PAGE, 200, {"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache"}
 
 
 @app.post("/code")
