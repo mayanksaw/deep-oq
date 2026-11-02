@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: deep-oq
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn deep_oq:app --workers 1 --threads 4 --timeout 120
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.3
+      - key: GROQ_API_KEY
+        sync: false   # you type the key in the Render dashboard, never in GitHub
+      - key: ACCESS_KEY
+        sync: false   # optional password for your site
+      - key: DEEP_OQ_DB
+        value: deep_oq.db
+    # To keep the database after redeploys you need a paid plan + a disk:
+    #   plan: starter
+    #   disk:
+    #     name: oq-data
+    #     mountPath: /data
+    #     sizeGB: 1
+    # and then set DEEP_OQ_DB to /data/deep_oq.db
