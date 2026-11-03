@@ -1092,7 +1092,7 @@ a.primary{text-decoration:none;display:inline-block}
 <section class="view studio" id="v-news">
   <div class="wrap">
     <h2 class="st-title">News</h2>
-    <p class="st-sub">Live headlines: top stories, India, world, business, sports, your own city and more. Tap a headline to read the full story at its source.</p>
+    <p class="st-sub">Live headlines: top stories, India, world, business, sports, your own city and more. Press AI briefing to hear the main stories explained in simple words.</p>
     <div class="panel">
       <div class="seg" id="ncats" role="group" aria-label="News category"></div>
       <div class="row2">
@@ -1746,9 +1746,9 @@ function drawNews(){
   const ul=$('#nlist');ul.innerHTML='';
   nitems.forEach(n=>{
     const li=document.createElement('li');li.style.margin='0 0 14px';
-    const a=document.createElement('a');a.href=n.link;a.target='_blank';a.rel='noopener noreferrer';a.textContent=n.title;a.style.fontWeight='600';
-    const d=new Date(n.time),m=document.createElement('div');m.className='muted';
-    m.textContent=[n.source,isNaN(d)?'':d.toLocaleString()].filter(Boolean).join('  |  ');
+    const a=document.createElement('div');a.textContent=n.title;a.style.cssText='font-weight:600;color:#fff;line-height:1.4';
+    const d=new Date(n.time),m=document.createElement('div');m.style.cssText='color:rgba(255,255,255,.65);font-size:.9em;margin-top:2px';
+    m.textContent=[n.source,isNaN(d)?'':d.toLocaleString(undefined,{day:'numeric',month:'short',hour:'numeric',minute:'2-digit'})].filter(Boolean).join('  |  ');
     li.appendChild(a);li.appendChild(m);ul.appendChild(li);
   });
 }
@@ -1799,7 +1799,8 @@ import random
 import urllib.parse
 import urllib.request
 
-VISION_MODEL = os.environ.get("DEEP_OQ_VISION_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
+VISION_MODELS = [m for m in (os.environ.get("DEEP_OQ_VISION_MODEL"), "qwen/qwen3.8-27b",
+                             "meta-llama/llama-4-scout-17b-16e-instruct") if m]
 LAB_SYS = ("You are Deep OQ, an AI created by Mayank Kumar Saw. Be accurate, practical and concise. "
            "Use short paragraphs and bullet lists. Never use tables, horizontal lines (---) or HTML tags.")
 KC = {"rice": 1.2, "wheat": 1.15, "maize": 1.2, "corn": 1.2, "cotton": 1.15, "tomato": 1.15,
@@ -1837,12 +1838,21 @@ def _json_from(text):
 def _vision(prompt, image):
     if not image.startswith("data:image/"):
         raise ValueError("Choose a photo first.")
-    r = client.chat.completions.create(
-        model=VISION_MODEL, max_tokens=1200, temperature=0.3,
-        messages=[{"role": "user", "content": [
-            {"type": "text", "text": prompt},
-            {"type": "image_url", "image_url": {"url": image}}]}])
-    return (r.choices[0].message.content or "").strip()
+    msgs = [{"role": "user", "content": [
+        {"type": "text", "text": prompt},
+        {"type": "image_url", "image_url": {"url": image}}]}]
+    for mdl in VISION_MODELS:  # try the newest model first, then the backups
+        try:
+            r = client.chat.completions.create(model=mdl, max_tokens=3000, temperature=0.3, messages=msgs)
+        except Exception as e:
+            if any(w in str(e) for w in ("model_not_found", "does not exist", "decommissioned")):
+                print("vision model unavailable:", mdl)
+                continue
+            raise
+        text = re.sub(r"<think>.*?</think>", "", r.choices[0].message.content or "", flags=re.S).strip()
+        if text:
+            return text
+    raise ValueError("Photo understanding is not available right now. Please try again later.")
 
 
 def _lab(d):
@@ -1997,10 +2007,25 @@ VR_PAGE = r"""<!doctype html>
 #log{flex-basis:100%;max-height:18vh;overflow:auto;color:#dde;white-space:pre-wrap;font-size:15px}
 #dom input{flex:1;min-width:120px;font-size:16px;padding:10px;border-radius:10px;border:1px solid #556}
 #dom button{font-size:16px;padding:10px 16px;border-radius:10px;border:0;background:#2d3cff;color:#fff}
+#mov{position:fixed;top:10px;left:10px;z-index:10;max-width:min(340px,80vw);font:14px system-ui,sans-serif;padding:8px 12px;border-radius:10px;border:1px solid #6a76ff;background:#14143aee;color:#fff}
+#mov summary{cursor:pointer;font-weight:700}
+#mov p{margin:8px 0;color:#cfd6ff}
+#mov input[type=text],#mov input:not([type]){width:100%;box-sizing:border-box;font-size:15px;padding:8px;border-radius:8px;border:1px solid #556;margin:6px 0}
+.mbtn,#mgo{display:inline-block;font-size:15px;padding:8px 12px;border-radius:8px;border:0;background:#2d3cff;color:#fff;cursor:pointer;margin-right:6px}
+.mchk{display:block;margin-top:8px}
 #fs{position:fixed;top:10px;right:10px;z-index:10;font:600 14px system-ui,sans-serif;padding:9px 14px;border-radius:10px;border:1px solid #6a76ff;background:#14143aee;color:#fff;cursor:pointer}
 </style></head>
 <body>
 <button id="fs" type="button" aria-label="Toggle full screen">Full screen</button>
+<video id="mv" crossorigin="anonymous" playsinline preload="auto" style="display:none"></video>
+<details id="mov"><summary>Movies</summary>
+  <p>Watch your own videos on a huge virtual screen. Deep OQ does not provide movies, so use files you own or have the right to watch.</p>
+  <label class="mbtn">Choose a video file<input id="mf" type="file" accept="video/*" hidden></label>
+  <input id="mu" placeholder="Or paste a direct video link (.mp4 or .webm)" aria-label="Direct video link">
+  <button id="mgo" type="button">Load link</button>
+  <label class="mchk"><input type="checkbox" id="m360"> This is a 360 video</label>
+  <p id="mstat" aria-live="polite">Some websites block links. A file from your device always works.</p>
+</details>
 <a-scene id="scene" background="color: #0b0b2a" cursor="rayOrigin: mouse" vr-mode-ui="enabled: true">
   <a-entity position="0 1.6 0"><a-camera look-controls wasd-controls-enabled="false">
     <a-cursor color="#9ab0ff" fuse="true" fuse-timeout="1500" raycaster="objects: .btn"></a-cursor></a-camera></a-entity>
@@ -2013,6 +2038,11 @@ VR_PAGE = r"""<!doctype html>
           wrap-count="46" anchor="left" align="left" baseline="top" color="#e8e8ff"></a-text>
   <a-text id="code" value="" position="-1.7 0.9 -2.18" width="2" color="#9ab0ff" anchor="left" align="left"></a-text>
   <a-text id="page" value="" position="1.7 0.9 -2.18" width="1.2" anchor="right" align="right" color="#9aa"></a-text>
+  </a-entity>
+  <a-entity id="cine" visible="false">
+    <a-video id="screen" width="6.4" height="3.6" position="0 2.3 -5"></a-video>
+    <a-videosphere id="sphere" visible="false"></a-videosphere>
+    <a-text id="cstat" value="" position="0 0.9 -2.15" width="2.6" align="center" color="#cfd6ff"></a-text>
   </a-entity>
 </a-scene>
 <div id="dom"><div id="log" aria-live="polite"></div><input id="lc" placeholder="Headset code" size="8" aria-label="Headset link code"><button id="lj" type="button">Link</button><input id="q" placeholder="Type a question (outside VR)" aria-label="Question"><button id="go" type="button">Ask</button></div>
@@ -2106,9 +2136,9 @@ async function loop(){
   }catch(e){}
   if(link.code)link.timer=setTimeout(loop,1500);
 }
-function addBtn(label,x,y,fn){
+function addBtn(label,x,y,fn,parent,cls){
   const e=document.createElement('a-entity');
-  e.setAttribute('class','btn');
+  e.setAttribute('class',cls||'btn');
   e.setAttribute('geometry','primitive: plane; width: 0.8; height: 0.2');
   e.setAttribute('material','shader: flat; color: #2d3cff');
   e.setAttribute('position',x+' '+y+' -2.15');
@@ -2116,7 +2146,7 @@ function addBtn(label,x,y,fn){
   e.addEventListener('click',fn);
   e.addEventListener('mouseenter',()=>e.setAttribute('material','color','#6a76ff'));
   e.addEventListener('mouseleave',()=>e.setAttribute('material','color','#2d3cff'));
-  document.querySelector('#ui').appendChild(e);return e;
+  (parent||document.querySelector('#ui')).appendChild(e);return e;
 }
 addBtn('Mic',-1.3,0.65,mic);
 addBtn('Guide me',-0.43,0.65,()=>ask('Guide me step by step on how to use VR safely and comfortably.'));
@@ -2128,6 +2158,59 @@ const vb=addBtn('Voice: on',0.43,0.38,()=>{speak=!speak;vb.setAttribute('text','
 addBtn('Clear',1.3,0.38,()=>{show(WELCOME);if(window.speechSynthesis)speechSynthesis.cancel()});
 addBtn('Link VR',-1.3,0.11,hostLink);
 addBtn('Unlink',-0.43,0.11,()=>unlink('Link closed.'));
+addBtn('Cinema',0.43,0.11,()=>setCinema(true));
+const uiBtns=[...document.querySelectorAll('#ui .btn')];
+const mv=document.querySelector('#mv'),cine=document.querySelector('#cine'),cstat=document.querySelector('#cstat'),
+  screen=document.querySelector('#screen'),sphere=document.querySelector('#sphere'),mstat=document.querySelector('#mstat');
+let cinema=false,csize=1,is360=false,blobUrl='';
+const cineBtns=[];
+const cb=(label,x,y,fn)=>cineBtns.push(addBtn(label,x,y,fn,cine,'cbtn'));
+const hms=s=>{s=Math.floor(s||0);const h=Math.floor(s/3600),m=Math.floor(s%3600/60),x=s%60;return (h?h+':'+String(m).padStart(2,'0'):m)+':'+String(x).padStart(2,'0')};
+function updateCstat(msg){
+  cstat.setAttribute('value',msg||(mv.getAttribute('src')?hms(mv.currentTime)+' / '+hms(mv.duration)+(mv.paused?'   paused':''):'No movie yet. Leave VR, choose a file or paste a link, then come back.'));
+}
+function set360(on){is360=on;sphere.setAttribute('visible',on);screen.setAttribute('visible',!on)}
+function setCinema(on){
+  cinema=on;document.querySelector('#ui').setAttribute('visible',!on);cine.setAttribute('visible',on);
+  uiBtns.forEach(b=>b.classList.toggle('btn',!on));cineBtns.forEach(b=>b.classList.toggle('btn',on));
+  document.querySelectorAll('[raycaster]').forEach(e=>{const c=e.components&&e.components.raycaster;if(c)c.refreshObjects()});
+  if(on)updateCstat();else mv.pause();
+}
+function seek(d){if(mv.getAttribute('src'))mv.currentTime=Math.max(0,Math.min(mv.duration||1e9,mv.currentTime+d))}
+cb('Play / Pause',-1.3,0.55,()=>{
+  if(!mv.getAttribute('src')){updateCstat();return}
+  if(mv.paused)mv.play().catch(()=>updateCstat('Press Play again to start.'));else mv.pause();
+});
+cb('Back 10s',-0.43,0.55,()=>seek(-10));
+cb('Forward 10s',0.43,0.55,()=>seek(10));
+cb('Exit cinema',1.3,0.55,()=>setCinema(false));
+cb('Quieter',-1.3,0.28,()=>{mv.volume=Math.max(0,+(mv.volume-.1).toFixed(2))});
+cb('Louder',-0.43,0.28,()=>{mv.volume=Math.min(1,+(mv.volume+.1).toFixed(2))});
+cb('Smaller',0.43,0.28,()=>{csize=Math.max(.6,csize-.2);screen.setAttribute('scale',csize+' '+csize+' 1')});
+cb('Bigger',1.3,0.28,()=>{csize=Math.min(2,csize+.2);screen.setAttribute('scale',csize+' '+csize+' 1')});
+cb('360 mode',-1.3,0.01,()=>set360(!is360));
+cb('Restart',-0.43,0.01,()=>{if(mv.getAttribute('src'))mv.currentTime=0});
+['timeupdate','play','pause','loadedmetadata'].forEach(n=>mv.addEventListener(n,()=>{if(cinema)updateCstat()}));
+mv.addEventListener('loadedmetadata',()=>{
+  if(mv.videoWidth&&mv.videoHeight)screen.setAttribute('width',Math.max(2,Math.min(8,3.6*mv.videoWidth/mv.videoHeight)));
+});
+mv.addEventListener('loadeddata',()=>{
+  if(!screen.getAttribute('src')){screen.setAttribute('src','#mv');sphere.setAttribute('src','#mv')}
+});
+mv.addEventListener('error',()=>{mstat.textContent='That video could not be played. Try an MP4 file, or a different link.';if(cinema)updateCstat('This video could not be played.')});
+function loadMovie(src,name){
+  mv.setAttribute('src',src);mv.load();set360(document.querySelector('#m360').checked);
+  mstat.textContent=name+' is ready. Press Play on the cinema controls.';setCinema(true);
+}
+document.querySelector('#mf').onchange=e=>{
+  const f=e.target.files[0];if(!f)return;
+  if(blobUrl)URL.revokeObjectURL(blobUrl);blobUrl=URL.createObjectURL(f);loadMovie(blobUrl,f.name);e.target.value='';
+};
+document.querySelector('#mgo').onclick=()=>{
+  const u=document.querySelector('#mu').value.trim();
+  if(!/^https?:\/\//i.test(u)){mstat.textContent='Paste a full link that starts with https://';return}
+  loadMovie(u,'Your link');
+};
 document.querySelector('#go').onclick=()=>{const i=document.querySelector('#q');ask(i.value);i.value=''};
 document.querySelector('#q').addEventListener('keydown',e=>{if(e.key==='Enter')document.querySelector('#go').click()});
 document.querySelector('#lj').onclick=()=>joinLink(document.querySelector('#lc').value);
@@ -2141,8 +2224,8 @@ fs.onclick=()=>{
   else(de.requestFullscreen||de.webkitRequestFullscreen).call(de);
 };
 ['fullscreenchange','webkitfullscreenchange'].forEach(n=>document.addEventListener(n,()=>fs.textContent=fsOn()?'Exit full screen':'Full screen'));
-scene.addEventListener('enter-vr',()=>fs.style.display='none');
-scene.addEventListener('exit-vr',()=>fs.style.display='');
+scene.addEventListener('enter-vr',()=>{fs.style.display='none';document.querySelector('#mov').style.display='none'});
+scene.addEventListener('exit-vr',()=>{fs.style.display='';document.querySelector('#mov').style.display=''});
 const urlCode=new URLSearchParams(location.search).get('code');
 if(urlCode)joinLink(urlCode);
 </script>
