@@ -2011,8 +2011,10 @@ VR_PAGE = r"""<!doctype html>
 #mov summary{cursor:pointer;font-weight:700}
 #mov p{margin:8px 0;color:#cfd6ff}
 #mov input[type=text],#mov input:not([type]){width:100%;box-sizing:border-box;font-size:15px;padding:8px;border-radius:8px;border:1px solid #556;margin:6px 0}
-.mbtn,#mgo{display:inline-block;font-size:15px;padding:8px 12px;border-radius:8px;border:0;background:#2d3cff;color:#fff;cursor:pointer;margin-right:6px}
+.mbtn,#mgo,#mfix{display:inline-block;font-size:15px;padding:8px 12px;border-radius:8px;border:0;background:#2d3cff;color:#fff;cursor:pointer;margin-right:6px}
 .mchk{display:block;margin-top:8px}
+#mtype{font-size:15px;padding:6px;border-radius:8px;margin-left:6px}
+#mfix[hidden]{display:none}
 #emb{position:fixed;inset:0;z-index:20;background:#000d;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px}
 #emb[hidden]{display:none}
 #emb iframe{width:min(92vw,calc(70vh*16/9));aspect-ratio:16/9;border:0;border-radius:12px;background:#000}
@@ -2028,9 +2030,10 @@ VR_PAGE = r"""<!doctype html>
   <label class="mbtn">Choose a video file<input id="mf" type="file" accept="video/*" hidden></label>
   <input id="mu" placeholder="Or paste a direct video link (.mp4 or .webm)" aria-label="Direct video link">
   <button id="mgo" type="button">Load link</button>
-  <label class="mchk"><input type="checkbox" id="m360"> This is a 360 video</label>
+  <label class="mchk">Video type <select id="mtype"><option value="flat">Normal 2D</option><option value="sbs">3D side by side</option><option value="ou">3D top and bottom</option><option value="360">360 video</option></select></label>
   <p>YouTube and Vimeo links play in a normal window.</p>
   <p id="mstat" aria-live="polite">For the VR screen, paste a direct .mp4 link or choose a file. YouTube and Vimeo links play in a normal window instead.</p>
+  <button id="mfix" type="button" hidden>Fix video</button>
 </details>
 <a-scene id="scene" background="color: #0b0b2a" cursor="rayOrigin: mouse" vr-mode-ui="enabled: true">
   <a-entity position="0 0 0"><a-camera look-controls wasd-controls-enabled="false">
@@ -2046,8 +2049,10 @@ VR_PAGE = r"""<!doctype html>
   <a-text id="page" value="" position="1.7 0.58 -2.18" width="1.2" anchor="right" align="right" color="#9aa"></a-text>
   </a-entity>
   <a-entity id="cine" visible="false">
-    <a-video id="screen" width="6.4" height="3.6" position="0 2.5 -5" visible="false"></a-video>
+    <a-entity id="screen" geometry="primitive: plane; width: 6.4; height: 3.6" material="shader: flat; color: #0a0a28; side: double" position="0 2.5 -5"></a-entity>
     <a-videosphere id="sphere" visible="false"></a-videosphere>
+    <a-plane id="floor" rotation="-90 0 0" position="0 0 -3" width="14" height="16" material="shader: flat; color: #06061a"></a-plane>
+    <a-plane id="frame" position="0 2.5 -5.03" width="6.7" height="3.9" material="shader: flat; color: #000000"></a-plane>
     <a-text id="cstat" value="" position="0 1.2 -2.15" width="2.6" align="center" color="#cfd6ff"></a-text>
   </a-entity>
 </a-scene>
@@ -2168,14 +2173,64 @@ addBtn('Cinema',0.43,1.86,()=>setCinema(true));
 const uiBtns=[...document.querySelectorAll('#ui .btn')];
 const mv=document.querySelector('#mv'),cine=document.querySelector('#cine'),cstat=document.querySelector('#cstat'),
   screen=document.querySelector('#screen'),sphere=document.querySelector('#sphere'),mstat=document.querySelector('#mstat');
-let cinema=false,csize=1,is360=false,blobUrl='',loaded=false;
+let cinema=false,csize=1,is360=false,blobUrl='',loaded=false,texSet=false,lastFile=null;
+let mode='flat',viewBtn=null,texL=null,texR=null,stGrp=null,mono=null,inXR=false;
+const MODE_NEXT={flat:'sbs',sbs:'ou',ou:'360','360':'flat'},MODE_NAME={flat:'2D',sbs:'3D side by side',ou:'3D top bottom','360':'360'};
 const cineBtns=[];
 const cb=(label,x,y,fn)=>cineBtns.push(addBtn(label,x,y,fn,cine,'cbtn'));
 const hms=s=>{s=Math.floor(s||0);const h=Math.floor(s/3600),m=Math.floor(s%3600/60),x=s%60;return (h?h+':'+String(m).padStart(2,'0'):m)+':'+String(x).padStart(2,'0')};
 function updateCstat(msg){
   cstat.setAttribute('value',msg||(mv.getAttribute('src')?hms(mv.currentTime)+' / '+hms(mv.duration)+(mv.paused?'   paused':''):'No movie yet. Leave VR, choose a file or paste a link, then come back.'));
 }
-function set360(on){is360=on;sphere.setAttribute('visible',on&&loaded);screen.setAttribute('visible',!on&&loaded)}
+/* Real 3D: the left half of the picture goes to the left eye only, the right half to the right eye only (three.js layers 1 and 2). */
+function initStereo(){
+  const T=AFRAME.THREE;
+  const mk=()=>{const t=new T.VideoTexture(mv);if(T.SRGBColorSpace)t.colorSpace=T.SRGBColorSpace;return t};
+  texL=mk();texR=mk();
+  const geo=new T.PlaneGeometry(1,1),mat=t=>new T.MeshBasicMaterial({map:t,side:T.DoubleSide,toneMapped:false});
+  const L=new T.Mesh(geo,mat(texL)),R=new T.Mesh(geo,mat(texR));
+  mono=new T.Mesh(geo,mat(texL));          /* normal screens (computer, phone) show the left eye only */
+  L.layers.set(1);R.layers.set(2);mono.layers.set(0);
+  stGrp=new T.Group();stGrp.position.set(0,2.5,-5);stGrp.visible=false;
+  stGrp.add(L,R,mono);cine.object3D.add(stGrp);
+}
+if(scene.hasLoaded)initStereo();else scene.addEventListener('loaded',initStereo);
+scene.addEventListener('enter-vr',()=>{inXR=true;if(mono)mono.visible=false});
+scene.addEventListener('exit-vr',()=>{inXR=false;if(mono)mono.visible=true});
+function eyeAspect(){
+  const vw=mv.videoWidth||16,vh=mv.videoHeight||9;
+  if(mode==='sbs'){return vw/vh>=2.2?(vw/2)/vh:16/9}
+  if(mode==='ou'){const r=vw/(vh/2);return r>2.2?16/9:r}
+  return vw/vh;
+}
+function fitScreen(){
+  const w=Math.max(2,Math.min(8,3.6*eyeAspect())),fr=document.querySelector('#frame');
+  screen.setAttribute('geometry','width',w);screen.setAttribute('scale',csize+' '+csize+' 1');
+  fr.setAttribute('width',w+.3);fr.setAttribute('scale',csize+' '+csize+' 1');
+  if(stGrp)stGrp.scale.set(w*csize,3.6*csize,1);
+  if(texL){
+    const sb=mode==='sbs',ou=mode==='ou';
+    texL.repeat.set(sb?.5:1,ou?.5:1);texL.offset.set(0,ou?.5:0);
+    texR.repeat.set(sb?.5:1,ou?.5:1);texR.offset.set(sb?.5:0,0);
+  }
+}
+function setMode(m){
+  mode=m;is360=m==='360';const st=m==='sbs'||m==='ou';
+  sphere.setAttribute('visible',m==='360'&&loaded);
+  screen.setAttribute('visible',m==='flat');
+  ['#frame','#floor'].forEach(i=>document.querySelector(i).setAttribute('visible',m!=='360'));
+  if(stGrp)stGrp.visible=st&&loaded;
+  fitScreen();
+  const t=document.querySelector('#mtype');if(t)t.value=m;
+  if(viewBtn)viewBtn.setAttribute('text','value','View: '+MODE_NAME[m]);
+}
+function guessMode(n){
+  n=n.toLowerCase();
+  if(/(^|[\W_])(h?sbs|side[\W_]?by[\W_]?side)([\W_]|$)/.test(n))return 'sbs';
+  if(/(^|[\W_])(h?ou|tab|top[\W_]?bottom)([\W_]|$)/.test(n))return 'ou';
+  if(/360/.test(n))return '360';
+  return '';
+}
 function setCinema(on){
   cinema=on;document.querySelector('#ui').setAttribute('visible',!on);cine.setAttribute('visible',on);
   uiBtns.forEach(b=>b.classList.toggle('btn',!on));cineBtns.forEach(b=>b.classList.toggle('btn',on));
@@ -2192,26 +2247,31 @@ cb('Forward 10s',0.43,0.95,()=>seek(10));
 cb('Exit cinema',1.3,0.95,()=>setCinema(false));
 cb('Quieter',-1.3,0.7,()=>{mv.volume=Math.max(0,+(mv.volume-.1).toFixed(2))});
 cb('Louder',-0.43,0.7,()=>{mv.volume=Math.min(1,+(mv.volume+.1).toFixed(2))});
-cb('Smaller',0.43,0.7,()=>{csize=Math.max(.6,csize-.2);screen.setAttribute('scale',csize+' '+csize+' 1')});
-cb('Bigger',1.3,0.7,()=>{csize=Math.min(2,csize+.2);screen.setAttribute('scale',csize+' '+csize+' 1')});
-cb('360 mode',-1.3,0.45,()=>set360(!is360));
+cb('Smaller',0.43,0.7,()=>{csize=Math.max(.6,csize-.2);fitScreen()});
+cb('Bigger',1.3,0.7,()=>{csize=Math.min(2,csize+.2);fitScreen()});
+cb('View: 2D',-1.3,0.45,()=>setMode(MODE_NEXT[mode]));viewBtn=cineBtns[cineBtns.length-1];
 cb('Restart',-0.43,0.45,()=>{if(mv.getAttribute('src'))mv.currentTime=0});
 ['timeupdate','play','pause','loadedmetadata'].forEach(n=>mv.addEventListener(n,()=>{if(cinema)updateCstat()}));
 mv.addEventListener('loadedmetadata',()=>{
-  if(mv.videoWidth&&mv.videoHeight)screen.setAttribute('width',Math.max(2,Math.min(8,3.6*mv.videoWidth/mv.videoHeight)));
+  if(mv.videoWidth&&mv.videoHeight)fitScreen();
 });
 mv.addEventListener('loadeddata',()=>{
-  if(!screen.getAttribute('src')){screen.setAttribute('src','#mv');sphere.setAttribute('src','#mv')}
-  loaded=true;set360(is360);
+  if(!mv.videoWidth){showFix('This file has no picture this browser can show (the format is not supported).');return}
+  if(!texSet){screen.setAttribute('material','src','#mv');screen.setAttribute('material','color','#ffffff');sphere.setAttribute('src','#mv');texSet=true}
+  loaded=true;setMode(mode);
+  mstat.textContent='Ready ('+mv.videoWidth+' x '+mv.videoHeight+'). Press Play on the cinema controls.'+(mode==='sbs'||mode==='ou'?' Real 3D shows in the headset. A computer or phone shows one eye only.':'');
 });
-mv.addEventListener('error',()=>{mstat.textContent='That video could not be played. Try an MP4 file, or a different link.';if(cinema)updateCstat('This video could not be played.')});
+mv.addEventListener('error',()=>{showFix('That video could not be played. Try an MP4 file, or a different link.');if(cinema)updateCstat('This video could not be played.')});
+const mfix=document.querySelector('#mfix');
+function showFix(msg){mstat.textContent=msg+(lastFile?' You can press Fix video to convert it.':'');mfix.hidden=!lastFile}
 function loadMovie(src,name){
-  loaded=false;mv.setAttribute('src',src);mv.load();set360(document.querySelector('#m360').checked);
+  mfix.hidden=true;loaded=false;mv.setAttribute('src',src);mv.load();setMode(document.querySelector('#mtype').value);
   mstat.textContent=name+' is ready. Press Play on the cinema controls.';setCinema(true);
 }
 document.querySelector('#mf').onchange=e=>{
   const f=e.target.files[0];if(!f)return;
-  if(blobUrl)URL.revokeObjectURL(blobUrl);blobUrl=URL.createObjectURL(f);loadMovie(blobUrl,f.name);e.target.value='';
+  if(blobUrl)URL.revokeObjectURL(blobUrl);blobUrl=URL.createObjectURL(f);lastFile=f;{const g=guessMode(f.name);if(g&&document.querySelector('#mtype').value==='flat')document.querySelector('#mtype').value=g}
+  loadMovie(blobUrl,f.name);e.target.value='';
 };
 function embedUrl(u){
   let m=u.match(/(?:youtube\.com\/(?:watch\?(?:.*&)?v=|shorts\/|embed\/|live\/)|youtu\.be\/)([\w-]{11})/i);
@@ -2225,7 +2285,24 @@ function playEmbed(src){
   mstat.textContent='Playing in a normal window. This is not the VR cinema screen. On a Quest it shows as a big screen in your browser window.';
 }
 document.querySelector('#embx').onclick=()=>{document.querySelector('#embf').src='about:blank';document.querySelector('#emb').hidden=true};
-document.querySelector('#m360').onchange=e=>set360(e.target.checked);
+mfix.onclick=async()=>{
+  if(!lastFile)return;
+  if(lastFile.size>60*1024*1024){mstat.textContent='This file is over 60 MB, the most the converter accepts. Try a shorter clip.';return}
+  mstat.textContent='Converting for playback. This can take a minute or two...';mfix.disabled=true;
+  const go=()=>{const fd=new FormData();fd.append('file',lastFile);fd.append('format','mp4');
+    ['start','end'].forEach(k=>fd.append(k,'0'));fd.append('speed','1');fd.append('height','720');
+    fd.append('rotate','none');fd.append('filter','none');fd.append('mute','0');
+    return fetch('/video',{method:'POST',headers:{'X-Access-Key':localStorage.ak||''},body:fd})};
+  try{
+    let r=await go();
+    if(r.status===401){const k=prompt('Enter the access key');if(k){localStorage.ak=k;r=await go()}}
+    if(!r.ok){let m='Could not convert this video.';try{m=(await r.json()).error||m}catch(e){}throw new Error(m)}
+    const b=await r.blob();if(blobUrl)URL.revokeObjectURL(blobUrl);blobUrl=URL.createObjectURL(b);
+    lastFile=null;loadMovie(blobUrl,'The converted video');
+  }catch(e){mstat.textContent=e.message}
+  mfix.disabled=false;
+};
+document.querySelector('#mtype').onchange=e=>setMode(e.target.value);
 document.querySelector('#mgo').onclick=()=>{
   const u=document.querySelector('#mu').value.trim();
   if(!/^https?:\/\//i.test(u)){mstat.textContent='Paste a full link that starts with https://';return}
@@ -2233,7 +2310,7 @@ document.querySelector('#mgo').onclick=()=>{
   if(emb){playEmbed(emb);return}
   if(/(netflix\.com|primevideo|hotstar|disneyplus|jiocinema)/i.test(u)){
     mstat.textContent='Streaming services like this cannot play here. Use their own app on your headset.';return}
-  loadMovie(u,'Your link');
+  lastFile=null;loadMovie(u,'Your link');
 };
 document.querySelector('#go').onclick=()=>{const i=document.querySelector('#q');ask(i.value);i.value=''};
 document.querySelector('#q').addEventListener('keydown',e=>{if(e.key==='Enter')document.querySelector('#go').click()});
