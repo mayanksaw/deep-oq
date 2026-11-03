@@ -187,3 +187,60 @@ def list_facts(user_id):
     with conn() as c:
         return [dict(r) for r in c.execute(
             "SELECT key, value FROM facts WHERE user_id=? ORDER BY id DESC LIMIT 200", (user_id,))]
+
+
+# ---------------- admin (counts only, never message text) ----------------
+
+def admin_stats():
+    day = time.time() - 86400
+    with conn() as c:
+        one = lambda q, *a: c.execute(q, a).fetchone()[0]
+        return {
+            "users": one("SELECT COUNT(*) FROM users"),
+            "new_users_24h": one("SELECT COUNT(*) FROM users WHERE created > ?", day),
+            "conversations": one("SELECT COUNT(*) FROM conversations"),
+            "messages": one("SELECT COUNT(*) FROM messages"),
+            "messages_24h": one("SELECT COUNT(*) FROM messages WHERE created > ?", day),
+            "active_users_24h": one(
+                "SELECT COUNT(DISTINCT cv.user_id) FROM messages m JOIN conversations cv ON cv.id = m.conversation_id "
+                "WHERE m.created > ?", day),
+            "db_size_kb": round(os.path.getsize(DB_PATH) / 1024) if os.path.exists(DB_PATH) else 0,
+        }
+
+
+def admin_users():
+    with conn() as c:
+        rows = c.execute(
+            "SELECT u.id, u.username, u.created, "
+            "(SELECT COUNT(*) FROM conversations WHERE user_id=u.id) AS chats, "
+            "(SELECT COUNT(*) FROM messages m JOIN conversations cv ON cv.id=m.conversation_id WHERE cv.user_id=u.id) AS messages, "
+            "(SELECT MAX(m.created) FROM messages m JOIN conversations cv ON cv.id=m.conversation_id WHERE cv.user_id=u.id) AS last_active "
+            "FROM users u ORDER BY u.id DESC LIMIT 500").fetchall()
+        return [dict(r) for r in rows]
+
+
+def admin_tool_usage(limit=15):
+    with conn() as c:
+        rows = c.execute(
+            "SELECT COALESCE(tool, 'auto (smart)') AS tool, COUNT(*) AS uses FROM messages "
+            "WHERE role='user' GROUP BY tool ORDER BY uses DESC LIMIT ?", (limit,)).fetchall()
+        return [dict(r) for r in rows]
+
+
+def admin_daily(days=14):
+    with conn() as c:
+        rows = c.execute(
+            "SELECT date(created, 'unixepoch') AS day, COUNT(*) AS messages FROM messages "
+            "WHERE role='user' AND created > ? GROUP BY day ORDER BY day", (time.time() - days * 86400,)).fetchall()
+        return [dict(r) for r in rows]
+
+
+def delete_user(user_id):
+    with conn() as c:
+        c.execute("DELETE FROM users WHERE id=?", (user_id,))
+
+
+def username_of(user_id):
+    with conn() as c:
+        row = c.execute("SELECT username FROM users WHERE id=?", (user_id,)).fetchone()
+        return row["username"] if row else None
