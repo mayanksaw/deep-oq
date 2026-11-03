@@ -2033,7 +2033,7 @@ VR_PAGE = r"""<!doctype html>
   <p id="mstat" aria-live="polite">For the VR screen, paste a direct .mp4 link or choose a file. YouTube and Vimeo links play in a normal window instead.</p>
 </details>
 <a-scene id="scene" background="color: #0b0b2a" cursor="rayOrigin: mouse" vr-mode-ui="enabled: true">
-  <a-entity position="0 1.6 0"><a-camera look-controls wasd-controls-enabled="false">
+  <a-entity position="0 0 0"><a-camera look-controls wasd-controls-enabled="false">
     <a-cursor color="#9ab0ff" fuse="true" fuse-timeout="1500" raycaster="objects: .btn"></a-cursor></a-camera></a-entity>
   <a-entity laser-controls="hand: right" raycaster="objects: .btn; far: 6"></a-entity>
   <a-entity laser-controls="hand: left" raycaster="objects: .btn; far: 6"></a-entity>
