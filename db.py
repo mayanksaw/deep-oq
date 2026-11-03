@@ -68,24 +68,25 @@ def init():
         CREATE TABLE IF NOT EXISTS users (
             id          BIGSERIAL PRIMARY KEY,
             username    TEXT UNIQUE NOT NULL,
-            pw_hash     TEXT NOT NULL,
-            created     BIGINT NOT NULL,
-            last_active BIGINT
+            pw_hash     TEXT NOT NULL
         );
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS created BIGINT NOT NULL DEFAULT 0;
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS last_active BIGINT;
+
         CREATE TABLE IF NOT EXISTS sessions (
             token_hash TEXT PRIMARY KEY,
-            user_id    BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            created    BIGINT NOT NULL,
-            expires    BIGINT NOT NULL
+            user_id    BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE
         );
+        ALTER TABLE sessions ADD COLUMN IF NOT EXISTS created BIGINT NOT NULL DEFAULT 0;
+        ALTER TABLE sessions ADD COLUMN IF NOT EXISTS expires BIGINT NOT NULL DEFAULT 0;
         CREATE INDEX IF NOT EXISTS sessions_user_idx ON sessions(user_id);
         
         CREATE TABLE IF NOT EXISTS conversations (
             id      BIGSERIAL PRIMARY KEY,
             user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            title   TEXT NOT NULL,
-            created BIGINT NOT NULL
+            title   TEXT NOT NULL
         );
+        ALTER TABLE conversations ADD COLUMN IF NOT EXISTS created BIGINT NOT NULL DEFAULT 0;
         ALTER TABLE conversations ADD COLUMN IF NOT EXISTS updated BIGINT NOT NULL DEFAULT 0;
         CREATE INDEX IF NOT EXISTS conv_user_idx ON conversations(user_id, updated DESC);
         
@@ -94,9 +95,9 @@ def init():
             conversation_id BIGINT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
             role            TEXT NOT NULL,
             content         TEXT NOT NULL,
-            tool            TEXT,
-            created         BIGINT NOT NULL
+            tool            TEXT
         );
+        ALTER TABLE messages ADD COLUMN IF NOT EXISTS created BIGINT NOT NULL DEFAULT 0;
         CREATE INDEX IF NOT EXISTS msg_conv_idx ON messages(conversation_id, id);
         CREATE INDEX IF NOT EXISTS msg_created_idx ON messages(created);
         
