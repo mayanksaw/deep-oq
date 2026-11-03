@@ -527,8 +527,14 @@ def _video():
 # ==========================================================================
 
 # Two-tier models: FAST for simple chat, SMART (120B reasoning model) for hard questions.
-FAST_MODEL = os.environ.get("DEEP_OQ_MODEL", "llama-3.3-70b-versatile")
-SMART_MODEL = os.environ.get("DEEP_OQ_SMART_MODEL", "openai/gpt-oss-120b")
+FAST_MODEL = os.environ.get("DEEP_OQ_MODEL", "openai/gpt-oss-120b")
+SMART_MODEL = os.environ.get("DEEP_OQ_SMART_MODEL", "qwen/qwen3.8-27b")
+# Hard questions try these in order (an unavailable model just moves on to the next one).
+SMART_CANDIDATES = []
+for _m in (SMART_MODEL, "qwen/qwen3.8-27b", "qwen/qwen3.6-27b", "openai/gpt-oss-120b"):
+    if _m not in SMART_CANDIDATES:
+        SMART_CANDIDATES.append(_m)
+_smart = {"model": None}
 client = Groq(api_key=os.environ["GROQ_API_KEY"])
 ACCESS_KEY = os.environ.get("ACCESS_KEY", "")  # set on Render to lock the site
 app = Flask(__name__)
@@ -542,6 +548,12 @@ SYSTEM = (
     "When KNOWLEDGE is provided, use it if relevant and prefer it over guessing; "
     "if it is not relevant, ignore it. Write in short paragraphs, simple headings and "
     "bullet lists. Never use tables, horizontal lines (---) or HTML tags such as <br>. "
+    "Work like an expert: work out what the person really needs, give the direct answer first, "
+    "then the reasoning or steps that matter, and think about edge cases. For code, give complete "
+    "runnable code and say how to run it. For facts, prefer TOOL RESULTS and KNOWLEDGE, mention the "
+    "date they are from when it matters, and never invent facts, numbers, links, quotes or sources; "
+    "if you are not sure, say so and say how to check. Ask one short clarifying question only when "
+    "the request cannot be answered without it. Match the length to the question. "
     "If asked what model, engine, technology or company is behind you, or how you were built, "
     "answer briefly and kindly: you are Deep OQ, powered by the Deep OQ team, and you do not "
     "share technical details about your internal setup. Do not name any underlying model or "
@@ -551,11 +563,13 @@ SYSTEM = (
 )
 
 HARD_HINTS = ("code", "function", "bug", "prove", "calculate", "solve", "why",
-              "how many", "algorithm", "logic", "step", "compare", "design")
+              "how many", "algorithm", "logic", "step", "compare", "design", "analy",
+              "explain", "difference", "strategy", "optimi", "error", "essay", "derive",
+              "equation", "proof", "debug", "architecture", "plan", "should i")
 
 
 FAST_CANDIDATES = []
-for _m in (FAST_MODEL, "llama-3.3-70b-versatile", "openai/gpt-oss-120b",
+for _m in (FAST_MODEL, "openai/gpt-oss-120b", "llama-3.3-70b-versatile",
            "openai/gpt-oss-20b", "llama-3.1-8b-instant"):
     if _m not in FAST_CANDIDATES:
         FAST_CANDIDATES.append(_m)
@@ -569,19 +583,28 @@ def _call(model, messages, temperature, max_tokens, effort=None):
         kw["max_completion_tokens"] = max(max_tokens, 4096 if effort == "high" else 2048)
         kw["reasoning_effort"] = effort or "low"
     else:
-        kw["max_tokens"] = max_tokens
+        # thinking models (for example Qwen) spend tokens reasoning first, so give hard questions room
+        kw["max_tokens"] = max(max_tokens, 6000) if effort == "high" else max_tokens
     r = client.chat.completions.create(**kw)
-    return (r.choices[0].message.content or "").strip()
+    text = r.choices[0].message.content or ""
+    return re.sub(r"<think>.*?(</think>|$)", "", text, flags=re.S).strip()  # hide any visible thinking
 
 
 def chat(messages, temperature=0.3, max_tokens=2048, smart=False):
     if smart:
-        try:
-            text = _call(SMART_MODEL, messages, temperature, max_tokens, "high")
-            if text:
-                return text
-        except Exception as e:
-            print("smart model failed, using fast models:", e)
+        order = SMART_CANDIDATES[:]
+        if _smart["model"] in order:  # start with the model that worked last time
+            order.remove(_smart["model"])
+            order.insert(0, _smart["model"])
+        for m in order:
+            try:
+                text = _call(m, messages, temperature, max_tokens, "high")
+                if text:
+                    _smart["model"] = m
+                    return text
+            except Exception as e:
+                print(f"smart model {m} failed:", e)
+        print("all smart models failed, using fast models")
     order = FAST_CANDIDATES[:]
     if _working["model"] in order:
         order.remove(_working["model"])
@@ -601,7 +624,7 @@ def chat(messages, temperature=0.3, max_tokens=2048, smart=False):
 
 def is_hard(text):
     t = text.lower()
-    return len(t) > 200 or any(h in t for h in HARD_HINTS)
+    return len(t) > 160 or any(h in t for h in HARD_HINTS)
 
 
 def knowledge_block(question):
@@ -613,6 +636,9 @@ def knowledge_block(question):
 
 
 def deep_oq(session, question):
+    force = question.lower().startswith("/deep")  # "/deep your question" = think as hard as possible
+    if force:
+        question = question[5:].strip() or question
     history = kb_load_history(session, 12)
     know = knowledge_block(question)
     tool_text, used = run_tools(question, lambda m, t, k: chat(m, t, k))
@@ -625,7 +651,11 @@ def deep_oq(session, question):
             + ("TOOL RESULTS:\n" + tool_text + "\n\n" if tool_text else "")
             + f"QUESTION:\n{question}")
 
-    if not (is_hard(question) or "calc" in used or "count" in used):
+    if "web" in used and not (force or is_hard(question)):
+        return chat(base + [{"role": "user", "content": user
+                    + "\n\nAnswer from the TOOL RESULTS. Check their dates: if they conflict or look old, "
+                    "say what is most recent and how sure you are. Keep it short."}], 0.2, 2048, smart=True)
+    if not (force or is_hard(question) or "calc" in used or "count" in used):
         return chat(base + [{"role": "user", "content": user}], 0.5)
 
     plan = chat(base + [{"role": "user", "content":
