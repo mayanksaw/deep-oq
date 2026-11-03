@@ -460,10 +460,12 @@ SYSTEM = (
     "When KNOWLEDGE is provided, use it if relevant and prefer it over guessing; "
     "if it is not relevant, ignore it. Write in short paragraphs, simple headings and "
     "bullet lists. Never use tables, horizontal lines (---) or HTML tags such as <br>. "
-    "If asked what model or engine powers you, say: you are Deep OQ, an AI assistant built by "
-    "Mayank Kumar Saw on top of large language models from other providers, and you do not "
-    "know which exact model is running at any moment. Never claim to have been trained from "
-    "scratch by Mayank Kumar Saw, and never deny using other models."
+    "If asked what model, engine, technology or company is behind you, or how you were built, "
+    "answer briefly and kindly: you are Deep OQ, powered by the Deep OQ team, and you do not "
+    "share technical details about your internal setup. Do not name any underlying model or "
+    "provider. If someone directly asks whether you were trained entirely from scratch or use "
+    "no outside technology, never say yes: say you cannot share details about the technology "
+    "behind Deep OQ."
 )
 
 HARD_HINTS = ("code", "function", "bug", "prove", "calculate", "solve", "why",
@@ -1719,22 +1721,26 @@ VR_PAGE = r"""<!doctype html>
 <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
 <style>
 #dom{position:fixed;left:0;right:0;bottom:0;display:flex;flex-wrap:wrap;gap:8px;padding:10px;background:#0b0b2acc;z-index:9;font-family:system-ui,sans-serif}
-#log{flex-basis:100%;max-height:30vh;overflow:auto;color:#dde;white-space:pre-wrap;font-size:15px}
+#log{flex-basis:100%;max-height:18vh;overflow:auto;color:#dde;white-space:pre-wrap;font-size:15px}
 #dom input{flex:1;min-width:120px;font-size:16px;padding:10px;border-radius:10px;border:1px solid #556}
 #dom button{font-size:16px;padding:10px 16px;border-radius:10px;border:0;background:#2d3cff;color:#fff}
+#fs{position:fixed;top:10px;right:10px;z-index:10;font:600 14px system-ui,sans-serif;padding:9px 14px;border-radius:10px;border:1px solid #6a76ff;background:#14143aee;color:#fff;cursor:pointer}
 </style></head>
 <body>
+<button id="fs" type="button" aria-label="Toggle full screen">Full screen</button>
 <a-scene id="scene" background="color: #0b0b2a" cursor="rayOrigin: mouse" vr-mode-ui="enabled: true">
   <a-entity position="0 1.6 0"><a-camera look-controls wasd-controls-enabled="false">
     <a-cursor color="#9ab0ff" fuse="true" fuse-timeout="1500" raycaster="objects: .btn"></a-cursor></a-camera></a-entity>
   <a-entity laser-controls="hand: right" raycaster="objects: .btn; far: 6"></a-entity>
   <a-entity laser-controls="hand: left" raycaster="objects: .btn; far: 6"></a-entity>
+  <a-entity id="ui" position="0 0.55 0">
   <a-plane position="0 1.4 -2.2" width="3.8" height="2.9" material="shader: flat; color: #14143a"></a-plane>
   <a-text value="Deep OQ VR Guide" position="-1.7 2.65 -2.18" width="3.4" color="#ffffff" anchor="left" align="left"></a-text>
   <a-text id="out" value="Pick a button or press Mic and ask me anything." position="-1.7 2.4 -2.18" width="3.4"
           wrap-count="46" anchor="left" align="left" baseline="top" color="#e8e8ff"></a-text>
   <a-text id="code" value="" position="-1.7 0.9 -2.18" width="2" color="#9ab0ff" anchor="left" align="left"></a-text>
   <a-text id="page" value="" position="1.7 0.9 -2.18" width="1.2" anchor="right" align="right" color="#9aa"></a-text>
+  </a-entity>
 </a-scene>
 <div id="dom"><div id="log" aria-live="polite"></div><input id="lc" placeholder="Headset code" size="8" aria-label="Headset link code"><button id="lj" type="button">Link</button><input id="q" placeholder="Type a question (outside VR)" aria-label="Question"><button id="go" type="button">Ask</button></div>
 <script>
@@ -1837,7 +1843,7 @@ function addBtn(label,x,y,fn){
   e.addEventListener('click',fn);
   e.addEventListener('mouseenter',()=>e.setAttribute('material','color','#6a76ff'));
   e.addEventListener('mouseleave',()=>e.setAttribute('material','color','#2d3cff'));
-  scene.appendChild(e);return e;
+  document.querySelector('#ui').appendChild(e);return e;
 }
 addBtn('Mic',-1.3,0.65,mic);
 addBtn('Guide me',-0.43,0.65,()=>ask('Guide me step by step on how to use VR safely and comfortably.'));
@@ -1854,6 +1860,16 @@ document.querySelector('#q').addEventListener('keydown',e=>{if(e.key==='Enter')d
 document.querySelector('#lj').onclick=()=>joinLink(document.querySelector('#lc').value);
 scene.addEventListener('enter-vr',()=>document.querySelector('#dom').style.display='none');
 scene.addEventListener('exit-vr',()=>document.querySelector('#dom').style.display='flex');
+const fs=document.querySelector('#fs'),de=document.documentElement;
+const fsOn=()=>document.fullscreenElement||document.webkitFullscreenElement;
+if(!(de.requestFullscreen||de.webkitRequestFullscreen))fs.style.display='none';
+fs.onclick=()=>{
+  if(fsOn())(document.exitFullscreen||document.webkitExitFullscreen).call(document);
+  else(de.requestFullscreen||de.webkitRequestFullscreen).call(de);
+};
+['fullscreenchange','webkitfullscreenchange'].forEach(n=>document.addEventListener(n,()=>fs.textContent=fsOn()?'Exit full screen':'Full screen'));
+scene.addEventListener('enter-vr',()=>fs.style.display='none');
+scene.addEventListener('exit-vr',()=>fs.style.display='');
 const urlCode=new URLSearchParams(location.search).get('code');
 if(urlCode)joinLink(urlCode);
 </script>
