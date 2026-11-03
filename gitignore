@@ -1,0 +1,5 @@
+deep_oq.db
+deep_oq.db-*
+deep_oq_memory.json
+__pycache__/
+.env
