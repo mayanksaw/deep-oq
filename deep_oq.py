@@ -2003,7 +2003,7 @@ VR_PAGE = r"""<!doctype html>
 <title>Deep OQ VR Guide</title>
 <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
 <style>
-#dom{position:fixed;left:0;right:0;bottom:0;display:flex;flex-wrap:wrap;gap:8px;padding:10px;background:#0b0b2acc;z-index:9;font-family:system-ui,sans-serif}
+#dom{position:fixed;left:0;right:0;bottom:0;display:flex;flex-wrap:wrap;gap:8px;padding:10px 84px 10px 10px;background:#0b0b2acc;z-index:9;font-family:system-ui,sans-serif}
 #log{flex-basis:100%;max-height:18vh;overflow:auto;color:#dde;white-space:pre-wrap;font-size:15px}
 #dom input{flex:1;min-width:120px;font-size:16px;padding:10px;border-radius:10px;border:1px solid #556}
 #dom button{font-size:16px;padding:10px 16px;border-radius:10px;border:0;background:#2d3cff;color:#fff}
@@ -2024,7 +2024,7 @@ VR_PAGE = r"""<!doctype html>
   <input id="mu" placeholder="Or paste a direct video link (.mp4 or .webm)" aria-label="Direct video link">
   <button id="mgo" type="button">Load link</button>
   <label class="mchk"><input type="checkbox" id="m360"> This is a 360 video</label>
-  <p id="mstat" aria-live="polite">Some websites block links. A file from your device always works.</p>
+  <p id="mstat" aria-live="polite">Links must go straight to a video file (.mp4 or .webm). Pages from YouTube, Vimeo or Netflix cannot play here. A file from your device always works.</p>
 </details>
 <a-scene id="scene" background="color: #0b0b2a" cursor="rayOrigin: mouse" vr-mode-ui="enabled: true">
   <a-entity position="0 1.6 0"><a-camera look-controls wasd-controls-enabled="false">
@@ -2040,7 +2040,7 @@ VR_PAGE = r"""<!doctype html>
   <a-text id="page" value="" position="1.7 0.9 -2.18" width="1.2" anchor="right" align="right" color="#9aa"></a-text>
   </a-entity>
   <a-entity id="cine" visible="false">
-    <a-video id="screen" width="6.4" height="3.6" position="0 2.3 -5"></a-video>
+    <a-video id="screen" width="6.4" height="3.6" position="0 2.3 -5" visible="false"></a-video>
     <a-videosphere id="sphere" visible="false"></a-videosphere>
     <a-text id="cstat" value="" position="0 0.9 -2.15" width="2.6" align="center" color="#cfd6ff"></a-text>
   </a-entity>
@@ -2162,14 +2162,14 @@ addBtn('Cinema',0.43,0.11,()=>setCinema(true));
 const uiBtns=[...document.querySelectorAll('#ui .btn')];
 const mv=document.querySelector('#mv'),cine=document.querySelector('#cine'),cstat=document.querySelector('#cstat'),
   screen=document.querySelector('#screen'),sphere=document.querySelector('#sphere'),mstat=document.querySelector('#mstat');
-let cinema=false,csize=1,is360=false,blobUrl='';
+let cinema=false,csize=1,is360=false,blobUrl='',loaded=false;
 const cineBtns=[];
 const cb=(label,x,y,fn)=>cineBtns.push(addBtn(label,x,y,fn,cine,'cbtn'));
 const hms=s=>{s=Math.floor(s||0);const h=Math.floor(s/3600),m=Math.floor(s%3600/60),x=s%60;return (h?h+':'+String(m).padStart(2,'0'):m)+':'+String(x).padStart(2,'0')};
 function updateCstat(msg){
   cstat.setAttribute('value',msg||(mv.getAttribute('src')?hms(mv.currentTime)+' / '+hms(mv.duration)+(mv.paused?'   paused':''):'No movie yet. Leave VR, choose a file or paste a link, then come back.'));
 }
-function set360(on){is360=on;sphere.setAttribute('visible',on);screen.setAttribute('visible',!on)}
+function set360(on){is360=on;sphere.setAttribute('visible',on&&loaded);screen.setAttribute('visible',!on&&loaded)}
 function setCinema(on){
   cinema=on;document.querySelector('#ui').setAttribute('visible',!on);cine.setAttribute('visible',on);
   uiBtns.forEach(b=>b.classList.toggle('btn',!on));cineBtns.forEach(b=>b.classList.toggle('btn',on));
@@ -2196,19 +2196,23 @@ mv.addEventListener('loadedmetadata',()=>{
 });
 mv.addEventListener('loadeddata',()=>{
   if(!screen.getAttribute('src')){screen.setAttribute('src','#mv');sphere.setAttribute('src','#mv')}
+  loaded=true;set360(is360);
 });
 mv.addEventListener('error',()=>{mstat.textContent='That video could not be played. Try an MP4 file, or a different link.';if(cinema)updateCstat('This video could not be played.')});
 function loadMovie(src,name){
-  mv.setAttribute('src',src);mv.load();set360(document.querySelector('#m360').checked);
+  loaded=false;mv.setAttribute('src',src);mv.load();set360(document.querySelector('#m360').checked);
   mstat.textContent=name+' is ready. Press Play on the cinema controls.';setCinema(true);
 }
 document.querySelector('#mf').onchange=e=>{
   const f=e.target.files[0];if(!f)return;
   if(blobUrl)URL.revokeObjectURL(blobUrl);blobUrl=URL.createObjectURL(f);loadMovie(blobUrl,f.name);e.target.value='';
 };
+document.querySelector('#m360').onchange=e=>set360(e.target.checked);
 document.querySelector('#mgo').onclick=()=>{
   const u=document.querySelector('#mu').value.trim();
   if(!/^https?:\/\//i.test(u)){mstat.textContent='Paste a full link that starts with https://';return}
+  if(/(youtube\.com|youtu\.be|vimeo\.com|netflix\.com|primevideo|hotstar|disneyplus|jiocinema)/i.test(u)){
+    mstat.textContent='That is a web page, not a video file, so it cannot play on the VR screen. Download the video if you own it and use Choose a video file, or paste a direct .mp4 link.';return}
   loadMovie(u,'Your link');
 };
 document.querySelector('#go').onclick=()=>{const i=document.querySelector('#q');ask(i.value);i.value=''};
