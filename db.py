@@ -79,14 +79,16 @@ def init():
             expires    BIGINT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS sessions_user_idx ON sessions(user_id);
+        
         CREATE TABLE IF NOT EXISTS conversations (
             id      BIGSERIAL PRIMARY KEY,
             user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
             title   TEXT NOT NULL,
-            created BIGINT NOT NULL,
-            updated BIGINT NOT NULL
+            created BIGINT NOT NULL
         );
+        ALTER TABLE conversations ADD COLUMN IF NOT EXISTS updated BIGINT NOT NULL DEFAULT 0;
         CREATE INDEX IF NOT EXISTS conv_user_idx ON conversations(user_id, updated DESC);
+        
         CREATE TABLE IF NOT EXISTS messages (
             id              BIGSERIAL PRIMARY KEY,
             conversation_id BIGINT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
@@ -97,13 +99,14 @@ def init():
         );
         CREATE INDEX IF NOT EXISTS msg_conv_idx ON messages(conversation_id, id);
         CREATE INDEX IF NOT EXISTS msg_created_idx ON messages(created);
+        
         CREATE TABLE IF NOT EXISTS facts (
             user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
             key     TEXT NOT NULL,
             value   TEXT NOT NULL,
-            updated BIGINT NOT NULL,
             PRIMARY KEY (user_id, key)
         );
+        ALTER TABLE facts ADD COLUMN IF NOT EXISTS updated BIGINT NOT NULL DEFAULT 0;
         """)
 
 
@@ -271,13 +274,13 @@ def admin_stats():
     day = now - 86400
     with cur() as c:
         c.execute("""SELECT
-            (SELECT COUNT(*) FROM users)                                  AS users,
+            (SELECT COUNT(*) FROM users)                            AS users,
             (SELECT COUNT(*) FROM users WHERE created > %(d)s)            AS new_users_24h,
             (SELECT COUNT(*) FROM users WHERE last_active > %(d)s)        AS active_users_24h,
-            (SELECT COUNT(*) FROM conversations)                          AS conversations,
-            (SELECT COUNT(*) FROM messages)                               AS messages,
+            (SELECT COUNT(*) FROM conversations)                        AS conversations,
+            (SELECT COUNT(*) FROM messages)                             AS messages,
             (SELECT COUNT(*) FROM messages WHERE created > %(d)s)         AS messages_24h,
-            (pg_database_size(current_database()) / 1024)                 AS db_size_kb""", {"d": day})
+            (pg_database_size(current_database()) / 1024)               AS db_size_kb""", {"d": day})
         return {k: int(v) for k, v in c.fetchone().items()}
 
 
