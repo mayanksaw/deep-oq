@@ -2013,36 +2013,42 @@ VR_PAGE = r"""<!doctype html>
 #mov input[type=text],#mov input:not([type]){width:100%;box-sizing:border-box;font-size:15px;padding:8px;border-radius:8px;border:1px solid #556;margin:6px 0}
 .mbtn,#mgo{display:inline-block;font-size:15px;padding:8px 12px;border-radius:8px;border:0;background:#2d3cff;color:#fff;cursor:pointer;margin-right:6px}
 .mchk{display:block;margin-top:8px}
+#emb{position:fixed;inset:0;z-index:20;background:#000d;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px}
+#emb[hidden]{display:none}
+#emb iframe{width:min(92vw,calc(70vh*16/9));aspect-ratio:16/9;border:0;border-radius:12px;background:#000}
+#embx{font-size:16px;padding:10px 18px;border-radius:10px;border:0;background:#2d3cff;color:#fff;cursor:pointer}
 #fs{position:fixed;top:10px;right:10px;z-index:10;font:600 14px system-ui,sans-serif;padding:9px 14px;border-radius:10px;border:1px solid #6a76ff;background:#14143aee;color:#fff;cursor:pointer}
 </style></head>
 <body>
 <button id="fs" type="button" aria-label="Toggle full screen">Full screen</button>
 <video id="mv" crossorigin="anonymous" playsinline preload="auto" style="display:none"></video>
+<div id="emb" hidden><button id="embx" type="button">Close video</button><iframe id="embf" title="Video player" allow="autoplay; fullscreen; picture-in-picture; encrypted-media" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe></div>
 <details id="mov"><summary>Movies</summary>
   <p>Watch your own videos on a huge virtual screen. Deep OQ does not provide movies, so use files you own or have the right to watch.</p>
   <label class="mbtn">Choose a video file<input id="mf" type="file" accept="video/*" hidden></label>
   <input id="mu" placeholder="Or paste a direct video link (.mp4 or .webm)" aria-label="Direct video link">
   <button id="mgo" type="button">Load link</button>
   <label class="mchk"><input type="checkbox" id="m360"> This is a 360 video</label>
-  <p id="mstat" aria-live="polite">Links must go straight to a video file (.mp4 or .webm). Pages from YouTube, Vimeo or Netflix cannot play here. A file from your device always works.</p>
+  <p>YouTube and Vimeo links play in a normal window.</p>
+  <p id="mstat" aria-live="polite">For the VR screen, paste a direct .mp4 link or choose a file. YouTube and Vimeo links play in a normal window instead.</p>
 </details>
 <a-scene id="scene" background="color: #0b0b2a" cursor="rayOrigin: mouse" vr-mode-ui="enabled: true">
   <a-entity position="0 1.6 0"><a-camera look-controls wasd-controls-enabled="false">
     <a-cursor color="#9ab0ff" fuse="true" fuse-timeout="1500" raycaster="objects: .btn"></a-cursor></a-camera></a-entity>
   <a-entity laser-controls="hand: right" raycaster="objects: .btn; far: 6"></a-entity>
   <a-entity laser-controls="hand: left" raycaster="objects: .btn; far: 6"></a-entity>
-  <a-entity id="ui" position="0 0.55 0">
-  <a-plane position="0 1.4 -2.2" width="3.8" height="2.9" material="shader: flat; color: #14143a"></a-plane>
-  <a-text value="Deep OQ VR Guide" position="-1.7 2.65 -2.18" width="3.4" color="#ffffff" anchor="left" align="left"></a-text>
-  <a-text id="out" value="Pick a button or press Mic and ask me anything." position="-1.7 2.4 -2.18" width="3.4"
+  <a-entity id="ui" position="0 0 0">
+  <a-plane position="0 1.65 -2.2" width="3.8" height="2.4" material="shader: flat; color: #14143a"></a-plane>
+  <a-text value="Deep OQ VR Guide" position="-1.7 2.72 -2.18" width="3.4" color="#ffffff" anchor="left" align="left"></a-text>
+  <a-text id="out" value="Pick a button or press Mic and ask me anything." position="-1.7 1.62 -2.18" width="3.4"
           wrap-count="46" anchor="left" align="left" baseline="top" color="#e8e8ff"></a-text>
-  <a-text id="code" value="" position="-1.7 0.9 -2.18" width="2" color="#9ab0ff" anchor="left" align="left"></a-text>
-  <a-text id="page" value="" position="1.7 0.9 -2.18" width="1.2" anchor="right" align="right" color="#9aa"></a-text>
+  <a-text id="code" value="" position="1.7 2.72 -2.18" width="2" color="#9ab0ff" anchor="right" align="right"></a-text>
+  <a-text id="page" value="" position="1.7 0.58 -2.18" width="1.2" anchor="right" align="right" color="#9aa"></a-text>
   </a-entity>
   <a-entity id="cine" visible="false">
-    <a-video id="screen" width="6.4" height="3.6" position="0 2.3 -5" visible="false"></a-video>
+    <a-video id="screen" width="6.4" height="3.6" position="0 2.5 -5" visible="false"></a-video>
     <a-videosphere id="sphere" visible="false"></a-videosphere>
-    <a-text id="cstat" value="" position="0 0.9 -2.15" width="2.6" align="center" color="#cfd6ff"></a-text>
+    <a-text id="cstat" value="" position="0 1.2 -2.15" width="2.6" align="center" color="#cfd6ff"></a-text>
   </a-entity>
 </a-scene>
 <div id="dom"><div id="log" aria-live="polite"></div><input id="lc" placeholder="Headset code" size="8" aria-label="Headset link code"><button id="lj" type="button">Link</button><input id="q" placeholder="Type a question (outside VR)" aria-label="Question"><button id="go" type="button">Ask</button></div>
@@ -2064,7 +2070,7 @@ function show(t){pages=[t];idx=0;out.setAttribute('value',t);pg.setAttribute('va
 function setAnswer(a){
   const t=a.replace(/[*#`>_]/g,'').replace(/\s+/g,' ').trim();
   pages=[];let s=t;
-  while(s.length){let c=s.slice(0,520);if(s.length>520){const k=Math.max(c.lastIndexOf('. '),c.lastIndexOf(' '));if(k>200)c=c.slice(0,k+1)}pages.push(c.trim());s=s.slice(c.length).trim()}
+  while(s.length){let c=s.slice(0,420);if(s.length>420){const k=Math.max(c.lastIndexOf('. '),c.lastIndexOf(' '));if(k>200)c=c.slice(0,k+1)}pages.push(c.trim());s=s.slice(c.length).trim()}
   idx=0;render();return t;
 }
 async function ask(q,fromRemote){
@@ -2148,17 +2154,17 @@ function addBtn(label,x,y,fn,parent,cls){
   e.addEventListener('mouseleave',()=>e.setAttribute('material','color','#2d3cff'));
   (parent||document.querySelector('#ui')).appendChild(e);return e;
 }
-addBtn('Mic',-1.3,0.65,mic);
-addBtn('Guide me',-0.43,0.65,()=>ask('Guide me step by step on how to use VR safely and comfortably.'));
-addBtn('Teach me',0.43,0.65,()=>ask('Teach me one interesting thing, simply.'));
-addBtn('Plan my day',1.3,0.65,()=>ask('Help me plan a productive day in 5 short steps.'));
-addBtn('Back',-1.3,0.38,()=>{if(idx>0){idx--;render()}});
-addBtn('Next',-0.43,0.38,()=>{if(idx<pages.length-1){idx++;render()}});
-const vb=addBtn('Voice: on',0.43,0.38,()=>{speak=!speak;vb.setAttribute('text','value',speak?'Voice: on':'Voice: off');if(!speak&&window.speechSynthesis)speechSynthesis.cancel()});
-addBtn('Clear',1.3,0.38,()=>{show(WELCOME);if(window.speechSynthesis)speechSynthesis.cancel()});
-addBtn('Link VR',-1.3,0.11,hostLink);
-addBtn('Unlink',-0.43,0.11,()=>unlink('Link closed.'));
-addBtn('Cinema',0.43,0.11,()=>setCinema(true));
+addBtn('Mic',-1.3,2.4,mic);
+addBtn('Guide me',-0.43,2.4,()=>ask('Guide me step by step on how to use VR safely and comfortably.'));
+addBtn('Teach me',0.43,2.4,()=>ask('Teach me one interesting thing, simply.'));
+addBtn('Plan my day',1.3,2.4,()=>ask('Help me plan a productive day in 5 short steps.'));
+addBtn('Back',-1.3,2.13,()=>{if(idx>0){idx--;render()}});
+addBtn('Next',-0.43,2.13,()=>{if(idx<pages.length-1){idx++;render()}});
+const vb=addBtn('Voice: on',0.43,2.13,()=>{speak=!speak;vb.setAttribute('text','value',speak?'Voice: on':'Voice: off');if(!speak&&window.speechSynthesis)speechSynthesis.cancel()});
+addBtn('Clear',1.3,2.13,()=>{show(WELCOME);if(window.speechSynthesis)speechSynthesis.cancel()});
+addBtn('Link VR',-1.3,1.86,hostLink);
+addBtn('Unlink',-0.43,1.86,()=>unlink('Link closed.'));
+addBtn('Cinema',0.43,1.86,()=>setCinema(true));
 const uiBtns=[...document.querySelectorAll('#ui .btn')];
 const mv=document.querySelector('#mv'),cine=document.querySelector('#cine'),cstat=document.querySelector('#cstat'),
   screen=document.querySelector('#screen'),sphere=document.querySelector('#sphere'),mstat=document.querySelector('#mstat');
@@ -2177,19 +2183,19 @@ function setCinema(on){
   if(on)updateCstat();else mv.pause();
 }
 function seek(d){if(mv.getAttribute('src'))mv.currentTime=Math.max(0,Math.min(mv.duration||1e9,mv.currentTime+d))}
-cb('Play / Pause',-1.3,0.55,()=>{
+cb('Play / Pause',-1.3,0.95,()=>{
   if(!mv.getAttribute('src')){updateCstat();return}
   if(mv.paused)mv.play().catch(()=>updateCstat('Press Play again to start.'));else mv.pause();
 });
-cb('Back 10s',-0.43,0.55,()=>seek(-10));
-cb('Forward 10s',0.43,0.55,()=>seek(10));
-cb('Exit cinema',1.3,0.55,()=>setCinema(false));
-cb('Quieter',-1.3,0.28,()=>{mv.volume=Math.max(0,+(mv.volume-.1).toFixed(2))});
-cb('Louder',-0.43,0.28,()=>{mv.volume=Math.min(1,+(mv.volume+.1).toFixed(2))});
-cb('Smaller',0.43,0.28,()=>{csize=Math.max(.6,csize-.2);screen.setAttribute('scale',csize+' '+csize+' 1')});
-cb('Bigger',1.3,0.28,()=>{csize=Math.min(2,csize+.2);screen.setAttribute('scale',csize+' '+csize+' 1')});
-cb('360 mode',-1.3,0.01,()=>set360(!is360));
-cb('Restart',-0.43,0.01,()=>{if(mv.getAttribute('src'))mv.currentTime=0});
+cb('Back 10s',-0.43,0.95,()=>seek(-10));
+cb('Forward 10s',0.43,0.95,()=>seek(10));
+cb('Exit cinema',1.3,0.95,()=>setCinema(false));
+cb('Quieter',-1.3,0.7,()=>{mv.volume=Math.max(0,+(mv.volume-.1).toFixed(2))});
+cb('Louder',-0.43,0.7,()=>{mv.volume=Math.min(1,+(mv.volume+.1).toFixed(2))});
+cb('Smaller',0.43,0.7,()=>{csize=Math.max(.6,csize-.2);screen.setAttribute('scale',csize+' '+csize+' 1')});
+cb('Bigger',1.3,0.7,()=>{csize=Math.min(2,csize+.2);screen.setAttribute('scale',csize+' '+csize+' 1')});
+cb('360 mode',-1.3,0.45,()=>set360(!is360));
+cb('Restart',-0.43,0.45,()=>{if(mv.getAttribute('src'))mv.currentTime=0});
 ['timeupdate','play','pause','loadedmetadata'].forEach(n=>mv.addEventListener(n,()=>{if(cinema)updateCstat()}));
 mv.addEventListener('loadedmetadata',()=>{
   if(mv.videoWidth&&mv.videoHeight)screen.setAttribute('width',Math.max(2,Math.min(8,3.6*mv.videoWidth/mv.videoHeight)));
@@ -2207,12 +2213,26 @@ document.querySelector('#mf').onchange=e=>{
   const f=e.target.files[0];if(!f)return;
   if(blobUrl)URL.revokeObjectURL(blobUrl);blobUrl=URL.createObjectURL(f);loadMovie(blobUrl,f.name);e.target.value='';
 };
+function embedUrl(u){
+  let m=u.match(/(?:youtube\.com\/(?:watch\?(?:.*&)?v=|shorts\/|embed\/|live\/)|youtu\.be\/)([\w-]{11})/i);
+  if(m)return 'https://www.youtube-nocookie.com/embed/'+m[1]+'?rel=0';
+  m=u.match(/vimeo\.com\/(?:video\/)?(\d+)(?:\/([0-9a-f]+))?/i);
+  if(m){const h=m[2]||(u.match(/[?&]h=([0-9a-f]+)/i)||[])[1];return 'https://player.vimeo.com/video/'+m[1]+(h?'?h='+h:'')}
+  return '';
+}
+function playEmbed(src){
+  document.querySelector('#embf').src=src;document.querySelector('#emb').hidden=false;
+  mstat.textContent='Playing in a normal window. This is not the VR cinema screen. On a Quest it shows as a big screen in your browser window.';
+}
+document.querySelector('#embx').onclick=()=>{document.querySelector('#embf').src='about:blank';document.querySelector('#emb').hidden=true};
 document.querySelector('#m360').onchange=e=>set360(e.target.checked);
 document.querySelector('#mgo').onclick=()=>{
   const u=document.querySelector('#mu').value.trim();
   if(!/^https?:\/\//i.test(u)){mstat.textContent='Paste a full link that starts with https://';return}
-  if(/(youtube\.com|youtu\.be|vimeo\.com|netflix\.com|primevideo|hotstar|disneyplus|jiocinema)/i.test(u)){
-    mstat.textContent='That is a web page, not a video file, so it cannot play on the VR screen. Download the video if you own it and use Choose a video file, or paste a direct .mp4 link.';return}
+  const emb=embedUrl(u);
+  if(emb){playEmbed(emb);return}
+  if(/(netflix\.com|primevideo|hotstar|disneyplus|jiocinema)/i.test(u)){
+    mstat.textContent='Streaming services like this cannot play here. Use their own app on your headset.';return}
   loadMovie(u,'Your link');
 };
 document.querySelector('#go').onclick=()=>{const i=document.querySelector('#q');ask(i.value);i.value=''};
