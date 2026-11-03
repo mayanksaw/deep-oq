@@ -2,12 +2,61 @@
 
 These run as normal code (the "Reasoning Gate"): numbers and counts are computed
 by Python, not guessed by the language model. Web search gives current affairs.
+
+Also holds the tool registry used by app.py and ai_advanced.py:
+  tool(...)      decorator that registers a tool
+  TOOLS          dict of all registered tools
+  list_tools()   sorted tool names
+  run_tool()     run one tool by name
+  set_llm()      give the tools access to the language model
 """
 import ast
 import json
 import math
 import operator
 import re
+
+# ---------- tool registry ----------
+TOOLS = {}
+_llm_fn = None
+
+
+def set_llm(fn):
+    """fn(prompt, system='', image_url=None) -> str"""
+    global _llm_fn
+    _llm_fn = fn
+
+
+def llm(prompt, system="", image_url=None):
+    if _llm_fn is None:
+        return "[Deep OQ] Model is not set."
+    return _llm_fn(prompt, system, image_url)
+
+
+ask = llm  # alias
+
+
+def tool(name, category="general", description="", params=None):
+    """Decorator: @tool("name", "category", "what it does", {"arg": "string"})"""
+    def deco(fn):
+        TOOLS[name] = {"fn": fn, "category": category,
+                       "description": description, "params": params or {}}
+        return fn
+    return deco
+
+
+def list_tools():
+    return sorted(TOOLS)
+
+
+def run_tool(name, **kwargs):
+    if name not in TOOLS:
+        return f"Unknown tool: {name}"
+    try:
+        return TOOLS[name]["fn"](**kwargs)
+    except Exception as e:
+        return f"[Deep OQ] Tool '{name}' failed: {e}"
+
 
 # ---------- safe calculator (no eval of arbitrary code) ----------
 _OPS = {
@@ -117,3 +166,22 @@ def run_tools(question, fast_chat):
             out.append("WEB RESULTS for '%s':\n%s" % (plan["search"], "\n".join(
                 f"- {h['title']}: {h['body']}" for h in hits)))
     return ("\n".join(out), used) if out else ("", [])
+
+
+# ---------- basic tools shown in the website tool menu ----------
+@tool("calculator", "math", "Exact arithmetic and math functions.", {"expression": "string"})
+def _tool_calc(expression):
+    return str(safe_calc(expression))
+
+
+@tool("text_counter", "text", "Exact word, letter and sentence count.", {"text": "string"})
+def _tool_count(text):
+    return json.dumps(count_text(text))
+
+
+@tool("web_search", "web", "Live web search for current information.", {"query": "string"})
+def _tool_search(query):
+    hits = web_search(query)
+    if not hits:
+        return "No web results found."
+    return "\n".join(f"- {h['title']}: {h['body']} ({h['url']})" for h in hits)
