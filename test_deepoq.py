@@ -77,6 +77,19 @@ if not LIVE:
     check("exact math through server", c.post("/api/chat", json={"message": "12*12"}, headers=h).get_json()["answer"], "144")
     check("health", c.get("/health").get_json()["tools"], "141")
 
+    # admin page
+    os.environ["ADMIN_USERS"] = "tester"
+    check("admin page loads", c.get("/admin").status_code, "200")
+    check("admin blocked without login", c.get("/api/admin/overview").status_code, "403")
+    t2 = c.post("/api/login", json={"username": "someone_else", "password": "password123"}).get_json()["token"]
+    check("admin blocked for normal user", c.get("/api/admin/overview", headers={"Authorization": f"Bearer {t2}"}).status_code, "403")
+    ov = c.get("/api/admin/overview", headers=h).get_json()
+    check("admin overview works", ov["stats"]["users"] >= 2, "True")
+    check("admin never exposes messages", "hello" in str(ov), "False")
+    check("admin cannot delete self", c.delete(f"/api/admin/users/{uid}", headers=h).status_code, "400")
+    check("admin deletes other user", c.delete(f"/api/admin/users/{other}", headers=h).status_code, "200")
+    check("deleted user gone", db.username_of(other), "None")
+
 # ---------------- Part 2: real model quality ----------------
 print("\n== Part 2: plain model vs Deep OQ ==")
 
