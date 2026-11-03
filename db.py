@@ -369,5 +369,8 @@ def clear_facts(user_id):
         conn.execute("DELETE FROM facts WHERE user_id = %s", (user_id,))
 
 
+# app.py calls db.init(), so keep that name available too.
+init = init_db
+
 # Create tables automatically when the module is imported (idempotent).
 init_db()
