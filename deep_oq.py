@@ -31,7 +31,9 @@ import operator
 import os
 import re
 import shutil
+import secrets
 import sqlite3
+import time
 import subprocess
 import sys
 import tempfile
@@ -1716,8 +1718,9 @@ VR_PAGE = r"""<!doctype html>
 <title>Deep OQ VR Guide</title>
 <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
 <style>
-#dom{position:fixed;left:0;right:0;bottom:0;display:flex;gap:8px;padding:10px;background:#0b0b2acc;z-index:9;font-family:system-ui,sans-serif}
-#dom input{flex:1;font-size:16px;padding:10px;border-radius:10px;border:1px solid #556}
+#dom{position:fixed;left:0;right:0;bottom:0;display:flex;flex-wrap:wrap;gap:8px;padding:10px;background:#0b0b2acc;z-index:9;font-family:system-ui,sans-serif}
+#log{flex-basis:100%;max-height:30vh;overflow:auto;color:#dde;white-space:pre-wrap;font-size:15px}
+#dom input{flex:1;min-width:120px;font-size:16px;padding:10px;border-radius:10px;border:1px solid #556}
 #dom button{font-size:16px;padding:10px 16px;border-radius:10px;border:0;background:#2d3cff;color:#fff}
 </style></head>
 <body>
@@ -1726,17 +1729,23 @@ VR_PAGE = r"""<!doctype html>
     <a-cursor color="#9ab0ff" fuse="true" fuse-timeout="1500" raycaster="objects: .btn"></a-cursor></a-camera></a-entity>
   <a-entity laser-controls="hand: right" raycaster="objects: .btn; far: 6"></a-entity>
   <a-entity laser-controls="hand: left" raycaster="objects: .btn; far: 6"></a-entity>
-  <a-plane position="0 1.55 -2.2" width="3.8" height="2.6" material="shader: flat; color: #14143a"></a-plane>
+  <a-plane position="0 1.4 -2.2" width="3.8" height="2.9" material="shader: flat; color: #14143a"></a-plane>
   <a-text value="Deep OQ VR Guide" position="-1.7 2.65 -2.18" width="3.4" color="#ffffff" anchor="left" align="left"></a-text>
   <a-text id="out" value="Pick a button or press Mic and ask me anything." position="-1.7 2.4 -2.18" width="3.4"
           wrap-count="46" anchor="left" align="left" baseline="top" color="#e8e8ff"></a-text>
+  <a-text id="code" value="" position="-1.7 0.9 -2.18" width="2" color="#9ab0ff" anchor="left" align="left"></a-text>
   <a-text id="page" value="" position="1.7 0.9 -2.18" width="1.2" anchor="right" align="right" color="#9aa"></a-text>
 </a-scene>
-<div id="dom"><input id="q" placeholder="Type a question (outside VR)" aria-label="Question"><button id="go" type="button">Ask</button></div>
+<div id="dom"><div id="log" aria-live="polite"></div><input id="lc" placeholder="Headset code" size="8" aria-label="Headset link code"><button id="lj" type="button">Link</button><input id="q" placeholder="Type a question (outside VR)" aria-label="Question"><button id="go" type="button">Ask</button></div>
 <script>
-const scene=document.querySelector('#scene'),out=document.querySelector('#out'),pg=document.querySelector('#page');
+const scene=document.querySelector('#scene'),out=document.querySelector('#out'),pg=document.querySelector('#page'),
+  codeT=document.querySelector('#code'),logEl=document.querySelector('#log');
 const sid='vr-'+Math.random().toString(36).slice(2);
-let pages=[],idx=0,speak=true;
+const H=()=>({'Content-Type':'application/json','X-Access-Key':localStorage.ak||''});
+const post=(u,b)=>fetch(u,{method:'POST',headers:H(),body:JSON.stringify(b)});
+const WELCOME='Pick a button or press Mic and ask me anything.';
+let pages=[],idx=0,speak=true,link={code:'',role:'',after:0,timer:0};
+function logLine(t){const d=document.createElement('div');d.textContent=t;logEl.appendChild(d);logEl.scrollTop=logEl.scrollHeight}
 function render(){
   out.setAttribute('value',pages[idx]||'');
   pg.setAttribute('value',pages.length>1?(idx+1)+' / '+pages.length:'');
@@ -1747,21 +1756,28 @@ function setAnswer(a){
   const t=a.replace(/[*#`>_]/g,'').replace(/\s+/g,' ').trim();
   pages=[];let s=t;
   while(s.length){let c=s.slice(0,520);if(s.length>520){const k=Math.max(c.lastIndexOf('. '),c.lastIndexOf(' '));if(k>200)c=c.slice(0,k+1)}pages.push(c.trim());s=s.slice(c.length).trim()}
-  idx=0;render();
+  idx=0;render();return t;
 }
-async function ask(q){
-  if(!q.trim())return;
+async function ask(q,fromRemote){
+  q=(q||'').trim();if(!q)return;
+  if(link.role==='remote'){
+    logLine('You: '+q);
+    try{const r=await post('/vr/send',{code:link.code,kind:'q',text:q});if(!r.ok)logLine('Could not send. Check the link code.')}
+    catch(e){logLine('Could not reach the server.')}
+    return;
+  }
   show('Thinking...');
   try{
-    const r=await fetch('/ask',{method:'POST',headers:{'Content-Type':'application/json','X-Access-Key':localStorage.ak||''},
+    const r=await fetch('/ask',{method:'POST',headers:H(),
       body:JSON.stringify({session:sid,q:'[VR guide mode: answer in under 90 words, short plain sentences, no markdown, no lists.] '+q})});
     if(r.status===401){
-      if(!scene.is('vr-mode')){const k=prompt('Enter the access key');if(k){localStorage.ak=k;return ask(q)}}
+      if(!scene.is('vr-mode')){const k=prompt('Enter the access key');if(k){localStorage.ak=k;return ask(q,fromRemote)}}
       return show('Access key needed. Leave VR, reload this page and enter the key once.');
     }
     const j=await r.json();
     if(!r.ok||j.error)throw new Error(j.error||'No answer');
-    setAnswer(j.answer);
+    const t=setAnswer(j.answer);
+    if(link.role==='host')post('/vr/send',{code:link.code,kind:'a',text:(fromRemote?'':'Headset asked: '+q+'\n')+'Deep OQ: '+t}).catch(()=>{});
   }catch(e){show('Could not get an answer. '+e.message)}
 }
 function mic(){
@@ -1772,6 +1788,44 @@ function mic(){
   r.onresult=e=>ask(e.results[0][0].transcript);
   r.onerror=()=>show('I could not hear you. Check the microphone permission and try again.');
   r.start();
+}
+/* ---- link system: headset = host (makes a code), phone/computer = remote (types the code) ---- */
+function setLink(code,role,after){link={code:code,role:role,after:after,timer:0};loop()}
+function unlink(msg){
+  clearTimeout(link.timer);link={code:'',role:'',after:0,timer:0};codeT.setAttribute('value','');
+  if(msg){show(msg);logLine(msg)}
+}
+async function hostLink(){
+  try{
+    const r=await post('/vr/new',{});
+    if(r.status===401){show('Access key needed. Leave VR, reload this page and enter the key once.');return}
+    const j=await r.json();if(!r.ok||!j.code)throw new Error('no code');
+    unlink('');setLink(j.code,'host',0);codeT.setAttribute('value','Link code: '+j.code);
+    show('Linked. On your phone or computer open this page, type the code '+j.code+' and ask questions from there.');
+    logLine('Headset link code: '+j.code);
+  }catch(e){show('Could not make a link code.')}
+}
+async function joinLink(code){
+  code=(code||'').trim().toUpperCase();if(!code)return;
+  try{
+    const r=await fetch('/vr/poll?code='+encodeURIComponent(code)+'&kind=a&after=-1',{headers:H()});
+    if(r.status===401){const k=prompt('Enter the access key');if(k){localStorage.ak=k;return joinLink(code)}return}
+    if(!r.ok){logLine('That link code is not valid or has expired.');return}
+    const j=await r.json();unlink('');setLink(code,'remote',j.last);
+    codeT.setAttribute('value','Remote: '+code);logLine('Linked to headset '+code+'. Type a question below.');
+  }catch(e){logLine('Could not reach the server.')}
+}
+async function loop(){
+  if(!link.code)return;
+  try{
+    const r=await fetch('/vr/poll?code='+encodeURIComponent(link.code)+'&kind='+(link.role==='host'?'q':'a')+'&after='+link.after,{headers:H()});
+    if(r.status===404){unlink('The link expired. Make a new one.');return}
+    if(r.ok){
+      const j=await r.json();link.after=j.last;
+      for(const m of j.msgs){if(link.role==='host'){logLine('Remote: '+m.text);await ask(m.text,true)}else logLine(m.text)}
+    }
+  }catch(e){}
+  if(link.code)link.timer=setTimeout(loop,1500);
 }
 function addBtn(label,x,y,fn){
   const e=document.createElement('a-entity');
@@ -1792,11 +1846,16 @@ addBtn('Plan my day',1.3,0.65,()=>ask('Help me plan a productive day in 5 short 
 addBtn('Back',-1.3,0.38,()=>{if(idx>0){idx--;render()}});
 addBtn('Next',-0.43,0.38,()=>{if(idx<pages.length-1){idx++;render()}});
 const vb=addBtn('Voice: on',0.43,0.38,()=>{speak=!speak;vb.setAttribute('text','value',speak?'Voice: on':'Voice: off');if(!speak&&window.speechSynthesis)speechSynthesis.cancel()});
-addBtn('Clear',1.3,0.38,()=>{show('Pick a button or press Mic and ask me anything.');if(window.speechSynthesis)speechSynthesis.cancel()});
+addBtn('Clear',1.3,0.38,()=>{show(WELCOME);if(window.speechSynthesis)speechSynthesis.cancel()});
+addBtn('Link VR',-1.3,0.11,hostLink);
+addBtn('Unlink',-0.43,0.11,()=>unlink('Link closed.'));
 document.querySelector('#go').onclick=()=>{const i=document.querySelector('#q');ask(i.value);i.value=''};
 document.querySelector('#q').addEventListener('keydown',e=>{if(e.key==='Enter')document.querySelector('#go').click()});
+document.querySelector('#lj').onclick=()=>joinLink(document.querySelector('#lc').value);
 scene.addEventListener('enter-vr',()=>document.querySelector('#dom').style.display='none');
 scene.addEventListener('exit-vr',()=>document.querySelector('#dom').style.display='flex');
+const urlCode=new URLSearchParams(location.search).get('code');
+if(urlCode)joinLink(urlCode);
 </script>
 </body></html>
 """
@@ -1805,6 +1864,76 @@ scene.addEventListener('exit-vr',()=>document.querySelector('#dom').style.displa
 @app.get("/vr")
 def vr_page():
     return VR_PAGE, 200, {"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache"}
+
+
+_vr_lock = threading.Lock()
+_VR_ALPHA = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+_VR_TTL = 6 * 3600  # a link code works for 6 hours
+
+with _vr_lock:
+    DB.execute("CREATE TABLE IF NOT EXISTS vr_codes(code TEXT PRIMARY KEY, ts REAL)")
+    DB.execute("CREATE TABLE IF NOT EXISTS vr_msgs(id INTEGER PRIMARY KEY AUTOINCREMENT, "
+               "code TEXT, kind TEXT, text TEXT, ts REAL)")
+    DB.commit()
+
+
+def _vr_valid(code):
+    row = DB.execute("SELECT ts FROM vr_codes WHERE code=?", (code,)).fetchone()
+    return bool(row) and time.time() - row[0] < _VR_TTL
+
+
+@app.post("/vr/new")
+def vr_new():
+    """The headset asks for a short link code."""
+    if denied():
+        return jsonify(error="locked"), 401
+    with _vr_lock:
+        old = time.time() - _VR_TTL
+        DB.execute("DELETE FROM vr_msgs WHERE ts<?", (old,))
+        DB.execute("DELETE FROM vr_codes WHERE ts<?", (old,))
+        code = "".join(secrets.choice(_VR_ALPHA) for _ in range(6))
+        DB.execute("INSERT OR REPLACE INTO vr_codes(code,ts) VALUES(?,?)", (code, time.time()))
+        DB.commit()
+    return jsonify(code=code)
+
+
+@app.post("/vr/send")
+def vr_send():
+    """kind q = a question from the remote to the headset, a = an answer from the headset to the remote."""
+    if denied():
+        return jsonify(error="locked"), 401
+    d = request.get_json(silent=True) or {}
+    code = str(d.get("code", "")).upper().strip()[:12]
+    kind = d.get("kind")
+    text = str(d.get("text", "")).strip()[:4000]
+    if kind not in ("q", "a") or not text:
+        return jsonify(error="Nothing to send."), 400
+    with _vr_lock:
+        if not _vr_valid(code):
+            return jsonify(error="That link code is not valid or has expired."), 404
+        DB.execute("INSERT INTO vr_msgs(code,kind,text,ts) VALUES(?,?,?,?)", (code, kind, text, time.time()))
+        DB.commit()
+    return jsonify(ok=True)
+
+
+@app.get("/vr/poll")
+def vr_poll():
+    if denied():
+        return jsonify(error="locked"), 401
+    code = request.args.get("code", "").upper().strip()[:12]
+    kind = "q" if request.args.get("kind") == "q" else "a"
+    try:
+        after = int(request.args.get("after", "0"))
+    except ValueError:
+        after = 0
+    with _vr_lock:
+        if not _vr_valid(code):
+            return jsonify(error="That link code is not valid or has expired."), 404
+        last = DB.execute("SELECT COALESCE(MAX(id),0) FROM vr_msgs WHERE code=?", (code,)).fetchone()[0]
+        rows = [] if after < 0 else DB.execute(
+            "SELECT id,text FROM vr_msgs WHERE code=? AND kind=? AND id>? ORDER BY id LIMIT 20",
+            (code, kind, after)).fetchall()
+    return jsonify(last=last, msgs=[{"id": r[0], "text": r[1]} for r in rows])
 
 
 @app.post("/code")
