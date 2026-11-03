@@ -1,5 +1,7 @@
 flask
-groq
 gunicorn
+requests
+psycopg[binary,pool]
+groq
 pypdf
 ddgs
