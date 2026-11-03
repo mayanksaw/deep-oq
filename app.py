@@ -224,6 +224,115 @@ def memory_save():
     return jsonify({"ok": True})
 
 
+# ---------------- admin ----------------
+# Set ADMIN_USERS on the server, e.g.  ADMIN_USERS=mayank,second_admin
+# Only logged-in users whose username is in that list can use the admin page.
+# The admin page shows counts and usernames only, never anyone's message text.
+
+def admin_required(fn):
+    @wraps(fn)
+    def wrapper(*a, **kw):
+        user = db.user_from_token(token_from_request())
+        admins = {x.strip().lower() for x in os.environ.get("ADMIN_USERS", "").split(",") if x.strip()}
+        if not user or user["username"] not in admins:
+            return jsonify({"error": "Admins only."}), 403
+        if rate_limited(("admin", user["id"]), 60):
+            return jsonify({"error": "Too many requests."}), 429
+        g.user = user
+        return fn(*a, **kw)
+    return wrapper
+
+
+@app.get("/api/admin/overview")
+@admin_required
+def admin_overview():
+    return jsonify({
+        "stats": db.admin_stats(),
+        "tools_loaded": len(ai_tools.TOOLS),
+        "tool_usage": db.admin_tool_usage(),
+        "daily": db.admin_daily(),
+        "users": db.admin_users(),
+        "groq_key_set": bool(os.environ.get("GROQ_API_KEY")),
+        "model": MODEL,
+    })
+
+
+@app.delete("/api/admin/users/<int:uid>")
+@admin_required
+def admin_delete_user(uid):
+    if uid == g.user["id"]:
+        return jsonify({"error": "You cannot delete your own admin account here."}), 400
+    if not db.username_of(uid):
+        return jsonify({"error": "User not found."}), 404
+    db.delete_user(uid)
+    return jsonify({"ok": True})
+
+
+ADMIN_PAGE = """<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Deep OQ Admin</title>
+<style>
+:root{--bg:#0f1117;--card:#1b1f2d;--line:#2a2f45;--fg:#e8e8ea;--mut:#9aa0b5;--acc:#5b6cff;--bad:#ff6b6b}
+body{font-family:system-ui,sans-serif;margin:0;padding:16px;background:var(--bg);color:var(--fg)}
+.wrap{max-width:1000px;margin:0 auto}h1{margin:0 0 4px}h2{font-size:16px;margin:24px 0 8px;color:var(--mut);font-weight:600}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px}
+.card b{display:block;font-size:24px}.card span{color:var(--mut);font-size:13px}
+table{width:100%;border-collapse:collapse;background:var(--card);border-radius:10px;overflow:hidden}
+th,td{padding:8px 10px;text-align:left;border-bottom:1px solid var(--line);font-size:14px}th{color:var(--mut);font-weight:600}
+.scroll{overflow-x:auto}input,button{padding:10px;border-radius:8px;border:1px solid var(--line);background:#171a24;color:inherit;font:inherit}
+button{background:var(--acc);border:0;color:#fff;cursor:pointer}button.del{background:transparent;border:1px solid var(--bad);color:var(--bad);padding:4px 10px}
+.bar{height:10px;background:var(--acc);border-radius:5px}.row{display:flex;align-items:center;gap:8px;margin:4px 0;font-size:13px}
+.row .n{width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.row .v{width:40px;text-align:right;color:var(--mut)}
+.row .t{flex:1;background:#171a24;border-radius:5px}#login{display:flex;gap:8px;flex-wrap:wrap}#msg{color:var(--bad);margin:8px 0}
+</style></head><body><div class="wrap">
+<h1>Deep OQ Admin</h1><div style="color:var(--mut)" id="sub">Log in with an admin account</div>
+<div id="login"><input id="u" placeholder="admin username"><input id="p" type="password" placeholder="password"><button onclick="signin()">Log in</button></div>
+<div id="msg"></div><div id="main" hidden>
+<div class="grid" id="cards"></div>
+<h2>Messages per day (last 14 days)</h2><div class="card" id="daily"></div>
+<h2>Most used tools</h2><div class="card" id="tools"></div>
+<h2>Users</h2><div class="scroll"><table id="users"></table></div>
+</div></div>
+<script>
+let token=sessionStorage.getItem('adm')||'';
+const $=id=>document.getElementById(id);
+const H=()=>({'Content-Type':'application/json','Authorization':'Bearer '+token});
+const ago=t=>t?new Date(t*1000).toLocaleString():'never';
+function el(tag,text,attrs){const e=document.createElement(tag);if(text!==undefined)e.textContent=text;Object.assign(e,attrs||{});return e;}
+function bars(box,items,label,val){box.replaceChildren();const max=Math.max(1,...items.map(i=>i[val]));
+  if(!items.length)box.textContent='No data yet.';
+  items.forEach(i=>{const r=el('div');r.className='row';r.append(el('span',i[label],{className:'n'}));
+    const t=el('div');t.className='t';const b=el('div');b.className='bar';b.style.width=(i[val]/max*100)+'%';t.append(b);
+    r.append(t,el('span',i[val],{className:'v'}));box.append(r);});}
+async function signin(){
+  const r=await fetch('/api/login',{method:'POST',headers:H(),body:JSON.stringify({username:$('u').value,password:$('p').value})});
+  const d=await r.json();if(!d.token){$('msg').textContent=d.error;return;}
+  token=d.token;sessionStorage.setItem('adm',token);load();}
+async function load(){
+  const r=await fetch('/api/admin/overview',{headers:H()});
+  if(!r.ok){$('msg').textContent=r.status==403?'This account is not an admin. Set ADMIN_USERS on the server.':'Please log in.';return;}
+  const d=await r.json();$('msg').textContent='';$('login').hidden=true;$('main').hidden=false;
+  $('sub').textContent=d.tools_loaded+' tools loaded - model: '+d.model+' - Groq key '+(d.groq_key_set?'set':'MISSING');
+  const s=d.stats,c=$('cards');c.replaceChildren();
+  [['Users',s.users],['New (24h)',s.new_users_24h],['Active (24h)',s.active_users_24h],['Chats',s.conversations],['Messages',s.messages],['Messages (24h)',s.messages_24h],['DB size (KB)',s.db_size_kb]]
+   .forEach(([k,v])=>{const x=el('div');x.className='card';x.append(el('b',v),el('span',k));c.append(x);});
+  bars($('daily'),d.daily,'day','messages');bars($('tools'),d.tool_usage,'tool','uses');
+  const t=$('users');t.replaceChildren();const hr=el('tr');['ID','Username','Joined','Chats','Messages','Last active',''].forEach(h=>hr.append(el('th',h)));t.append(hr);
+  d.users.forEach(u=>{const tr=el('tr');[u.id,u.username,ago(u.created),u.chats,u.messages,ago(u.last_active)].forEach(v=>tr.append(el('td',v)));
+    const td=el('td');const b=el('button','Delete',{className:'del'});b.onclick=()=>del(u);td.append(b);tr.append(td);t.append(tr);});}
+async function del(u){
+  if(!confirm('Delete user "'+u.username+'" and ALL their chats? This cannot be undone.'))return;
+  const r=await fetch('/api/admin/users/'+u.id,{method:'DELETE',headers:H()});
+  const d=await r.json();if(!r.ok)alert(d.error);load();}
+if(token)load();
+</script></body></html>"""
+
+
+@app.get("/admin")
+def admin_page():
+    return ADMIN_PAGE
+
+
 @app.get("/health")
 def health():
     return jsonify({"status": "ok", "tools": len(ai_tools.TOOLS)})
