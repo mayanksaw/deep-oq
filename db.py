@@ -46,7 +46,7 @@ _pool = ConnectionPool(
     open=False,
 )
 
-SCHEMA = """
+SCHEMA = (""")
 CREATE TABLE IF NOT EXISTS users (
     id BIGSERIAL PRIMARY KEY,
     username TEXT UNIQUE NOT NULL,
