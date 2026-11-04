@@ -1,6 +1,7 @@
 flask
 groq
 gunicorn
+requests
 pypdf
 ddgs
 imageio-ffmpeg
