@@ -2981,74 +2981,60 @@ LOGIN_PAGE = r"""<!DOCTYPE html>
   }
 
   /* ---------- background ---------- */
-  .aurora{position:fixed;inset:-20%;z-index:0;filter:blur(70px);opacity:.75;
+  .aurora{position:fixed;inset:0;z-index:0;opacity:.9;
     background:
       radial-gradient(40% 35% at 20% 25%,rgba(124,92,255,.65),transparent 70%),
       radial-gradient(35% 40% at 80% 20%,rgba(0,212,255,.45),transparent 70%),
       radial-gradient(40% 40% at 70% 85%,rgba(255,79,216,.40),transparent 70%),
       radial-gradient(30% 30% at 25% 85%,rgba(0,120,255,.35),transparent 70%);
-    animation:drift 22s ease-in-out infinite alternate}
-  @keyframes drift{
-    0%{transform:translate(0,0) rotate(0deg) scale(1)}
-    50%{transform:translate(4%,-3%) rotate(6deg) scale(1.1)}
-    100%{transform:translate(-4%,3%) rotate(-5deg) scale(1.05)}}
-  .grid{position:fixed;inset:0;z-index:1;opacity:.35;
+    }
+    .grid{position:fixed;inset:0;z-index:1;opacity:.35;
     background-image:linear-gradient(rgba(255,255,255,.06) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.06) 1px,transparent 1px);
     background-size:56px 56px;
     -webkit-mask-image:radial-gradient(70% 70% at 50% 50%,#000 20%,transparent 100%);
     mask-image:radial-gradient(70% 70% at 50% 50%,#000 20%,transparent 100%);
-    animation:gridmove 14s linear infinite}
-  @keyframes gridmove{to{background-position:56px 56px}}
-  #net{position:fixed;inset:0;z-index:2}
+    }
+    #net{position:fixed;inset:0;z-index:2}
 
   /* ---------- layout ---------- */
   .stage{position:relative;z-index:3;width:min(1080px,94vw);display:grid;grid-template-columns:1.05fr .95fr;gap:56px;align-items:center}
   @media(max-width:900px){.stage{grid-template-columns:1fr;gap:0}.hero{display:none}}
 
   /* ---------- hero ---------- */
-  .hero{animation:fadeLeft 1s cubic-bezier(.2,.8,.2,1) both}
-  @keyframes fadeLeft{from{opacity:0;transform:translateX(-40px)}to{opacity:1;transform:none}}
-  .badge{display:inline-flex;align-items:center;gap:8px;padding:7px 14px;border-radius:99px;font-size:12.5px;letter-spacing:.4px;
-    background:rgba(255,255,255,.06);border:1px solid var(--border);color:#c9cdf0;backdrop-filter:blur(8px)}
-  .badge i{width:8px;height:8px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 0 rgba(51,230,161,.7);animation:ping 2s infinite}
-  @keyframes ping{70%{box-shadow:0 0 0 10px rgba(51,230,161,0)}100%{box-shadow:0 0 0 0 rgba(51,230,161,0)}}
-  .hero h2{font-size:clamp(48px,6.4vw,86px);line-height:1;letter-spacing:-3px;margin:22px 0 18px;font-weight:800}
+  .hero{}
+    .badge{display:inline-flex;align-items:center;gap:8px;padding:7px 14px;border-radius:99px;font-size:12.5px;letter-spacing:.4px;
+    background:rgba(255,255,255,.06);border:1px solid var(--border);color:#c9cdf0;}
+  .badge i{width:8px;height:8px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 0 rgba(51,230,161,.7);}
+    .hero h2{font-size:clamp(48px,6.4vw,86px);line-height:1;letter-spacing:-3px;margin:22px 0 18px;font-weight:800}
   .grad{background:linear-gradient(90deg,var(--b),var(--a),var(--c),var(--b));background-size:250% 100%;
-    -webkit-background-clip:text;background-clip:text;color:transparent;animation:shine 6s linear infinite}
-  @keyframes shine{to{background-position:250% 0}}
-  .type{font-size:20px;color:#c4c9ee;min-height:30px;font-weight:500}
-  .type::after{content:"";display:inline-block;width:2px;height:1.05em;background:var(--b);margin-left:4px;vertical-align:-3px;animation:blink 1s steps(1) infinite}
-  @keyframes blink{50%{opacity:0}}
-  .chips{display:flex;flex-wrap:wrap;gap:10px;margin-top:34px}
+    -webkit-background-clip:text;background-clip:text;color:transparent;}
+    .type{font-size:20px;color:#c4c9ee;min-height:30px;font-weight:500}
+    .chips{display:flex;flex-wrap:wrap;gap:10px;margin-top:34px}
   .chip{padding:10px 16px;border-radius:14px;font-size:13.5px;color:#d5d9f5;background:rgba(255,255,255,.05);border:1px solid var(--border);
-    backdrop-filter:blur(8px);animation:bob 5s ease-in-out infinite}
-  .chip:nth-child(2){animation-delay:-1.2s}.chip:nth-child(3){animation-delay:-2.4s}.chip:nth-child(4){animation-delay:-3.6s}
-  @keyframes bob{50%{transform:translateY(-7px)}}
-
+    }
+  .chip:nth-child(2){}.chip:nth-child(3){}.chip:nth-child(4){}
+  
   /* ---------- card ---------- */
-  .wrap{perspective:1100px;animation:rise .9s .1s cubic-bezier(.2,.8,.2,1) both}
-  @keyframes rise{from{opacity:0;transform:translateY(46px) scale(.95)}to{opacity:1;transform:none}}
-  .card{
+  .wrap{perspective:1100px;}
+    .card{
     position:relative;padding:40px 36px 30px;border-radius:28px;
-    background:linear-gradient(160deg,rgba(255,255,255,.10),rgba(255,255,255,.03));
+    background:rgba(18,20,42,.94);
     border:1px solid var(--border);
-    backdrop-filter:blur(26px) saturate(140%);-webkit-backdrop-filter:blur(26px) saturate(140%);
-    box-shadow:0 40px 90px rgba(0,0,0,.6),0 0 80px rgba(124,92,255,.15),inset 0 1px 0 rgba(255,255,255,.18);
-    transition:transform .15s ease-out}
+    -webkit-
+    box-shadow:0 20px 50px rgba(0,0,0,.5);
+    }
   .card::before{content:"";position:absolute;inset:-1px;border-radius:29px;padding:1.5px;z-index:-1;pointer-events:none;
-    background:conic-gradient(from var(--ang,0deg),transparent 0 62%,var(--b),var(--a),var(--c),transparent);
+    background:linear-gradient(135deg,var(--b),var(--a),var(--c));
     -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
-    -webkit-mask-composite:xor;mask-composite:exclude;animation:spin 5s linear infinite}
-  @property --ang{syntax:"<angle>";inherits:false;initial-value:0deg}
-  @keyframes spin{to{--ang:360deg}}
-
+    -webkit-mask-composite:xor;mask-composite:exclude;}
+    
   .card h1{font-size:30px;letter-spacing:-1px;font-weight:800}
-  .card h1 span{background:linear-gradient(90deg,var(--b),var(--a),var(--c),var(--b));background-size:250% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:shine 5s linear infinite}
+  .card h1 span{background:linear-gradient(90deg,var(--b),var(--a),var(--c),var(--b));background-size:250% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;}
   .sub{color:var(--muted);font-size:14.5px;margin:8px 0 28px;min-height:20px}
 
   /* ---------- inputs ---------- */
-  .field{position:relative;margin-bottom:16px;animation:rise .7s both}
-  .field:nth-of-type(1){animation-delay:.25s}.field:nth-of-type(2){animation-delay:.33s}.field:nth-of-type(3){animation-delay:.41s}
+  .field{position:relative;margin-bottom:16px;}
+  .field:nth-of-type(1){}.field:nth-of-type(2){}.field:nth-of-type(3){}
   .field svg.ic{position:absolute;left:16px;top:50%;transform:translateY(-50%);width:19px;height:19px;stroke:var(--muted);fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;transition:.25s;pointer-events:none}
   .field input{
     width:100%;padding:22px 48px 8px 48px;border-radius:15px;font-size:15px;color:var(--text);
@@ -3077,15 +3063,12 @@ LOGIN_PAGE = r"""<!DOCTYPE html>
   .btn{
     position:relative;overflow:hidden;width:100%;padding:16px;border:0;border-radius:15px;font-size:16px;font-weight:700;color:#fff;cursor:pointer;
     background:linear-gradient(90deg,var(--a),var(--b),var(--c));background-size:220% 100%;
-    box-shadow:0 12px 34px rgba(124,92,255,.45);
+    
     transition:transform .2s,box-shadow .2s,background-position .6s}
-  .btn::after{content:"";position:absolute;top:0;left:-60%;width:40%;height:100%;
-    background:linear-gradient(100deg,transparent,rgba(255,255,255,.45),transparent);transform:skewX(-20deg);animation:sweep 3.2s ease-in-out infinite}
-  @keyframes sweep{0%,55%{left:-60%}100%{left:130%}}
-  .btn:hover{transform:translateY(-3px);background-position:100% 0;box-shadow:0 18px 44px rgba(0,212,255,.4)}
+    .btn:hover{transform:translateY(-3px);background-position:100% 0;}
   .btn:active{transform:scale(.98)}
-  .btn .spin{display:none;width:21px;height:21px;border:3px solid rgba(255,255,255,.35);border-top-color:#fff;border-radius:50%;animation:r .7s linear infinite;margin:0 auto}
-  @keyframes r{to{transform:rotate(360deg)}}
+  .btn .spin{display:none;width:21px;height:21px;border:3px solid rgba(255,255,255,.35);border-top-color:#fff;border-radius:50%;margin:0 auto;animation:r .7s linear infinite}
+    @keyframes r{to{transform:rotate(360deg)}}
   .btn.loading .t{display:none}.btn.loading .spin{display:block}
 
   .divider{display:flex;align-items:center;gap:12px;color:var(--muted);font-size:12px;margin:24px 0 16px;text-transform:uppercase;letter-spacing:1.2px}
@@ -3099,25 +3082,22 @@ LOGIN_PAGE = r"""<!DOCTYPE html>
   .switch a{color:var(--b);cursor:pointer;font-weight:600}
   .switch a:hover{text-decoration:underline}
   .msg{font-size:13px;text-align:center;margin-top:12px;min-height:18px;color:var(--bad)}
-  .shake{animation:shake .4s}
-  @keyframes shake{20%,60%{transform:translateX(-8px)}40%,80%{transform:translateX(8px)}}
-
+  .shake{animation:shake .3s}
+  @keyframes shake{25%,75%{transform:translateX(-6px)}50%{transform:translateX(6px)}}
+  
   /* ---------- success overlay ---------- */
   .ok{position:absolute;inset:0;border-radius:28px;display:flex;flex-direction:column;align-items:center;justify-content:center;
     background:rgba(4,5,13,.94);opacity:0;pointer-events:none;transition:.5s;z-index:5}
   .ok.show{opacity:1;pointer-events:auto}
-  .ok svg{width:96px;height:96px;filter:drop-shadow(0 0 18px rgba(0,212,255,.6))}
+  .ok svg{width:96px;height:96px}
   .ok circle{stroke:var(--b);stroke-width:4;fill:none;stroke-dasharray:260;stroke-dashoffset:260}
   .ok path{stroke:#fff;stroke-width:5;fill:none;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:60;stroke-dashoffset:60}
-  .ok.show circle{animation:draw .7s .1s forwards}.ok.show path{animation:draw .5s .7s forwards}
-  @keyframes draw{to{stroke-dashoffset:0}}
-  .ok h2{margin-top:18px;font-size:24px}.ok p{color:var(--muted);margin-top:8px;font-size:14px}
-  @media(prefers-reduced-motion:reduce){*{animation-duration:.01ms!important;animation-iteration-count:1!important}}
-</style>
+  .ok.show circle,.ok.show path{stroke-dashoffset:0}
+    .ok h2{margin-top:18px;font-size:24px}.ok p{color:var(--muted);margin-top:8px;font-size:14px}
+  </style>
 </head>
 <body>
-<div class="aurora"></div><div class="grid"></div>
-<canvas id="net"></canvas>
+<div class="aurora"></div>
 
 <div class="stage">
   <section class="hero">
@@ -3156,7 +3136,6 @@ LOGIN_PAGE = r"""<!DOCTYPE html>
         <div class="meter"><b id="bar"></b></div>
         <div class="row">
           <label><input type="checkbox" id="remember"> Remember me</label>
-          <a href="#">Forgot password?</a>
         </div>
         <button class="btn" id="go" type="submit"><span class="t" id="goText">Sign in</span><div class="spin"></div></button>
         <div class="msg" id="msg"></div>
@@ -3176,53 +3155,8 @@ LOGIN_PAGE = r"""<!DOCTYPE html>
 /* ===== Config ===== */
 const AFTER_LOGIN_URL = "/";       // where to go after login
 
-/* ===== Particle network ===== */
-const cv = document.getElementById("net"), cx = cv.getContext("2d");
-let W, H, pts = [], mouse = {x:-999,y:-999};
-function resize(){W = cv.width = innerWidth; H = cv.height = innerHeight;
-  pts = Array.from({length: Math.min(90, Math.floor(W*H/18000))}, () => ({
-    x:Math.random()*W, y:Math.random()*H, vx:(Math.random()-.5)*.5, vy:(Math.random()-.5)*.5}));}
-addEventListener("resize", resize); resize();
-addEventListener("mousemove", e => {mouse.x = e.clientX; mouse.y = e.clientY;});
-(function loop(){
-  cx.clearRect(0,0,W,H);
-  for (const p of pts){
-    p.x += p.vx; p.y += p.vy;
-    if (p.x<0||p.x>W) p.vx*=-1; if (p.y<0||p.y>H) p.vy*=-1;
-    cx.beginPath(); cx.arc(p.x,p.y,1.6,0,6.28); cx.fillStyle="rgba(190,205,255,.85)"; cx.fill();
-  }
-  for (let i=0;i<pts.length;i++){
-    for (let j=i+1;j<pts.length;j++){
-      const d = Math.hypot(pts[i].x-pts[j].x, pts[i].y-pts[j].y);
-      if (d<120){cx.strokeStyle=`rgba(124,160,255,${.25*(1-d/120)})`;cx.beginPath();
-        cx.moveTo(pts[i].x,pts[i].y);cx.lineTo(pts[j].x,pts[j].y);cx.stroke();}
-    }
-    const m = Math.hypot(pts[i].x-mouse.x, pts[i].y-mouse.y);
-    if (m<160){cx.strokeStyle=`rgba(0,212,255,${.5*(1-m/160)})`;cx.beginPath();
-      cx.moveTo(pts[i].x,pts[i].y);cx.lineTo(mouse.x,mouse.y);cx.stroke();}
-  }
-  requestAnimationFrame(loop);
-})();
-
-/* ===== Typewriter ===== */
-const lines = ["Ask anything. Get answers fast.","Solve hard problems step by step.","Write, debug and ship code.","Your own AI, built by you."];
-const tEl = document.getElementById("type");
-let li = 0, ci = 0, del = false;
-(function tick(){
-  const s = lines[li];
-  tEl.textContent = s.slice(0, ci);
-  if (!del && ci < s.length){ci++; return setTimeout(tick, 55);}
-  if (!del){del = true; return setTimeout(tick, 1600);}
-  if (ci > 0){ci--; return setTimeout(tick, 25);}
-  del = false; li = (li+1) % lines.length; setTimeout(tick, 300);
-})();
-
-/* ===== 3D tilt on card ===== */
 const card = document.getElementById("card");
-document.addEventListener("mousemove", e => {
-  const x = (e.clientX/innerWidth - .5), y = (e.clientY/innerHeight - .5);
-  card.style.transform = `rotateY(${x*7}deg) rotateX(${-y*7}deg)`;
-});
+document.getElementById("type").textContent = "Ask anything. Get answers fast.";
 
 /* ===== Form logic ===== */
 const $ = id => document.getElementById(id);
