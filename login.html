@@ -1,268 +1,259 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
+<meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Deep OQ - Log in</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+<title>Deep OQ – Sign in</title>
 <style>
-  :root {
-    --ink: #0b0d14;
-    --panel: #12151f;
-    --line: #262b3d;
-    --text: #e8eaf2;
-    --muted: #8a90a6;
-    --accent: #6c6cff;
-    --ok: #3ee0c3;
-    --bad: #ff6b81;
+  :root{
+    --bg:#05060f; --card:rgba(255,255,255,.06); --border:rgba(255,255,255,.14);
+    --text:#eef0ff; --muted:#9aa0c3; --a:#7c5cff; --b:#00d4ff; --c:#ff4fd8;
   }
-  * { box-sizing: border-box; }
-  html, body { height: 100%; margin: 0; }
-  body {
-    background: var(--ink);
-    color: var(--text);
-    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    display: grid;
-    place-items: center;
-    padding: 24px;
-    overflow: hidden;
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    background:var(--bg); color:var(--text); overflow:hidden;
+    display:flex; align-items:center; justify-content:center;
   }
-  #net { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 0; }
+  /* animated gradient orbs */
+  .orb{position:fixed;border-radius:50%;filter:blur(90px);opacity:.55;z-index:0;animation:float 16s ease-in-out infinite}
+  .o1{width:480px;height:480px;background:var(--a);top:-120px;left:-120px}
+  .o2{width:420px;height:420px;background:var(--b);bottom:-140px;right:-100px;animation-delay:-5s}
+  .o3{width:320px;height:320px;background:var(--c);top:45%;left:55%;animation-delay:-9s;opacity:.35}
+  @keyframes float{0%,100%{transform:translate(0,0) scale(1)}33%{transform:translate(60px,40px) scale(1.15)}66%{transform:translate(-40px,70px) scale(.92)}}
+  #net{position:fixed;inset:0;z-index:1}
 
-  .card {
-    position: relative; z-index: 1;
-    width: min(400px, 100%);
-    background: color-mix(in srgb, var(--panel) 92%, transparent);
-    border: 1px solid var(--line);
-    border-radius: 18px;
-    padding: 32px 28px 28px;
-    box-shadow: 0 30px 80px rgba(0,0,0,.45);
-    animation: rise .9s cubic-bezier(.2,.8,.2,1) both;
+  .wrap{position:relative;z-index:2;width:min(420px,92vw);perspective:1000px}
+  .card{
+    background:var(--card); border:1px solid var(--border);
+    backdrop-filter:blur(22px); -webkit-backdrop-filter:blur(22px);
+    border-radius:26px; padding:38px 34px 30px;
+    box-shadow:0 30px 80px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,255,255,.12);
+    animation:rise .9s cubic-bezier(.2,.8,.2,1) both;
+    transition:transform .15s ease-out;
   }
-  @keyframes rise { from { opacity: 0; transform: translateY(18px) scale(.98); } to { opacity: 1; transform: none; } }
-  .card.shake { animation: shake .45s; }
-  @keyframes shake { 20%,60% { transform: translateX(-8px); } 40%,80% { transform: translateX(8px); } }
-
-  .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
-  .logo { width: 38px; height: 38px; flex: none; }
-  .logo circle.ring { transform-origin: 50% 50%; animation: spin 14s linear infinite; }
-  .logo circle.core { animation: pulse 2.4s ease-in-out infinite; transform-origin: 50% 50%; }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  @keyframes pulse { 50% { transform: scale(1.25); opacity: .7; } }
-  h1 { font: 700 26px/1.1 "Space Grotesk", system-ui, sans-serif; margin: 0; letter-spacing: -.01em; }
-  .sub { color: var(--muted); font-size: 14px; margin: 0 0 22px; min-height: 20px; }
-
-  .tabs { position: relative; display: grid; grid-template-columns: 1fr 1fr; background: var(--ink); border: 1px solid var(--line); border-radius: 12px; padding: 4px; margin-bottom: 20px; }
-  .tabs button { position: relative; z-index: 1; background: none; border: 0; color: var(--muted); font: 500 14px "Space Grotesk", system-ui, sans-serif; padding: 9px 0; cursor: pointer; transition: color .25s; border-radius: 9px; }
-  .tabs button[aria-selected="true"] { color: var(--text); }
-  .pill { position: absolute; top: 4px; bottom: 4px; left: 4px; width: calc(50% - 4px); background: var(--line); border-radius: 9px; transition: transform .35s cubic-bezier(.3,1.3,.5,1); }
-  .tabs[data-mode="signup"] .pill { transform: translateX(100%); }
-
-  .field { position: relative; margin-bottom: 14px; }
-  .field input { width: 100%; background: var(--ink); border: 1px solid var(--line); border-radius: 12px; color: var(--text); font-size: 15px; padding: 22px 44px 8px 14px; outline: none; transition: border-color .2s, box-shadow .2s; }
-  .field input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(108,108,255,.22); }
-  .field label { position: absolute; left: 14px; top: 16px; color: var(--muted); font-size: 15px; pointer-events: none; transform-origin: left top; transition: transform .2s, color .2s; }
-  .field input:focus + label, .field input:not(:placeholder-shown) + label { transform: translateY(-9px) scale(.76); }
-  .field input:focus + label { color: var(--accent); }
-  .eye { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 36px; height: 36px; background: none; border: 0; color: var(--muted); cursor: pointer; border-radius: 8px; display: grid; place-items: center; }
-  .eye:hover { color: var(--text); }
-
-  .confirm { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .35s ease, opacity .35s; opacity: 0; }
-  .confirm > div { overflow: hidden; }
-  .tabs[data-mode="signup"] ~ form .confirm { grid-template-rows: 1fr; opacity: 1; }
-
-  .msg { min-height: 20px; font-size: 13.5px; margin: 2px 0 12px; color: var(--muted); }
-  .msg.err { color: var(--bad); }
-  .msg.ok { color: var(--ok); }
-
-  .go { width: 100%; position: relative; overflow: hidden; background: var(--accent); color: #fff; border: 0; border-radius: 12px; font: 700 15px "Space Grotesk", system-ui, sans-serif; padding: 13px; cursor: pointer; transition: transform .15s, filter .2s; }
-  .go:hover { filter: brightness(1.1); }
-  .go:active { transform: scale(.98); }
-  .go:disabled { cursor: progress; filter: saturate(.7); }
-  .go .spin { display: none; width: 18px; height: 18px; border: 2px solid rgba(255,255,255,.35); border-top-color: #fff; border-radius: 50%; margin: 0 auto; animation: spin .7s linear infinite; }
-  .go.loading .label { display: none; }
-  .go.loading .spin { display: block; }
-  .go.done { background: var(--ok); color: #06251f; }
-
-  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  @media (prefers-reduced-motion: reduce) {
-    *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+  @keyframes rise{from{opacity:0;transform:translateY(40px) scale(.96)}to{opacity:1;transform:none}}
+  .card::before{ /* animated glowing border */
+    content:"";position:absolute;inset:-1px;border-radius:27px;padding:1px;z-index:-1;
+    background:conic-gradient(from var(--ang,0deg),transparent 0 70%,var(--b),var(--a),var(--c),transparent);
+    -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
+    -webkit-mask-composite:xor;mask-composite:exclude;
+    animation:spin 5s linear infinite;
   }
+  @property --ang{syntax:"<angle>";inherits:false;initial-value:0deg}
+  @keyframes spin{to{--ang:360deg}}
+
+  .logo{
+    width:64px;height:64px;margin:0 auto 16px;border-radius:20px;
+    display:grid;place-items:center;font-weight:800;font-size:26px;letter-spacing:-1px;
+    background:linear-gradient(135deg,var(--a),var(--b));
+    box-shadow:0 0 0 0 rgba(124,92,255,.6);animation:pulse 2.6s infinite;
+  }
+  @keyframes pulse{70%{box-shadow:0 0 0 22px rgba(124,92,255,0)}100%{box-shadow:0 0 0 0 rgba(124,92,255,0)}}
+  h1{text-align:center;font-size:26px;letter-spacing:-.5px}
+  h1 span{background:linear-gradient(90deg,var(--b),var(--a),var(--c));-webkit-background-clip:text;background-clip:text;color:transparent;background-size:200%;animation:shine 4s linear infinite}
+  @keyframes shine{to{background-position:200% 0}}
+  .sub{text-align:center;color:var(--muted);font-size:14px;margin:6px 0 26px;min-height:20px}
+
+  .field{position:relative;margin-bottom:16px;animation:rise .7s both}
+  .field:nth-of-type(1){animation-delay:.15s}.field:nth-of-type(2){animation-delay:.25s}.field:nth-of-type(3){animation-delay:.35s}
+  .field input{
+    width:100%;padding:20px 46px 8px 16px;border-radius:14px;font-size:15px;color:var(--text);
+    background:rgba(255,255,255,.05);border:1px solid var(--border);outline:none;transition:.25s;
+  }
+  .field label{
+    position:absolute;left:16px;top:16px;color:var(--muted);font-size:15px;pointer-events:none;transition:.2s;
+  }
+  .field input:focus,.field input:not(:placeholder-shown){padding-top:20px}
+  .field input:focus+label,.field input:not(:placeholder-shown)+label{top:7px;font-size:11px;color:var(--b)}
+  .field input:focus{border-color:var(--a);box-shadow:0 0 0 4px rgba(124,92,255,.22);background:rgba(255,255,255,.08)}
+  .eye{position:absolute;right:12px;top:50%;transform:translateY(-50%);background:none;border:0;color:var(--muted);cursor:pointer;font-size:18px;padding:4px}
+  .eye:hover{color:var(--text)}
+  .name-field{display:none}
+  .signup .name-field{display:block}
+
+  .row{display:flex;justify-content:space-between;align-items:center;font-size:13px;color:var(--muted);margin:2px 0 20px}
+  .row a{color:var(--b);text-decoration:none}.row a:hover{text-decoration:underline}
+  .row label{display:flex;gap:7px;align-items:center;cursor:pointer}
+  .signup .row{display:none}
+
+  .btn{
+    width:100%;padding:15px;border:0;border-radius:14px;font-size:16px;font-weight:600;color:#fff;cursor:pointer;
+    background:linear-gradient(90deg,var(--a),var(--b),var(--c));background-size:200% 100%;
+    transition:transform .2s,box-shadow .2s,background-position .6s;position:relative;overflow:hidden;
+    box-shadow:0 10px 30px rgba(124,92,255,.4);
+  }
+  .btn:hover{transform:translateY(-2px);background-position:100% 0;box-shadow:0 16px 40px rgba(0,212,255,.35)}
+  .btn:active{transform:scale(.98)}
+  .btn .spin{display:none;width:20px;height:20px;border:3px solid rgba(255,255,255,.35);border-top-color:#fff;border-radius:50%;animation:r .7s linear infinite;margin:0 auto}
+  @keyframes r{to{transform:rotate(360deg)}}
+  .btn.loading .t{display:none}.btn.loading .spin{display:block}
+
+  .divider{display:flex;align-items:center;gap:12px;color:var(--muted);font-size:12px;margin:22px 0 16px}
+  .divider::before,.divider::after{content:"";flex:1;height:1px;background:var(--border)}
+  .social{display:flex;gap:12px}
+  .social button{
+    flex:1;padding:12px;border-radius:12px;border:1px solid var(--border);background:rgba(255,255,255,.05);
+    color:var(--text);font-size:14px;cursor:pointer;transition:.2s;
+  }
+  .social button:hover{background:rgba(255,255,255,.12);transform:translateY(-2px)}
+  .switch{text-align:center;font-size:14px;color:var(--muted);margin-top:22px}
+  .switch a{color:var(--b);cursor:pointer;font-weight:600}
+  .msg{font-size:13px;text-align:center;margin-top:12px;min-height:18px;color:#ff7a90}
+  .shake{animation:shake .4s}
+  @keyframes shake{20%,60%{transform:translateX(-8px)}40%,80%{transform:translateX(8px)}}
+
+  /* success overlay */
+  .ok{position:absolute;inset:0;border-radius:26px;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    background:rgba(5,6,15,.92);opacity:0;pointer-events:none;transition:.5s;z-index:5}
+  .ok.show{opacity:1;pointer-events:auto}
+  .ok svg{width:90px;height:90px}
+  .ok circle{stroke:var(--b);stroke-width:4;fill:none;stroke-dasharray:260;stroke-dashoffset:260}
+  .ok path{stroke:#fff;stroke-width:5;fill:none;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:60;stroke-dashoffset:60}
+  .ok.show circle{animation:draw .7s .1s forwards}.ok.show path{animation:draw .5s .7s forwards}
+  @keyframes draw{to{stroke-dashoffset:0}}
+  .ok h2{margin-top:16px}.ok p{color:var(--muted);margin-top:6px;font-size:14px}
 </style>
 </head>
 <body>
-<canvas id="net" aria-hidden="true"></canvas>
+<div class="orb o1"></div><div class="orb o2"></div><div class="orb o3"></div>
+<canvas id="net"></canvas>
 
-<main class="card" id="card">
-  <div class="brand">
-    <svg class="logo" viewBox="0 0 40 40" aria-hidden="true">
-      <circle class="ring" cx="20" cy="20" r="16" fill="none" stroke="#6c6cff" stroke-width="2" stroke-dasharray="6 5"/>
-      <circle cx="20" cy="20" r="9" fill="none" stroke="#3ee0c3" stroke-width="1.5" opacity=".7"/>
-      <circle class="core" cx="20" cy="20" r="4" fill="#6c6cff"/>
-    </svg>
-    <h1>Deep OQ</h1>
-  </div>
-  <p class="sub" id="sub">Log in to pick up your chats.</p>
+<div class="wrap">
+  <div class="card" id="card">
+    <h1>Welcome to <span>Deep OQ</span></h1>
+    <p class="sub" id="sub">Sign in to continue to your AI</p>
 
-  <div class="tabs" id="tabs" data-mode="login" role="tablist">
-    <span class="pill"></span>
-    <button type="button" role="tab" aria-selected="true" data-mode="login">Log in</button>
-    <button type="button" role="tab" aria-selected="false" data-mode="signup">Sign up</button>
-  </div>
-
-  <form id="form" novalidate>
-    <div class="field">
-      <input id="u" name="username" type="text" placeholder=" " autocomplete="username" autocapitalize="none" required>
-      <label for="u">Username</label>
-    </div>
-    <div class="field">
-      <input id="p" name="password" type="password" placeholder=" " autocomplete="current-password" required>
-      <label for="p">Password</label>
-      <button class="eye" type="button" id="eye" aria-label="Show password">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>
-      </button>
-    </div>
-    <div class="confirm"><div>
-      <div class="field">
-        <input id="c" type="password" placeholder=" " autocomplete="new-password" tabindex="-1">
-        <label for="c">Confirm password</label>
+    <form id="form" novalidate>
+      <div class="field name-field">
+        <input id="name" type="text" placeholder=" " autocomplete="name"><label for="name">Full name</label>
       </div>
-    </div></div>
-    <div class="msg" id="msg" role="status" aria-live="polite"></div>
-    <button class="go" id="go" type="submit"><span class="label" id="label">Log in</span><span class="spin"></span></button>
-  </form>
-</main>
+      <div class="field">
+        <input id="email" type="email" placeholder=" " autocomplete="email"><label for="email">Email address</label>
+      </div>
+      <div class="field">
+        <input id="pass" type="password" placeholder=" " autocomplete="current-password"><label for="pass">Password</label>
+        <button type="button" class="eye" id="eye" aria-label="Show password">👁</button>
+      </div>
+      <div class="row">
+        <label><input type="checkbox" id="remember"> Remember me</label>
+        <a href="#">Forgot password?</a>
+      </div>
+      <button class="btn" id="go" type="submit"><span class="t" id="goText">Sign in</span><div class="spin"></div></button>
+      <div class="msg" id="msg"></div>
+    </form>
+
+    <div class="divider">or continue with</div>
+    <div class="social">
+      <button type="button" data-p="Google">Google</button>
+    </div>
+    <p class="switch" id="switch">New here? <a id="toggle">Create an account</a></p>
+
+    <div class="ok" id="ok">
+      <svg viewBox="0 0 100 100"><circle cx="50" cy="50" r="41"/><path d="M30 52 L45 66 L71 36"/></svg>
+      <h2 id="okTitle">Welcome back!</h2><p>Launching Deep OQ…</p>
+    </div>
+  </div>
+</div>
 
 <script>
-/* ---- Settings: change these to match your server ---- */
-const LOGIN_URL  = "/api/login";     // POST {username, password} -> {token}
-const SIGNUP_URL = "/api/register";  // POST {username, password} -> {token}
-const REDIRECT_TO = "/";             // the chat page
-const TOKEN_KEY  = "t";              // sessionStorage key the chat page reads
+/* ===== Config: change this to your AI's main page ===== */
+const AFTER_LOGIN_URL = "/";       // where to go after login
+const API_URL = null;              // e.g. "/api/login" – set to use your real backend
 
-/* ---- Mode switch (Log in / Sign up) ---- */
-const tabs = document.getElementById("tabs");
-const sub = document.getElementById("sub");
-const label = document.getElementById("label");
-const pw = document.getElementById("p");
-const confirmInput = document.getElementById("c");
-const msg = document.getElementById("msg");
-let mode = "login";
+/* ===== Particle network background ===== */
+const cv = document.getElementById("net"), cx = cv.getContext("2d");
+let W, H, pts = [], mouse = {x:-999,y:-999};
+function resize(){W = cv.width = innerWidth; H = cv.height = innerHeight;
+  pts = Array.from({length: Math.min(90, Math.floor(W*H/18000))}, () => ({
+    x:Math.random()*W, y:Math.random()*H, vx:(Math.random()-.5)*.5, vy:(Math.random()-.5)*.5}));}
+addEventListener("resize", resize); resize();
+addEventListener("mousemove", e => {mouse.x = e.clientX; mouse.y = e.clientY;});
+(function loop(){
+  cx.clearRect(0,0,W,H);
+  for (const p of pts){
+    p.x += p.vx; p.y += p.vy;
+    if (p.x<0||p.x>W) p.vx*=-1; if (p.y<0||p.y>H) p.vy*=-1;
+    cx.beginPath(); cx.arc(p.x,p.y,1.6,0,6.28); cx.fillStyle="rgba(180,200,255,.8)"; cx.fill();
+  }
+  for (let i=0;i<pts.length;i++){
+    for (let j=i+1;j<pts.length;j++){
+      const d = Math.hypot(pts[i].x-pts[j].x, pts[i].y-pts[j].y);
+      if (d<120){cx.strokeStyle=`rgba(124,160,255,${.25*(1-d/120)})`;cx.beginPath();
+        cx.moveTo(pts[i].x,pts[i].y);cx.lineTo(pts[j].x,pts[j].y);cx.stroke();}
+    }
+    const m = Math.hypot(pts[i].x-mouse.x, pts[i].y-mouse.y);
+    if (m<160){cx.strokeStyle=`rgba(0,212,255,${.5*(1-m/160)})`;cx.beginPath();
+      cx.moveTo(pts[i].x,pts[i].y);cx.lineTo(mouse.x,mouse.y);cx.stroke();}
+  }
+  requestAnimationFrame(loop);
+})();
 
-function setMode(next) {
-  mode = next;
-  tabs.dataset.mode = next;
-  tabs.querySelectorAll("button").forEach(b => b.setAttribute("aria-selected", b.dataset.mode === next));
-  const signup = next === "signup";
-  sub.textContent = signup ? "Create an account to save your chats and memory." : "Log in to pick up your chats.";
-  label.textContent = signup ? "Create account" : "Log in";
-  pw.autocomplete = signup ? "new-password" : "current-password";
-  confirmInput.tabIndex = signup ? 0 : -1;
-  say("");
-}
-tabs.addEventListener("click", e => { const b = e.target.closest("button"); if (b) setMode(b.dataset.mode); });
-
-document.getElementById("eye").addEventListener("click", e => {
-  const show = pw.type === "password";
-  pw.type = show ? "text" : "password";
-  confirmInput.type = pw.type;
-  e.currentTarget.setAttribute("aria-label", show ? "Hide password" : "Show password");
+/* ===== 3D tilt on card ===== */
+const card = document.getElementById("card");
+document.addEventListener("mousemove", e => {
+  const x = (e.clientX/innerWidth - .5), y = (e.clientY/innerHeight - .5);
+  card.style.transform = `rotateY(${x*8}deg) rotateX(${-y*8}deg)`;
 });
 
-function say(text, kind) { msg.textContent = text; msg.className = "msg" + (kind ? " " + kind : ""); }
-function fail(text) {
-  say(text, "err");
-  const card = document.getElementById("card");
-  card.classList.remove("shake"); void card.offsetWidth; card.classList.add("shake");
-}
+/* ===== Form logic ===== */
+const $ = id => document.getElementById(id);
+let signup = false;
+$("switch").addEventListener("click", e => {
+  if (e.target.tagName !== "A") return;
+  signup = !signup;
+  card.classList.toggle("signup", signup);
+  $("goText").textContent = signup ? "Create account" : "Sign in";
+  $("sub").textContent = signup ? "Create your Deep OQ account" : "Sign in to continue to your AI";
+  $("switch").innerHTML = signup
+    ? 'Already have an account? <a id="toggle">Sign in</a>'
+    : 'New here? <a id="toggle">Create an account</a>';
+  $("msg").textContent = "";
+});
+$("eye").onclick = () => {
+  const p = $("pass"); const show = p.type === "password";
+  p.type = show ? "text" : "password"; $("eye").textContent = show ? "🙈" : "👁";
+};
+function fail(t){ $("msg").textContent = t; card.classList.remove("shake"); void card.offsetWidth; card.classList.add("shake"); }
 
-/* ---- Submit ---- */
-const form = document.getElementById("form");
-const go = document.getElementById("go");
-form.addEventListener("submit", async e => {
+document.querySelectorAll(".social button").forEach(b => b.onclick = () =>
+  fail(b.dataset.p + " login needs to be connected to your backend."));
+
+$("form").addEventListener("submit", async e => {
   e.preventDefault();
-  const username = document.getElementById("u").value.trim();
-  const password = pw.value;
-  if (!username || !password) return fail("Enter your username and password.");
-  if (mode === "signup") {
-    if (password.length < 8) return fail("Use a password with at least 8 characters.");
-    if (password !== confirmInput.value) return fail("The passwords don't match.");
-  }
-  go.disabled = true; go.classList.add("loading"); say("");
-  try {
-    const res = await fetch(mode === "signup" ? SIGNUP_URL : LOGIN_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "same-origin",
-      body: JSON.stringify({ username, password })
-    });
-    let data = {};
-    try { data = await res.json(); } catch (_) {}
-    if (!res.ok) throw new Error(data.error || data.message || (res.status === 429 ? "Too many attempts. Wait a few minutes." : "Something went wrong. Try again."));
-    if (data.token) { try { localStorage.setItem(TOKEN_KEY, data.token); } catch (_) {} }
-    go.classList.remove("loading"); go.classList.add("done");
-    label.textContent = mode === "signup" ? "Account created" : "Logged in";
-    say("Opening your chats...", "ok");
-    surge();
-    setTimeout(() => { location.href = REDIRECT_TO; }, 900);
-  } catch (err) {
-    go.classList.remove("loading"); go.disabled = false;
-    fail(err.message || "Can't reach the server. Check your connection.");
-  }
-});
+  const name = $("name").value.trim(), email = $("email").value.trim(), pass = $("pass").value;
+  if (signup && name.length < 2) return fail("Please enter your name.");
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return fail("Enter a valid email address.");
+  if (pass.length < 6) return fail("Password must be at least 6 characters.");
+  $("msg").textContent = ""; $("go").classList.add("loading");
 
-/* ---- Background: drifting network that follows the cursor ---- */
-const cv = document.getElementById("net");
-const ctx = cv.getContext("2d");
-const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
-let W, H, dpr, nodes = [], mouse = { x: -999, y: -999 }, boost = 1;
-
-function resize() {
-  dpr = Math.min(devicePixelRatio || 1, 2);
-  W = innerWidth; H = innerHeight;
-  cv.width = W * dpr; cv.height = H * dpr;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  const n = Math.min(90, Math.round(W * H / 14000));
-  nodes = Array.from({ length: n }, () => ({
-    x: Math.random() * W, y: Math.random() * H,
-    vx: (Math.random() - .5) * .35, vy: (Math.random() - .5) * .35,
-    r: Math.random() * 1.6 + .8
-  }));
-}
-function surge() { boost = 6; }
-addEventListener("resize", resize);
-addEventListener("pointermove", e => { mouse.x = e.clientX; mouse.y = e.clientY; });
-addEventListener("pointerleave", () => { mouse.x = mouse.y = -999; });
-
-function frame() {
-  ctx.clearRect(0, 0, W, H);
-  boost += (1 - boost) * .03;
-  for (const a of nodes) {
-    a.x += a.vx * boost; a.y += a.vy * boost;
-    if (a.x < 0 || a.x > W) a.vx *= -1;
-    if (a.y < 0 || a.y > H) a.vy *= -1;
-    const dm = Math.hypot(a.x - mouse.x, a.y - mouse.y);
-    ctx.fillStyle = dm < 160 ? "#3ee0c3" : "rgba(138,144,166,.7)";
-    ctx.beginPath(); ctx.arc(a.x, a.y, a.r, 0, 6.283); ctx.fill();
-    if (dm < 160) {
-      ctx.strokeStyle = `rgba(62,224,195,${(1 - dm / 160) * .7})`;
-      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(mouse.x, mouse.y); ctx.stroke();
-    }
-  }
-  for (let i = 0; i < nodes.length; i++) {
-    for (let j = i + 1; j < nodes.length; j++) {
-      const a = nodes[i], b = nodes[j], d = Math.hypot(a.x - b.x, a.y - b.y);
-      if (d < 130) {
-        ctx.strokeStyle = `rgba(108,108,255,${(1 - d / 130) * .35})`;
-        ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+  try{
+    let user;
+    if (API_URL){
+      const r = await fetch(API_URL, {method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({mode: signup?"signup":"login", name, email, password: pass})});
+      if (!r.ok) throw new Error((await r.json().catch(()=>({}))).error || "Login failed");
+      user = await r.json();
+    } else { // demo mode: stores users in this browser only
+      await new Promise(r => setTimeout(r, 1100));
+      const users = JSON.parse(localStorage.getItem("deepoq_users") || "{}");
+      if (signup){
+        if (users[email]) throw new Error("Account already exists. Please sign in.");
+        users[email] = {name, pass: btoa(pass)};
+        localStorage.setItem("deepoq_users", JSON.stringify(users));
+      } else if (!users[email] || users[email].pass !== btoa(pass)){
+        throw new Error("Wrong email or password.");
       }
+      user = {name: users[email].name, email};
     }
-  }
-  if (!still) requestAnimationFrame(frame);
-}
-resize(); frame();
+    (($("remember").checked ? localStorage : sessionStorage)).setItem("deepoq_user", JSON.stringify(user));
+    $("okTitle").textContent = (signup ? "Account created, " : "Welcome back, ") + (user.name || "friend") + "!";
+    $("ok").classList.add("show");
+    setTimeout(() => location.href = AFTER_LOGIN_URL, 2200);
+  } catch(err){ fail(err.message); }
+  finally{ $("go").classList.remove("loading"); }
+});
 </script>
 </body>
 </html>
