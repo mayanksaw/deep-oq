@@ -787,13 +787,13 @@ def deep_oq(session, question):
 # LOGIN: accounts (username + password), cookie session, every page needs a login
 # ==========================================================================
 import hashlib
+import html as _html
 
 app.secret_key = os.environ.get("SECRET_KEY") or hashlib.sha256(
     ("deep-oq-login:" + os.environ.get("GROQ_API_KEY", "")).encode()).hexdigest()
 app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax",
                   SESSION_COOKIE_SECURE=bool(os.environ.get("RENDER")),
                   PERMANENT_SESSION_LIFETIME=60 * 60 * 24 * 30)
-USERNAME_RE = re.compile(r"^[a-z0-9_.]{3,24}$")
 _login_fails = {}
 
 
@@ -852,8 +852,8 @@ def api_register():
     d = request.get_json(silent=True) or {}
     name = str(d.get("username", "")).strip().lower()
     pw = str(d.get("password", ""))
-    if not USERNAME_RE.match(name):
-        return jsonify(error="Username: 3-24 letters, numbers, _ or ."), 400
+    if not 1 <= len(name) <= 40 or any(ord(ch) < 32 for ch in name):
+        return jsonify(error="Username must be 1-40 characters."), 400
     if len(pw) < 8:
         return jsonify(error="Password must be at least 8 characters."), 400
     if len(pw) > 200:
@@ -903,7 +903,7 @@ LOGOUT_PILL = (
 
 @app.get("/")
 def index():
-    pill = LOGOUT_PILL % login_session.get("user", "")
+    pill = LOGOUT_PILL % _html.escape(login_session.get("user", ""))
     html = PAGE.replace("</body>", pill + "</body>", 1)
     return html, 200, {"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache"}
 
@@ -3120,7 +3120,7 @@ LOGIN_PAGE = r"""<!DOCTYPE html>
       <form id="form" novalidate>
         <div class="field">
           <svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>
-          <input id="username" type="text" placeholder=" " autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="24"><label for="username">Username</label>
+          <input id="username" type="text" placeholder=" " autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="40"><label for="username">Username</label>
         </div>
         <div class="field">
           <svg class="ic" viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="11" rx="3"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
@@ -3196,8 +3196,8 @@ function fail(t){ $("msg").textContent = t; card.classList.remove("shake"); void
 
 $("form").addEventListener("submit", async e => {
   e.preventDefault();
-  const username = $("username").value.trim().toLowerCase(), pass = $("pass").value;
-  if (!/^[a-z0-9_.]{3,24}$/.test(username)) return fail("Username: 3-24 letters, numbers, _ or .");
+  const username = $("username").value.trim(), pass = $("pass").value;
+  if (!username) return fail("Please enter a username.");
   if (pass.length < 8) return fail("Password must be at least 8 characters.");
   if (signup && pass !== $("confirm").value) return fail("Passwords do not match.");
   $("msg").textContent = ""; $("go").classList.add("loading");
