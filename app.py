@@ -51,6 +51,8 @@ adv.set_models({"groq": groq_llm})
 
 app = Flask(__name__)
 
+from admin import admin
+app.register_blueprint(admin)
 PAGE = """<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Deep OQ</title>
 <style>
