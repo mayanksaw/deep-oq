@@ -4,3 +4,4 @@ gunicorn
 pypdf
 ddgs
 imageio-ffmpeg
+psycopg[binary,pool]
