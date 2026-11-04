@@ -39,7 +39,7 @@ def admin_required(f):
     def wrapper(*args, **kwargs):
         email = (session.get(SESSION_EMAIL_KEY) or "").lower()
         if not email or email not in ADMIN_EMAILS:
-            abort(404)  # 404 so the page's existence isn't revealed
+            abort(403)  # 404 so the page's existence isn't revealed
         return f(*args, **kwargs)
 
     return wrapper
