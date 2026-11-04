@@ -6,3 +6,4 @@ pypdf
 ddgs
 imageio-ffmpeg
 psycopg[binary,pool]
+psycopg2-binary
