@@ -1,12 +1,15 @@
 """
-db.py - Deep OQ database layer (PostgreSQL, built for Render)
+db.py - Deep OQ database (PostgreSQL)
 
-Env vars:
-  DATABASE_URL  (required) the connection string from your Render Postgres page.
-                Use the "Internal Database URL" when the app runs on Render,
-                and the "External Database URL" when running on your own computer.
-  DB_SSLMODE    (optional) e.g. "require". Needed for the External URL.
-  DB_POOL_MAX   (optional) max connections, default 10.
+Reads the connection string from the DATABASE_URL environment variable
+(Render sets this for you when you link a PostgreSQL database).
+
+Tables:
+  users          - accounts (password stored as a salted hash, never plain text)
+  sessions       - login tokens (only a hash of each token is stored)
+  conversations  - one per chat
+  messages       - every user / assistant message (+ which tool was used)
+  facts          - long-term memory per user (key / value)
 """
 
 import hashlib
@@ -14,300 +17,376 @@ import hmac
 import os
 import re
 import secrets
-import threading
 import time
 from contextlib import contextmanager
 
-import psycopg2
-from psycopg2 import errors, pool
-from psycopg2.extras import RealDictCursor
+import subprocess
+import sys
 
-SESSION_TTL = 30 * 24 * 3600          # sessions last 30 days
-USERNAME_RE = re.compile(r"^[a-z0-9_.-]{3,30}$")
-SCRYPT_N, SCRYPT_R, SCRYPT_P = 2 ** 14, 8, 1
+try:
+    import psycopg  # noqa: F401
+    import psycopg_pool  # noqa: F401
+except ImportError:
+    # installs the PostgreSQL driver automatically on first start
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "--quiet",
+                           "psycopg[binary,pool]"])
 
-_pool = None
-_pool_lock = threading.Lock()
+from psycopg.errors import UniqueViolation
+from psycopg.rows import dict_row
+from psycopg_pool import ConnectionPool
+
+DATABASE_URL = os.environ.get("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL is not set. Link your Render PostgreSQL database.")
+
+# Some providers hand out "postgres://" URLs; psycopg wants "postgresql://".
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = "postgresql://" + DATABASE_URL[len("postgres://"):]
+
+SESSION_TTL = 60 * 60 * 24 * 30  # 30 days
+PBKDF2_ITERATIONS = 200_000
+USERNAME_RE = re.compile(r"^[a-z0-9_.-]{3,32}$")
+
+_pool = ConnectionPool(
+    DATABASE_URL,
+    min_size=1,
+    max_size=5,
+    kwargs={"row_factory": dict_row},
+    open=False,
+)
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS users (
+    id BIGSERIAL PRIMARY KEY,
+    username TEXT UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,
+    salt TEXT NOT NULL,
+    created_at DOUBLE PRECISION NOT NULL
+);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS last_active DOUBLE PRECISION;
+
+CREATE TABLE IF NOT EXISTS sessions (
+    token TEXT PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at DOUBLE PRECISION NOT NULL,
+    expires_at DOUBLE PRECISION NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS conversations (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    title TEXT,
+    created_at DOUBLE PRECISION NOT NULL,
+    updated_at DOUBLE PRECISION NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS messages (
+    id BIGSERIAL PRIMARY KEY,
+    conversation_id BIGINT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    created_at DOUBLE PRECISION NOT NULL
+);
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS tool TEXT;
+
+-- An earlier version of this file made facts(fact TEXT). It was never used,
+-- so replace it with the key/value layout the server expects.
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.columns
+               WHERE table_schema = current_schema()
+                 AND table_name = 'facts' AND column_name = 'fact') THEN
+        DROP TABLE facts;
+    END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS facts (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,
+    created_at DOUBLE PRECISION NOT NULL,
+    updated_at DOUBLE PRECISION NOT NULL,
+    UNIQUE (user_id, key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_conversations_user ON conversations(user_id);
+CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at);
+"""
+
+_initialized = False
 
 
-# ---------------- connection helpers ----------------
-
-def _get_pool():
-    global _pool
-    with _pool_lock:
-        if _pool is None:
-            url = os.environ.get("DATABASE_URL")
-            if not url:
-                raise RuntimeError("DATABASE_URL is not set. Copy it from your Render Postgres page.")
-            kwargs = {}
-            if os.environ.get("DB_SSLMODE"):
-                kwargs["sslmode"] = os.environ["DB_SSLMODE"]
-            _pool = pool.ThreadedConnectionPool(1, int(os.environ.get("DB_POOL_MAX", "10")), url, **kwargs)
-        return _pool
-
+# ---------------------------------------------------------------------------
+# Connection / setup
+# ---------------------------------------------------------------------------
 
 @contextmanager
-def cur():
-    """Yield a dict cursor; commit on success, roll back on error."""
-    p = _get_pool()
-    conn = p.getconn()
-    try:
-        with conn.cursor(cursor_factory=RealDictCursor) as c:
-            yield c
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        p.putconn(conn)
+def get_conn():
+    """Yield a pooled connection. Commits on success, rolls back on error."""
+    with _pool.connection() as conn:
+        yield conn
 
 
 def init():
-    with cur() as c:
-        c.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            id          BIGSERIAL PRIMARY KEY,
-            username    TEXT UNIQUE NOT NULL,
-            pw_hash     TEXT NOT NULL
-        );
-        ALTER TABLE users ADD COLUMN IF NOT EXISTS created BIGINT NOT NULL DEFAULT 0;
-        ALTER TABLE users ADD COLUMN IF NOT EXISTS last_active BIGINT;
-
-        CREATE TABLE IF NOT EXISTS sessions (
-            token_hash TEXT PRIMARY KEY,
-            user_id    BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE
-        );
-        ALTER TABLE sessions ADD COLUMN IF NOT EXISTS created BIGINT NOT NULL DEFAULT 0;
-        ALTER TABLE sessions ADD COLUMN IF NOT EXISTS expires BIGINT NOT NULL DEFAULT 0;
-        CREATE INDEX IF NOT EXISTS sessions_user_idx ON sessions(user_id);
-        
-        CREATE TABLE IF NOT EXISTS conversations (
-            id      BIGSERIAL PRIMARY KEY,
-            user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            title   TEXT NOT NULL
-        );
-        ALTER TABLE conversations ADD COLUMN IF NOT EXISTS created BIGINT NOT NULL DEFAULT 0;
-        ALTER TABLE conversations ADD COLUMN IF NOT EXISTS updated BIGINT NOT NULL DEFAULT 0;
-        CREATE INDEX IF NOT EXISTS conv_user_idx ON conversations(user_id, updated DESC);
-        
-        CREATE TABLE IF NOT EXISTS messages (
-            id              BIGSERIAL PRIMARY KEY,
-            conversation_id BIGINT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-            role            TEXT NOT NULL,
-            content         TEXT NOT NULL,
-            tool            TEXT
-        );
-        ALTER TABLE messages ADD COLUMN IF NOT EXISTS created BIGINT NOT NULL DEFAULT 0;
-        CREATE INDEX IF NOT EXISTS msg_conv_idx ON messages(conversation_id, id);
-        CREATE INDEX IF NOT EXISTS msg_created_idx ON messages(created);
-        
-        CREATE TABLE IF NOT EXISTS facts (
-            user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            key     TEXT NOT NULL,
-            value   TEXT NOT NULL,
-            PRIMARY KEY (user_id, key)
-        );
-        ALTER TABLE facts ADD COLUMN IF NOT EXISTS updated BIGINT NOT NULL DEFAULT 0;
-        """)
+    """Open the pool and create/upgrade tables. Safe to call more than once."""
+    global _initialized
+    if _initialized:
+        return
+    _pool.open(wait=True)
+    with get_conn() as conn:
+        conn.execute(SCHEMA)
+    _initialized = True
 
 
-# ---------------- passwords and tokens ----------------
-
-def _hash_password(password, salt=None):
-    salt = salt or secrets.token_bytes(16)
-    h = hashlib.scrypt(password.encode(), salt=salt, n=SCRYPT_N, r=SCRYPT_R, p=SCRYPT_P, dklen=32)
-    return f"scrypt${SCRYPT_N}${SCRYPT_R}${SCRYPT_P}${salt.hex()}${h.hex()}"
+init_db = init  # old name, kept in case anything still uses it
 
 
-def _check_password(password, stored):
-    try:
-        _, n, r, p, salt_hex, hash_hex = stored.split("$")
-        h = hashlib.scrypt(password.encode(), salt=bytes.fromhex(salt_hex),
-                           n=int(n), r=int(r), p=int(p), dklen=len(hash_hex) // 2)
-        return hmac.compare_digest(h.hex(), hash_hex)
-    except Exception:
-        return False
+# ---------------------------------------------------------------------------
+# Passwords and tokens
+# ---------------------------------------------------------------------------
 
-
-_DUMMY_HASH = _hash_password("not-a-real-password")  # keeps timing similar for unknown users
+def _hash_password(password, salt_hex):
+    return hashlib.pbkdf2_hmac(
+        "sha256", password.encode("utf-8"), bytes.fromhex(salt_hex), PBKDF2_ITERATIONS
+    ).hex()
 
 
 def _token_hash(token):
-    return hashlib.sha256(token.encode()).hexdigest()
+    # Only the hash is stored, so a leaked database can't be used to log in.
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
-# ---------------- accounts ----------------
+# ---------------------------------------------------------------------------
+# Users and sessions
+# ---------------------------------------------------------------------------
 
 def create_user(username, password):
+    """Create an account. Raises ValueError with a user-facing message if invalid."""
     username = (username or "").strip().lower()
     password = password or ""
     if not USERNAME_RE.match(username):
-        raise ValueError("Username must be 3-30 characters: letters, numbers, . _ -")
+        raise ValueError("Username must be 3-32 characters: letters, numbers, _ . or -")
     if len(password) < 8:
         raise ValueError("Password must be at least 8 characters.")
-    if len(password) > 200:
-        raise ValueError("Password is too long.")
+    if len(password) > 128:
+        raise ValueError("Password is too long (128 characters max).")
+    salt = secrets.token_hex(16)
     try:
-        with cur() as c:
-            c.execute("INSERT INTO users (username, pw_hash, created) VALUES (%s, %s, %s)",
-                      (username, _hash_password(password), int(time.time())))
-    except errors.UniqueViolation:
-        raise ValueError("That username is already taken.")
+        with get_conn() as conn:
+            row = conn.execute(
+                "INSERT INTO users (username, password_hash, salt, created_at) "
+                "VALUES (%s, %s, %s, %s) RETURNING id",
+                (username, _hash_password(password, salt), salt, time.time()),
+            ).fetchone()
+    except UniqueViolation:
+        raise ValueError("That username is taken.")
+    return row["id"]
 
 
 def login(username, password):
-    """Return a new session token, or None if the credentials are wrong."""
+    """Check credentials. Returns a new session token, or None if wrong."""
     username = (username or "").strip().lower()
-    password = password or ""
-    with cur() as c:
-        c.execute("SELECT id, pw_hash FROM users WHERE username = %s", (username,))
-        row = c.fetchone()
-        if not row:
-            _check_password(password, _DUMMY_HASH)
-            return None
-        if not _check_password(password, row["pw_hash"]):
-            return None
-        now = int(time.time())
-        token = secrets.token_urlsafe(32)
-        c.execute("DELETE FROM sessions WHERE expires < %s", (now,))
-        c.execute("INSERT INTO sessions (token_hash, user_id, created, expires) VALUES (%s, %s, %s, %s)",
-                  (_token_hash(token), row["id"], now, now + SESSION_TTL))
-        c.execute("UPDATE users SET last_active = %s WHERE id = %s", (now, row["id"]))
-        return token
-
-
-def logout(token):
-    if not token:
-        return
-    with cur() as c:
-        c.execute("DELETE FROM sessions WHERE token_hash = %s", (_token_hash(token),))
+    password = (password or "")[:128]
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT id, password_hash, salt FROM users WHERE username = %s", (username,)
+        ).fetchone()
+    if not row:
+        # spend similar time so response timing doesn't reveal valid usernames
+        _hash_password(password, secrets.token_hex(16))
+        return None
+    if not hmac.compare_digest(_hash_password(password, row["salt"]), row["password_hash"]):
+        return None
+    token = secrets.token_urlsafe(32)
+    now = time.time()
+    with get_conn() as conn:
+        conn.execute("DELETE FROM sessions WHERE expires_at <= %s", (now,))
+        conn.execute(
+            "INSERT INTO sessions (token, user_id, created_at, expires_at) "
+            "VALUES (%s, %s, %s, %s)",
+            (_token_hash(token), row["id"], now, now + SESSION_TTL),
+        )
+        conn.execute("UPDATE users SET last_active = %s WHERE id = %s", (now, row["id"]))
+    return token
 
 
 def user_from_token(token):
+    """Return {id, username} for a valid, unexpired token, else None."""
     if not token:
         return None
-    now = int(time.time())
-    with cur() as c:
-        c.execute("""SELECT u.id, u.username FROM sessions s
-                     JOIN users u ON u.id = s.user_id
-                     WHERE s.token_hash = %s AND s.expires > %s""", (_token_hash(token), now))
-        row = c.fetchone()
-        if not row:
-            return None
-        c.execute("UPDATE users SET last_active = %s WHERE id = %s", (now, row["id"]))
-        return {"id": row["id"], "username": row["username"]}
+    now = time.time()
+    with get_conn() as conn:
+        user = conn.execute(
+            "SELECT u.id, u.username, u.last_active FROM sessions s "
+            "JOIN users u ON u.id = s.user_id "
+            "WHERE s.token = %s AND s.expires_at > %s",
+            (_token_hash(token), now),
+        ).fetchone()
+        if user and (user["last_active"] or 0) < now - 300:
+            conn.execute("UPDATE users SET last_active = %s WHERE id = %s", (now, user["id"]))
+    return {"id": user["id"], "username": user["username"]} if user else None
 
 
-def username_of(uid):
-    with cur() as c:
-        c.execute("SELECT username FROM users WHERE id = %s", (uid,))
-        row = c.fetchone()
-        return row["username"] if row else None
+def logout(token):
+    if token:
+        with get_conn() as conn:
+            conn.execute("DELETE FROM sessions WHERE token = %s", (_token_hash(token),))
 
 
-def delete_user(uid):
-    with cur() as c:
-        c.execute("DELETE FROM users WHERE id = %s", (uid,))  # chats, messages, sessions, facts cascade
+def username_of(user_id):
+    with get_conn() as conn:
+        row = conn.execute("SELECT username FROM users WHERE id = %s", (user_id,)).fetchone()
+    return row["username"] if row else None
 
 
-# ---------------- conversations ----------------
-
-def new_conversation(uid, title):
-    now = int(time.time())
-    with cur() as c:
-        c.execute("INSERT INTO conversations (user_id, title, created, updated) VALUES (%s, %s, %s, %s) RETURNING id",
-                  (uid, (title or "New chat")[:80], now, now))
-        return c.fetchone()["id"]
+def delete_user(user_id):
+    """Deletes the user and, through cascades, their sessions, chats and memory."""
+    with get_conn() as conn:
+        conn.execute("DELETE FROM users WHERE id = %s", (user_id,))
 
 
-def owns_conversation(uid, cid):
-    with cur() as c:
-        c.execute("SELECT 1 FROM conversations WHERE id = %s AND user_id = %s", (cid, uid))
-        return c.fetchone() is not None
+# ---------------------------------------------------------------------------
+# Conversations and messages
+# ---------------------------------------------------------------------------
+
+def new_conversation(user_id, title=None):
+    now = time.time()
+    with get_conn() as conn:
+        row = conn.execute(
+            "INSERT INTO conversations (user_id, title, created_at, updated_at) "
+            "VALUES (%s, %s, %s, %s) RETURNING id",
+            (user_id, (title or "New chat")[:80], now, now),
+        ).fetchone()
+    return row["id"]
 
 
-def list_conversations(uid):
-    with cur() as c:
-        c.execute("SELECT id, title, created, updated FROM conversations WHERE user_id = %s ORDER BY updated DESC LIMIT 200",
-                  (uid,))
-        return c.fetchall()
+def list_conversations(user_id):
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT id, title, created_at, updated_at FROM conversations "
+            "WHERE user_id = %s ORDER BY updated_at DESC LIMIT 200",
+            (user_id,),
+        ).fetchall()
 
 
-def get_messages(cid):
-    # callers must check owns_conversation() first (app.py does)
-    with cur() as c:
-        c.execute("SELECT role, content, tool, created FROM messages WHERE conversation_id = %s ORDER BY id", (cid,))
-        return c.fetchall()
+def owns_conversation(user_id, conversation_id):
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM conversations WHERE id = %s AND user_id = %s",
+            (conversation_id, user_id),
+        ).fetchone()
+    return row is not None
 
 
-def add_message(cid, role, content, tool=None):
-    now = int(time.time())
-    with cur() as c:
-        c.execute("INSERT INTO messages (conversation_id, role, content, tool, created) VALUES (%s, %s, %s, %s, %s)",
-                  (cid, role, content, tool, now))
-        c.execute("UPDATE conversations SET updated = %s WHERE id = %s", (now, cid))
+def delete_conversation(user_id, conversation_id):
+    with get_conn() as conn:
+        conn.execute(
+            "DELETE FROM conversations WHERE id = %s AND user_id = %s",
+            (conversation_id, user_id),
+        )
 
 
-def delete_conversation(uid, cid):
-    with cur() as c:
-        c.execute("DELETE FROM conversations WHERE id = %s AND user_id = %s", (cid, uid))
+def add_message(conversation_id, role, content, tool=None):
+    now = time.time()
+    with get_conn() as conn:
+        row = conn.execute(
+            "INSERT INTO messages (conversation_id, role, content, tool, created_at) "
+            "VALUES (%s, %s, %s, %s, %s) RETURNING id",
+            (conversation_id, role, content, tool, now),
+        ).fetchone()
+        conn.execute("UPDATE conversations SET updated_at = %s WHERE id = %s", (now, conversation_id))
+    return row["id"]
 
 
-# ---------------- memory ----------------
-
-def list_facts(uid):
-    with cur() as c:
-        c.execute("SELECT key, value FROM facts WHERE user_id = %s ORDER BY updated DESC LIMIT 100", (uid,))
-        return c.fetchall()
-
-
-def save_fact(uid, key, value):
-    with cur() as c:
-        c.execute("""INSERT INTO facts (user_id, key, value, updated) VALUES (%s, %s, %s, %s)
-                     ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value, updated = EXCLUDED.updated""",
-                  (uid, str(key)[:100], str(value)[:2000], int(time.time())))
+def get_messages(conversation_id):
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT id, role, content, tool, created_at FROM messages "
+            "WHERE conversation_id = %s ORDER BY id ASC",
+            (conversation_id,),
+        ).fetchall()
 
 
-# ---------------- admin (counts only, never message text) ----------------
+# ---------------------------------------------------------------------------
+# Facts (long-term memory)
+# ---------------------------------------------------------------------------
+
+def save_fact(user_id, key, value):
+    """Save or update one remembered fact for the user."""
+    now = time.time()
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO facts (user_id, key, value, created_at, updated_at) "
+            "VALUES (%s, %s, %s, %s, %s) "
+            "ON CONFLICT (user_id, key) DO UPDATE "
+            "SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at",
+            (user_id, str(key).strip()[:100], str(value).strip()[:2000], now, now),
+        )
+
+
+def list_facts(user_id):
+    """Most recently updated first."""
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT key, value, updated_at FROM facts "
+            "WHERE user_id = %s ORDER BY updated_at DESC LIMIT 200",
+            (user_id,),
+        ).fetchall()
+
+
+# ---------------------------------------------------------------------------
+# Admin (counts and usernames only, never message text)
+# ---------------------------------------------------------------------------
 
 def admin_stats():
-    now = int(time.time())
-    day = now - 86400
-    with cur() as c:
-        c.execute("""SELECT
-            (SELECT COUNT(*) FROM users)                            AS users,
-            (SELECT COUNT(*) FROM users WHERE created > %(d)s)            AS new_users_24h,
-            (SELECT COUNT(*) FROM users WHERE last_active > %(d)s)        AS active_users_24h,
-            (SELECT COUNT(*) FROM conversations)                        AS conversations,
-            (SELECT COUNT(*) FROM messages)                             AS messages,
-            (SELECT COUNT(*) FROM messages WHERE created > %(d)s)         AS messages_24h,
-            (pg_database_size(current_database()) / 1024)               AS db_size_kb""", {"d": day})
-        return {k: int(v) for k, v in c.fetchone().items()}
+    day_ago = time.time() - 86400
+    with get_conn() as conn:
+        def one(sql, *params):
+            return list(conn.execute(sql, params).fetchone().values())[0]
+        return {
+            "users": one("SELECT COUNT(*) FROM users"),
+            "new_users_24h": one("SELECT COUNT(*) FROM users WHERE created_at > %s", day_ago),
+            "active_users_24h": one("SELECT COUNT(*) FROM users WHERE last_active > %s", day_ago),
+            "conversations": one("SELECT COUNT(*) FROM conversations"),
+            "messages": one("SELECT COUNT(*) FROM messages"),
+            "messages_24h": one("SELECT COUNT(*) FROM messages WHERE created_at > %s", day_ago),
+            "db_size_kb": int(one("SELECT pg_database_size(current_database()) / 1024")),
+        }
 
 
 def admin_tool_usage():
-    with cur() as c:
-        c.execute("""SELECT tool, COUNT(*) AS uses FROM messages
-                     WHERE tool IS NOT NULL AND role = 'user'
-                     GROUP BY tool ORDER BY uses DESC LIMIT 15""")
-        return c.fetchall()
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT tool, COUNT(*) AS uses FROM messages "
+            "WHERE tool IS NOT NULL AND role = 'user' "
+            "GROUP BY tool ORDER BY uses DESC LIMIT 15"
+        ).fetchall()
 
 
-def admin_daily():
-    since = int(time.time()) - 14 * 86400
-    with cur() as c:
-        c.execute("""SELECT to_char(to_timestamp(created) AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day, COUNT(*) AS messages
-                     FROM messages WHERE created > %s GROUP BY day ORDER BY day""", (since,))
-        return c.fetchall()
+def admin_daily(days=14):
+    since = time.time() - days * 86400
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT to_char(to_timestamp(created_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day, "
+            "COUNT(*) AS messages FROM messages WHERE created_at > %s "
+            "GROUP BY day ORDER BY day",
+            (since,),
+        ).fetchall()
 
 
 def admin_users():
-    with cur() as c:
-        c.execute("""SELECT u.id, u.username, u.created, u.last_active,
-                            (SELECT COUNT(*) FROM conversations c WHERE c.user_id = u.id) AS chats,
-                            (SELECT COUNT(*) FROM messages m JOIN conversations c ON c.id = m.conversation_id
-                             WHERE c.user_id = u.id) AS messages
-                     FROM users u ORDER BY u.id DESC LIMIT 500""")
-        return [{"id": r["id"], "username": r["username"], "created": r["created"],
-                 "chats": int(r["chats"]), "messages": int(r["messages"]),
-                 "last_active": r["last_active"]} for r in c.fetchall()]
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT u.id, u.username, u.created_at AS created, u.last_active, "
+            "(SELECT COUNT(*) FROM conversations c WHERE c.user_id = u.id) AS chats, "
+            "(SELECT COUNT(*) FROM messages m JOIN conversations c ON c.id = m.conversation_id "
+            " WHERE c.user_id = u.id) AS messages "
+            "FROM users u ORDER BY u.id DESC LIMIT 500"
+        ).fetchall()
+
+
+# Create/upgrade tables when the module is imported (safe to repeat).
+init()
