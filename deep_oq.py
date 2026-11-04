@@ -20,14 +20,8 @@ RUN ON YOUR COMPUTER
 RUN ON RENDER (Web Service, language Python 3)
   Build command : pip install flask groq gunicorn pypdf ddgs imageio-ffmpeg
   Start command : gunicorn deep_oq:app --workers 1 --threads 4 --timeout 300
-  Environment   : GROQ_API_KEY (required), ACCESS_KEY (optional password), PYTHON_VERSION 3.12.3
+  Environment   : GROQ_API_KEY (required), SECRET_KEY (login cookie secret), ACCESS_KEY (optional password), PYTHON_VERSION 3.12.3
   Optional      : DEEP_OQ_MODEL, DEEP_OQ_SMART_MODEL, DEEP_OQ_DB, MAX_VIDEO_MB, MAX_VIDEO_SECONDS
-
-ACCOUNTS AND MONEY (all optional settings)
-  REQUIRE_LOGIN=0 turns the login wall off.  SECRET_KEY keeps sign-ins valid across restarts.
-  GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET  "Continue with Google" (redirect: https://YOUR-SITE/auth/google/callback)
-  RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET, RAZORPAY_WEBHOOK_SECRET  payments for the Pro plan
-  FREE_DAILY (15), PRO_DAILY (400), PRO_PRICE_INR (199), ADMIN_EMAILS (comma list), CONTACT_EMAIL, PUBLIC_URL
 
 POSTGRESQL (optional, instead of the SQLite file)
   pip install "psycopg[binary,pool]"
@@ -52,8 +46,8 @@ import tempfile
 import threading
 import uuid
 
-from flask import Flask, jsonify, redirect, request, send_file
-from flask import session as flask_session
+from flask import Flask, jsonify, redirect, request, send_file, session as login_session
+from werkzeug.security import check_password_hash, generate_password_hash
 from groq import Groq
 
 
@@ -78,6 +72,8 @@ PG_SCHEMA = [
     "CREATE TABLE IF NOT EXISTS oq_vr_codes(code TEXT PRIMARY KEY, ts DOUBLE PRECISION)",
     "CREATE TABLE IF NOT EXISTS oq_vr_msgs(id BIGSERIAL PRIMARY KEY, code TEXT, kind TEXT, text TEXT, "
     "ts DOUBLE PRECISION)",
+    "CREATE TABLE IF NOT EXISTS oq_users(username TEXT PRIMARY KEY, pw TEXT NOT NULL, "
+    "created TIMESTAMPTZ DEFAULT now())",
 ]
 
 
@@ -115,6 +111,8 @@ def _kb_conn():
     c.execute("CREATE TABLE IF NOT EXISTS messages("
               "id INTEGER PRIMARY KEY, session TEXT, role TEXT, content TEXT, "
               "ts DATETIME DEFAULT CURRENT_TIMESTAMP)")
+    c.execute("CREATE TABLE IF NOT EXISTS users("
+              "username TEXT PRIMARY KEY, pw TEXT NOT NULL, created DATETIME DEFAULT CURRENT_TIMESTAMP)")
     return c
 
 
@@ -785,648 +783,145 @@ def deep_oq(session, question):
         "answer for the user, with no mention of this review."}], 0.1, smart=True)
 
 
-@app.get("/")
-def index():
-    if REQUIRE_LOGIN and not current_user():
-        return redirect("/login")
-    return (PAGE.replace("__LOGIN_ON__", "true" if REQUIRE_LOGIN else "false"), 200,
-            {"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache"})
-
-
-@app.get("/stats")
-def stats():
-    if REQUIRE_LOGIN and not current_user():
-        return _locked()
-    return jsonify(kb_stats())
-
-
 # ==========================================================================
-# ACCOUNTS, LOGIN (email + Google), PLANS, LIMITS, RAZORPAY PAYMENTS, ADMIN
+# LOGIN: accounts (username + password), cookie session, every page needs a login
 # ==========================================================================
-import base64
 import hashlib
-import hmac
-from werkzeug.security import check_password_hash, generate_password_hash
-
-REQUIRE_LOGIN = os.environ.get("REQUIRE_LOGIN", "1") != "0"   # REQUIRE_LOGIN=0 turns the login wall off
-GOOGLE_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
-GOOGLE_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
-GOOGLE_ON = bool(GOOGLE_ID and GOOGLE_SECRET)
-RZP_ID = os.environ.get("RAZORPAY_KEY_ID", "")
-RZP_SECRET = os.environ.get("RAZORPAY_KEY_SECRET", "")
-RZP_WEBHOOK = os.environ.get("RAZORPAY_WEBHOOK_SECRET", "")
-PAY_ON = bool(RZP_ID and RZP_SECRET)
-ADMINS = {e.strip().lower() for e in os.environ.get("ADMIN_EMAILS", "").split(",") if e.strip()}
-
-
-def _int_env(name, default):
-    try:
-        return int(os.environ.get(name, default))
-    except ValueError:
-        return default
-
-
-FREE_DAILY = _int_env("FREE_DAILY", 15)      # credits per day on the free plan
-PRO_DAILY = _int_env("PRO_DAILY", 400)       # credits per day on Pro
-PRO_PRICE = _int_env("PRO_PRICE_INR", 199)   # rupees for 30 days of Pro
-PRO_DAYS = 30
-COST = {"/ask": 1, "/lab": 2, "/edit_ai": 1, "/news/brief": 1, "/code": 1, "/video": 2}  # credits per use
+import html as _html
 
 app.secret_key = os.environ.get("SECRET_KEY") or hashlib.sha256(
-    ("deep-oq-session:" + os.environ.get("GROQ_API_KEY", "")).encode()).hexdigest()
+    ("deep-oq-login:" + os.environ.get("GROQ_API_KEY", "")).encode()).hexdigest()
 app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax",
-                  SESSION_COOKIE_SECURE=bool(os.environ.get("RENDER") or os.environ.get("COOKIE_SECURE")),
-                  PERMANENT_SESSION_LIFETIME=30 * 24 * 3600)
-_auth_lock = threading.Lock()
-_fails = {}
-_EMAIL_RE = re.compile(r"^[^@\s]{1,64}@[^@\s]{1,255}\.[^@\s]{2,}$")
+                  SESSION_COOKIE_SECURE=bool(os.environ.get("RENDER")),
+                  PERMANENT_SESSION_LIFETIME=60 * 60 * 24 * 30)
+_login_fails = {}
 
 
-def _q(sql, params=(), fetch=None):
-    """One SQL dialect for the account tables: T_ becomes oq_ on PostgreSQL, and ? becomes %s."""
+def user_get(name):
     if USE_PG:
-        return _pg(sql.replace("T_", "oq_").replace("?", "%s"), params, fetch)
-    with DB:
-        cur = DB.execute(sql.replace("T_", ""), params)
-        return cur.fetchone() if fetch == "one" else cur.fetchall() if fetch == "all" else None
+        return _pg("SELECT username, pw FROM oq_users WHERE username=%s", (name,), "one")
+    return DB.execute("SELECT username, pw FROM users WHERE username=?", (name,)).fetchone()
 
 
-for _s in ("CREATE TABLE IF NOT EXISTS T_users(email TEXT PRIMARY KEY, name TEXT, pw_hash TEXT, provider TEXT, "
-           "picture TEXT, created DOUBLE PRECISION, plan TEXT, plan_until DOUBLE PRECISION)",
-           "CREATE TABLE IF NOT EXISTS T_usage(email TEXT, day TEXT, units INTEGER, PRIMARY KEY(email, day))",
-           "CREATE TABLE IF NOT EXISTS T_payments(payment_id TEXT PRIMARY KEY, email TEXT, order_id TEXT, "
-           "amount INTEGER, currency TEXT, ts DOUBLE PRECISION)"):
-    _q(_s)
-_DUMMY_HASH = generate_password_hash("not-a-real-password")
-
-
-def _user_get(email):
-    r = _q("SELECT email,name,pw_hash,provider,picture,plan,plan_until FROM T_users WHERE email=?", (email,), "one")
-    return dict(zip(("email", "name", "pw_hash", "provider", "picture", "plan", "plan_until"), r)) if r else None
-
-
-def _user_save(email, name, pw_hash, provider, picture=""):
-    _q("INSERT INTO T_users(email,name,pw_hash,provider,picture,created,plan,plan_until) VALUES(?,?,?,?,?,?,'free',0) "
-       "ON CONFLICT(email) DO UPDATE SET name=excluded.name, pw_hash=excluded.pw_hash, "
-       "provider=excluded.provider, picture=excluded.picture",
-       (email, name, pw_hash, provider, picture, time.time()))
-
-
-def current_user():
-    return flask_session.get("user")
-
-
-def _plan(u):
-    if not u:
-        return "free"
-    if u["email"] in ADMINS:
-        return "pro"
-    return "pro" if u["plan"] == "pro" and (u["plan_until"] or 0) > time.time() else "free"
-
-
-def _today():  # credits reset at midnight India time
-    return time.strftime("%Y-%m-%d", time.gmtime(time.time() + 19800))
-
-
-def denied():
-    if current_user():
-        return False
-    if REQUIRE_LOGIN:
-        return True
-    return bool(ACCESS_KEY) and request.headers.get("X-Access-Key", "") != ACCESS_KEY
-
-
-def _locked():
-    return jsonify(error="login" if REQUIRE_LOGIN else "locked"), 401
+def user_add(name, pw_hash):
+    if USE_PG:
+        _pg("INSERT INTO oq_users(username,pw) VALUES(%s,%s)", (name, pw_hash))
+    else:
+        with DB:
+            DB.execute("INSERT INTO users(username,pw) VALUES(?,?)", (name, pw_hash))
 
 
 def _client_ip():
-    return (request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or request.remote_addr or "?")
+    return (request.headers.get("X-Forwarded-For", request.remote_addr or "") or "").split(",")[0].strip()
 
 
-def _throttled(key, limit=8):
+def _too_many_fails():
     now = time.time()
-    if len(_fails) > 5000:
-        _fails.clear()
-    _fails[key] = [t for t in _fails.get(key, []) if now - t < 900]
-    return len(_fails[key]) >= limit
+    hits = [t for t in _login_fails.get(_client_ip(), []) if now - t < 600]
+    _login_fails[_client_ip()] = hits
+    return len(hits) >= 8
 
 
-def _safe_next(n):
-    n = str(n or "/")
-    return n if n.startswith("/") and not n.startswith("//") and "\\" not in n else "/"
-
-
-def _base_url():
-    pub = os.environ.get("PUBLIC_URL", "").rstrip("/")
-    if pub:
-        return pub
-    proto = request.headers.get("X-Forwarded-Proto", "http").split(",")[0].strip()
-    return f"{proto}://{request.headers.get('X-Forwarded-Host') or request.host}"
-
-
-def _sign_in(u):
-    flask_session.clear()
-    flask_session.permanent = True
-    flask_session["user"] = {"email": u["email"], "name": u["name"], "picture": u.get("picture") or ""}
+def _start_login(name, remember):
+    login_session.clear()
+    login_session["user"] = name
+    login_session.permanent = bool(remember)
 
 
 @app.before_request
-def _meter():
-    """Counts credits per user per day on the AI routes."""
-    if not REQUIRE_LOGIN or request.method != "POST" or request.path not in COST:
+def require_login():
+    p = request.path
+    if p in ("/login", "/logout", "/favicon.ico") or p.startswith(("/api/login", "/api/register", "/vr")):
         return None
-    cu = current_user()
-    if not cu:
-        return _locked()
-    u = _user_get(cu["email"])
-    if not u:
-        flask_session.clear()
-        return _locked()
-    units = COST[request.path]
-    if request.path == "/ask" and str((request.get_json(silent=True) or {}).get("q", "")).lower().startswith("/deep"):
-        units = 3
-    limit = PRO_DAILY if _plan(u) == "pro" else FREE_DAILY
-    day = _today()
-    with _auth_lock:
-        row = _q("SELECT units FROM T_usage WHERE email=? AND day=?", (u["email"], day), "one")
-        if (row[0] if row else 0) + units > limit:
-            more = f" Open the Plans tab to upgrade to Pro ({PRO_DAILY} a day), or come back after midnight." \
-                if PAY_ON else " Your credits reset after midnight India time."
-            return jsonify(error=f"You have used all {limit} credits for today." + more, limit=True), 402
-        _q("INSERT INTO T_usage(email,day,units) VALUES(?,?,?) "
-           "ON CONFLICT(email,day) DO UPDATE SET units=T_usage.units+excluded.units", (u["email"], day, units))
-    return None
-
-
-# ---------------------------------------------------------------- login pages and routes
-LOGIN_PAGE = r"""<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="color-scheme" content="light dark">
-<title>Sign in - Deep OQ</title>
-<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&family=Source+Serif+4:opsz,wght@8..60,400..700&display=swap" rel="stylesheet">
-<style>
-:root{--bg:#EAF0F3;--surface:#FFFFFF;--ink:#161B4A;--ink-2:#51577A;--line:#C9D4DB;--accent:#F2A02E;--accent-ink:#2B1A00;--river:#23797E;--err:#B3321F;--ok:#1E7A4F;
-  --ui:"Bricolage Grotesque","Noto Sans Devanagari",system-ui,sans-serif;--read:"Source Serif 4","Noto Serif Devanagari",Georgia,serif}
-@media (prefers-color-scheme:dark){:root{--bg:#0E1233;--surface:#151A45;--ink:#EEF0FF;--ink-2:#A3A9D1;--line:#2A3070;--err:#FF8D78;--ok:#6EDBA4}}
-*{box-sizing:border-box}
-html,body{min-height:100%}
-body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--read);-webkit-font-smoothing:antialiased}
-.shell{min-height:100dvh;display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,1fr)}
-/* ---- left: brand panel ---- */
-.hero{position:relative;overflow:hidden;color:#fff;padding:clamp(28px,5vw,64px);display:flex;flex-direction:column;justify-content:space-between;
-  background:linear-gradient(145deg,#10154F 0%,#1B2A8A 48%,#1C6E78 100%)}
-.hero::before{content:"";position:absolute;inset:0;background-image:radial-gradient(rgba(255,255,255,.09) 1px,transparent 1px);background-size:22px 22px;
-  mask-image:linear-gradient(180deg,#000 30%,transparent 95%);-webkit-mask-image:linear-gradient(180deg,#000 30%,transparent 95%)}
-.orb{position:absolute;border-radius:50%;filter:blur(60px);opacity:.55;animation:drift 18s ease-in-out infinite alternate}
-.o1{width:340px;height:340px;background:#F2A02E;top:-90px;right:-70px}
-.o2{width:300px;height:300px;background:#2f8cff;bottom:-90px;left:-60px;animation-delay:-6s}
-.o3{width:220px;height:220px;background:#00c9a7;top:46%;left:42%;opacity:.35;animation-delay:-11s}
-@keyframes drift{from{transform:translate3d(0,0,0) scale(1)}to{transform:translate3d(34px,-26px,0) scale(1.12)}}
-.hero>*{position:relative}
-.brand{display:flex;align-items:center;gap:12px;font-family:var(--ui);font-weight:700;font-size:24px;letter-spacing:-.025em}
-.hero h1{font-family:var(--ui);font-weight:700;font-size:clamp(34px,4.4vw,58px);line-height:1.03;letter-spacing:-.035em;margin:0 0 16px;max-width:15ch}
-.hero p{font-size:clamp(16px,1.5vw,19px);line-height:1.55;margin:0;max-width:44ch;color:#D5DAFF}
-.chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:26px}
-.chips span{font-family:var(--ui);font-weight:500;font-size:14px;padding:7px 14px;border-radius:999px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.22);backdrop-filter:blur(6px)}
-.credit{font-family:var(--ui);font-size:13px;color:#B9C0F5}
-/* ---- right: form ---- */
-.panel{display:flex;align-items:center;justify-content:center;padding:clamp(20px,4vw,48px)}
-.card{width:min(440px,100%);background:var(--surface);border:1px solid var(--line);border-radius:24px;padding:clamp(24px,4vw,38px);
-  box-shadow:0 30px 70px -30px rgba(16,21,79,.45)}
-.card h2{font-family:var(--ui);font-weight:700;font-size:30px;letter-spacing:-.03em;margin:0 0 6px}
-.sub{font-family:var(--ui);color:var(--ink-2);font-size:15px;margin:0 0 22px;line-height:1.45}
-.tabs{display:grid;grid-template-columns:1fr 1fr;gap:4px;padding:4px;border-radius:14px;background:var(--bg);margin-bottom:20px}
-.tabs button{font-family:var(--ui);font-weight:600;font-size:15px;padding:10px;border:0;border-radius:10px;background:transparent;color:var(--ink-2);cursor:pointer;transition:background .15s,color .15s}
-.tabs button[aria-selected=true]{background:var(--surface);color:var(--ink);box-shadow:0 1px 4px rgba(16,21,79,.18)}
-.google{width:100%;display:flex;align-items:center;justify-content:center;gap:12px;font-family:var(--ui);font-weight:600;font-size:16px;height:50px;border-radius:12px;
-  border:1px solid #DADCE0;background:#fff;color:#1F1F1F;cursor:pointer;transition:box-shadow .15s,background .15s}
-.google:hover{background:#F8F9FA;box-shadow:0 2px 10px rgba(0,0,0,.14)}
-.or{display:flex;align-items:center;gap:12px;margin:20px 0;font-family:var(--ui);font-size:13px;color:var(--ink-2)}
-.or::before,.or::after{content:"";flex:1;height:1px;background:var(--line)}
-form{display:grid;gap:14px}
-label{display:grid;gap:6px;font-family:var(--ui);font-weight:600;font-size:14px}
-.in{position:relative}
-input{width:100%;height:48px;padding:0 14px;border-radius:12px;border:1px solid var(--line);background:var(--bg);color:var(--ink);font:500 16px var(--ui);transition:border-color .15s,box-shadow .15s}
-input::placeholder{color:var(--ink-2);opacity:.7}
-input:focus{outline:0;border-color:var(--accent);box-shadow:0 0 0 4px rgba(242,160,46,.25)}
-.eye{position:absolute;right:8px;top:50%;transform:translateY(-50%);border:0;background:transparent;color:var(--ink-2);font:600 13px var(--ui);padding:8px;cursor:pointer;border-radius:8px}
-.eye:hover{color:var(--ink)}
-.go{height:52px;border:0;border-radius:12px;background:var(--accent);color:var(--accent-ink);font:700 17px var(--ui);cursor:pointer;display:flex;align-items:center;justify-content:center;gap:10px;
-  transition:transform .1s,filter .15s}
-.go:hover{filter:brightness(1.05)}.go:active{transform:translateY(1px)}
-.go[disabled]{opacity:.7;cursor:progress}
-.spin{width:18px;height:18px;border-radius:50%;border:3px solid rgba(43,26,0,.25);border-top-color:var(--accent-ink);animation:r .7s linear infinite;display:none}
-.busy .spin{display:block}
-@keyframes r{to{transform:rotate(360deg)}}
-.msg{min-height:22px;margin:2px 0 0;font:500 14px/1.4 var(--ui)}
-.msg.bad{color:var(--err)}.msg.ok{color:var(--ok)}
-.fine{margin:18px 0 0;font:13px/1.5 var(--ui);color:var(--ink-2);text-align:center}
-.fine a{color:var(--river);font-weight:600}
-:focus-visible{outline:3px solid var(--river);outline-offset:2px}
-[hidden]{display:none!important}
-@media (max-width:860px){.shell{grid-template-columns:1fr}.hero{padding:26px 24px 30px;gap:22px}.hero h1{max-width:none;font-size:34px}.chips,.credit{display:none}.panel{margin-top:-18px}}
-@media (prefers-reduced-motion:reduce){.orb{animation:none}}
-</style></head>
-<body>
-<main class="shell">
-  <section class="hero">
-    <div class="orb o1"></div><div class="orb o2"></div><div class="orb o3"></div>
-    <div class="brand">
-      <svg width="40" height="40" viewBox="0 0 48 48" fill="none" aria-hidden="true"><circle cx="22" cy="22" r="15" stroke="#fff" stroke-width="7"/><circle cx="36" cy="36" r="6" fill="#F2A02E"/></svg>
-      Deep OQ
-    </div>
-    <div>
-      <h1>One AI for everything you do.</h1>
-      <p>Ask questions, write code, edit photos and videos, watch movies in VR and read the news. All in one place.</p>
-      <div class="chips"><span>Chat</span><span>Code</span><span>Photo</span><span>Video</span><span>Lab</span><span>News</span><span>VR cinema</span></div>
-    </div>
-    <div class="credit">Made by Mayank Kumar Saw</div>
-  </section>
-  <section class="panel">
-    <div class="card">
-      <h2 id="title">Welcome back</h2>
-      <p class="sub" id="sub">Sign in to keep going with Deep OQ.</p>
-      <div class="tabs" role="tablist" aria-label="Sign in or create account">
-        <button type="button" role="tab" id="tIn" aria-selected="true">Sign in</button>
-        <button type="button" role="tab" id="tUp" aria-selected="false">Create account</button>
-      </div>
-      <button class="google" id="google" type="button">
-        <svg width="20" height="20" viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
-        Continue with Google
-      </button>
-      <div class="or">or use your email</div>
-      <form id="form" novalidate>
-        <label id="nameRow" hidden>Your name<input id="name" type="text" autocomplete="name" maxlength="80" placeholder="Mayank"></label>
-        <label>Email<input id="email" type="email" autocomplete="email" maxlength="254" placeholder="you@example.com" required></label>
-        <label>Password
-          <span class="in"><input id="pw" type="password" autocomplete="current-password" maxlength="200" placeholder="At least 8 characters" required>
-          <button class="eye" id="eye" type="button" aria-label="Show password">Show</button></span>
-        </label>
-        <button class="go" id="go" type="submit"><span class="spin" aria-hidden="true"></span><span id="goText">Sign in</span></button>
-        <p class="msg" id="msg" role="alert" aria-live="polite"></p>
-      </form>
-      <p class="fine">Passwords are stored hashed, never as plain text.<br>Just want to watch videos? <a href="/vr">Open the VR cinema</a> &nbsp;|&nbsp; <a href="/policies">Terms and privacy</a></p>
-    </div>
-  </section>
-</main>
-<script>
-(function(){
-  const $=s=>document.querySelector(s);
-  const GOOGLE_ON=__GOOGLE_ON__;
-  const q=new URLSearchParams(location.search),NEXT=q.get('next')||'/';
-  const ERR={google:'Google sign-in is not set up on this site yet.',google_failed:'Google sign-in did not finish. Please try again.',google_unverified:'Your Google email address is not verified, so it cannot be used.'};
-  let mode='in';
-  function say(t,ok){const m=$('#msg');m.textContent=t||'';m.className='msg'+(t?(ok?' ok':' bad'):'')}
-  function setMode(m){
-    mode=m;const up=m==='up';
-    $('#tIn').setAttribute('aria-selected',!up);$('#tUp').setAttribute('aria-selected',up);
-    $('#nameRow').hidden=!up;
-    $('#title').textContent=up?'Create your account':'Welcome back';
-    $('#sub').textContent=up?'It takes less than a minute.':'Sign in to keep going with Deep OQ.';
-    $('#goText').textContent=up?'Create account':'Sign in';
-    $('#pw').autocomplete=up?'new-password':'current-password';
-    say('');
-  }
-  $('#tIn').onclick=()=>setMode('in');$('#tUp').onclick=()=>setMode('up');
-  $('#eye').onclick=()=>{const p=$('#pw'),s=p.type==='password';p.type=s?'text':'password';$('#eye').textContent=s?'Hide':'Show';$('#eye').setAttribute('aria-label',s?'Hide password':'Show password')};
-  $('#google').onclick=()=>{
-    if(!GOOGLE_ON){say(ERR.google);return}
-    location.href='/auth/google?next='+encodeURIComponent(NEXT);
-  };
-  $('#form').addEventListener('submit',async e=>{
-    e.preventDefault();
-    const email=$('#email').value.trim(),password=$('#pw').value;
-    if(!email||!password){say('Enter your email and password.');return}
-    const go=$('#go');go.disabled=true;go.classList.add('busy');say('');
-    try{
-      const r=await fetch('/auth/'+(mode==='up'?'signup':'login'),{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({name:$('#name').value,email:email,password:password,next:NEXT})});
-      const j=await r.json().catch(()=>({}));
-      if(!r.ok||!j.ok)throw new Error(j.error||'Something went wrong. Please try again.');
-      say('Welcome! Taking you in...',true);location.href=j.next||'/';
-    }catch(err){say(err.message)}
-    go.disabled=false;go.classList.remove('busy');
-  });
-  if(ERR[q.get('err')])say(ERR[q.get('err')]);
-  setMode(q.get('mode')==='signup'?'up':'in');
-})();
-</script>
-</body></html>
-"""
+    if login_session.get("user"):
+        return None
+    if request.method == "GET" and not p.startswith("/api/"):
+        return redirect("/login")
+    return jsonify(error="Please log in first."), 401
 
 
 @app.get("/login")
 def login_page():
-    if current_user():
-        return redirect(_safe_next(request.args.get("next")))
-    return (LOGIN_PAGE.replace("__GOOGLE_ON__", "true" if GOOGLE_ON else "false"), 200,
-            {"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store"})
+    if login_session.get("user"):
+        return redirect("/")
+    return LOGIN_PAGE, 200, {"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache"}
 
 
-@app.post("/auth/signup")
-def auth_signup():
+@app.post("/api/register")
+def api_register():
     d = request.get_json(silent=True) or {}
-    name = str(d.get("name", "")).strip()[:80]
-    email = str(d.get("email", "")).strip().lower()[:254]
+    name = str(d.get("username", "")).strip().lower()
     pw = str(d.get("password", ""))
-    key = ("signup", _client_ip())
-    if _throttled(key):
-        return jsonify(error="Too many attempts. Please try again in 15 minutes."), 429
-    _fails[key].append(time.time())
-    if not _EMAIL_RE.match(email):
-        return jsonify(error="Enter a valid email address."), 400
-    if not 8 <= len(pw) <= 200:
-        return jsonify(error="Use a password with 8 to 200 characters."), 400
-    with _auth_lock:
-        if _user_get(email):
-            return jsonify(error="An account with this email already exists. Sign in instead."), 409
-        _user_save(email, name or email.split("@")[0], generate_password_hash(pw), "password")
-    _sign_in(_user_get(email))
-    return jsonify(ok=True, next=_safe_next(d.get("next")))
-
-
-@app.post("/auth/login")
-def auth_login():
-    d = request.get_json(silent=True) or {}
-    email = str(d.get("email", "")).strip().lower()[:254]
-    pw = str(d.get("password", ""))[:200]
-    key = (_client_ip(), email)
-    if _throttled(key):
-        return jsonify(error="Too many attempts. Please try again in 15 minutes."), 429
-    u = _user_get(email)
-    ok = check_password_hash(u["pw_hash"], pw) if u and u["pw_hash"] else (check_password_hash(_DUMMY_HASH, pw) and False)
-    if not ok:
-        _fails[key].append(time.time())
-        return jsonify(error="Wrong email or password. If you signed up with Google, use Continue with Google."), 401
-    _sign_in(u)
-    return jsonify(ok=True, next=_safe_next(d.get("next")))
-
-
-@app.get("/auth/google")
-def auth_google():
-    if not GOOGLE_ON:
-        return redirect("/login?err=google")
-    flask_session["g_state"] = secrets.token_urlsafe(24)
-    flask_session["g_next"] = _safe_next(request.args.get("next"))
-    q = urllib.parse.urlencode({"client_id": GOOGLE_ID, "redirect_uri": _base_url() + "/auth/google/callback",
-                                "response_type": "code", "scope": "openid email profile",
-                                "state": flask_session["g_state"], "prompt": "select_account"})
-    return redirect("https://accounts.google.com/o/oauth2/v2/auth?" + q)
-
-
-@app.get("/auth/google/callback")
-def auth_google_callback():
-    state, nxt = flask_session.pop("g_state", ""), _safe_next(flask_session.pop("g_next", "/"))
-    code = request.args.get("code", "")
-    if not GOOGLE_ON or request.args.get("error") or not code or not state \
-            or not secrets.compare_digest(state, request.args.get("state", "")):
-        return redirect("/login?err=google_failed")
+    if not 1 <= len(name) <= 40 or any(ord(ch) < 32 for ch in name):
+        return jsonify(error="Username must be 1-40 characters."), 400
+    if len(pw) < 8:
+        return jsonify(error="Password must be at least 8 characters."), 400
+    if len(pw) > 200:
+        return jsonify(error="Password is too long."), 400
     try:
-        body = urllib.parse.urlencode({"code": code, "client_id": GOOGLE_ID, "client_secret": GOOGLE_SECRET,
-                                       "redirect_uri": _base_url() + "/auth/google/callback",
-                                       "grant_type": "authorization_code"}).encode()
-        req = urllib.request.Request("https://oauth2.googleapis.com/token", data=body,
-                                     headers={"Content-Type": "application/x-www-form-urlencoded"})
-        with urllib.request.urlopen(req, timeout=15) as r:
-            tok = json.load(r)
-        req = urllib.request.Request("https://openidconnect.googleapis.com/v1/userinfo",
-                                     headers={"Authorization": "Bearer " + tok["access_token"]})
-        with urllib.request.urlopen(req, timeout=15) as r:
-            info = json.load(r)
+        if user_get(name):
+            return jsonify(error="That username is taken. Try another."), 409
+        user_add(name, generate_password_hash(pw))
     except Exception as e:
-        print("google sign-in failed:", e)
-        return redirect("/login?err=google_failed")
-    email = str(info.get("email", "")).strip().lower()
-    if not email or info.get("email_verified") is not True:
-        return redirect("/login?err=google_unverified")
-    name = str(info.get("name") or email.split("@")[0])[:80]
-    with _auth_lock:  # Google proved the email is theirs, so any earlier password on that email is removed
-        _user_save(email, name, None, "google", str(info.get("picture", ""))[:500])
-    _sign_in(_user_get(email))
-    return redirect(nxt)
+        print("register failed:", e)
+        return jsonify(error="Could not create the account. Try again."), 500
+    _start_login(name, d.get("remember", True))
+    return jsonify(username=name)
 
 
-@app.post("/auth/logout")
-def auth_logout():
-    flask_session.clear()
-    return jsonify(ok=True)
-
-
-# ---------------------------------------------------------------- plan page data and Razorpay payments
-@app.get("/account")
-def account():
-    cu = current_user()
-    u = _user_get(cu["email"]) if cu else None
-    if not u:
-        return _locked()
-    plan = _plan(u)
-    row = _q("SELECT units FROM T_usage WHERE email=? AND day=?", (u["email"], _today()), "one")
-    pays = _q("SELECT amount,currency,ts FROM T_payments WHERE email=? ORDER BY ts DESC LIMIT 10", (u["email"],), "all")
-    return jsonify(email=u["email"], name=u["name"], plan=plan, used=row[0] if row else 0,
-                   limit=PRO_DAILY if plan == "pro" else FREE_DAILY, until=u["plan_until"] if plan == "pro" else 0,
-                   price=PRO_PRICE, pro_daily=PRO_DAILY, free_daily=FREE_DAILY, pay_on=PAY_ON,
-                   admin=u["email"] in ADMINS, payments=[{"amount": a / 100, "currency": c, "ts": t} for a, c, t in pays])
-
-
-def _rzp(path, payload=None):
-    auth = base64.b64encode(f"{RZP_ID}:{RZP_SECRET}".encode()).decode()
-    req = urllib.request.Request("https://api.razorpay.com/v1/" + path,
-                                 data=None if payload is None else json.dumps(payload).encode(),
-                                 headers={"Content-Type": "application/json", "Authorization": "Basic " + auth})
-    with urllib.request.urlopen(req, timeout=20) as r:
-        return json.load(r)
-
-
-def _grant_pro(email, days, order_id="", payment_id="", amount=0, currency="INR"):
-    """Adds Pro days. A payment id can only ever be used once."""
-    with _auth_lock:
-        u = _user_get(email)
-        if not u or (payment_id and _q("SELECT 1 FROM T_payments WHERE payment_id=?", (payment_id,), "one")):
-            return False
-        start = max(time.time(), u["plan_until"] or 0) if u["plan"] == "pro" else time.time()
-        _q("UPDATE T_users SET plan='pro', plan_until=? WHERE email=?", (start + days * 86400, email))
-        if payment_id:
-            _q("INSERT INTO T_payments(payment_id,email,order_id,amount,currency,ts) VALUES(?,?,?,?,?,?)",
-               (payment_id, email, order_id, amount, currency, time.time()))
-    return True
-
-
-@app.post("/pay/order")
-def pay_order():
-    cu = current_user()
-    if not cu:
-        return _locked()
-    if not PAY_ON:
-        return jsonify(error="Payments are not set up on this site yet."), 503
-    try:
-        o = _rzp("orders", {"amount": PRO_PRICE * 100, "currency": "INR", "receipt": "oq" + secrets.token_hex(8),
-                            "notes": {"email": cu["email"]}})
-    except Exception as e:
-        print("razorpay order failed:", e)
-        return jsonify(error="Could not start the payment. Please try again."), 502
-    return jsonify(key=RZP_ID, order_id=o["id"], amount=o["amount"], currency=o["currency"],
-                   name=cu["name"], email=cu["email"])
-
-
-@app.post("/pay/verify")
-def pay_verify():
-    cu = current_user()
-    if not cu:
-        return _locked()
+@app.post("/api/login")
+def api_login():
+    if _too_many_fails():
+        return jsonify(error="Too many tries. Wait 10 minutes and try again."), 429
     d = request.get_json(silent=True) or {}
-    oid, pid, sig = (str(d.get(k, "")) for k in ("razorpay_order_id", "razorpay_payment_id", "razorpay_signature"))
-    good = hmac.new(RZP_SECRET.encode(), f"{oid}|{pid}".encode(), hashlib.sha256).hexdigest() if PAY_ON else ""
-    if not good or not hmac.compare_digest(good, sig):
-        return jsonify(error="The payment could not be confirmed."), 400
-    _grant_pro(cu["email"], PRO_DAYS, oid, pid, PRO_PRICE * 100)  # False just means it was already counted
-    return jsonify(ok=True)
-
-
-@app.post("/pay/webhook")
-def pay_webhook():
-    """Backup: Razorpay tells us about the payment even if the buyer closes the tab."""
-    raw, sig = request.get_data(), request.headers.get("X-Razorpay-Signature", "")
-    if not RZP_WEBHOOK or not hmac.compare_digest(hmac.new(RZP_WEBHOOK.encode(), raw, hashlib.sha256).hexdigest(), sig):
-        return "", 400
+    name = str(d.get("username", "")).strip().lower()
+    pw = str(d.get("password", ""))
     try:
-        ev = json.loads(raw)
-        if ev.get("event") in ("payment.captured", "order.paid"):
-            p = ev["payload"]["payment"]["entity"]
-            email = str((p.get("notes") or {}).get("email", "")).lower()
-            if not email and p.get("order_id"):
-                email = str((_rzp("orders/" + p["order_id"]).get("notes") or {}).get("email", "")).lower()
-            if email and p.get("status") == "captured":
-                _grant_pro(email, PRO_DAYS, p.get("order_id", ""), p["id"], p.get("amount", 0), p.get("currency", "INR"))
+        row = user_get(name)
     except Exception as e:
-        print("webhook failed:", e)
-        return "", 500
-    return "ok"
+        print("login failed:", e)
+        return jsonify(error="Could not sign in. Try again."), 500
+    if not row or not check_password_hash(row[1], pw):
+        _login_fails.setdefault(_client_ip(), []).append(time.time())
+        return jsonify(error="Wrong username or password."), 401
+    _start_login(name, d.get("remember", True))
+    return jsonify(username=name)
 
 
-# ---------------------------------------------------------------- admin dashboard and policies
-ADMIN_PAGE = r"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="color-scheme" content="light dark"><title>Admin - Deep OQ</title>
-<style>
-:root{--bg:#EAF0F3;--card:#fff;--ink:#161B4A;--mut:#51577A;--line:#C9D4DB;--acc:#F2A02E}
-@media(prefers-color-scheme:dark){:root{--bg:#0E1233;--card:#151A45;--ink:#EEF0FF;--mut:#A3A9D1;--line:#2A3070}}
-body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,sans-serif;padding:24px}
-.w{max-width:1000px;margin:auto}h1{margin:0 0 16px}
-.g{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-bottom:20px}
-.c{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px}.c b{display:block;font-size:28px}.c span{color:var(--mut)}
-table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden;margin-bottom:20px}
-th,td{padding:9px 12px;text-align:left;border-bottom:1px solid var(--line);font-size:14px}th{color:var(--mut)}
-.f{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:20px}input{padding:10px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--ink)}
-button{padding:10px 16px;border:0;border-radius:10px;background:var(--acc);font-weight:700;cursor:pointer}a{color:var(--acc)}
-</style></head><body><div class="w">
-<h1>Deep OQ admin</h1><p><a href="/">Back to the app</a></p>
-<div class="g" id="g"></div>
-<h2>Give or remove Pro</h2>
-<div class="f"><input id="e" type="email" placeholder="user email"><input id="d" type="number" value="30" min="0" style="width:110px" aria-label="Days">
-<button id="b" type="button">Apply (0 days removes Pro)</button><span id="m"></span></div>
-<h2>Newest users</h2><table id="u"></table><h2>Payments</h2><table id="p"></table></div>
-<script>
-const $=s=>document.querySelector(s);
-const fmt=t=>t?new Date(t*1000).toLocaleString(undefined,{day:'numeric',month:'short',hour:'numeric',minute:'2-digit'}):'-';
-function row(t,cells,head){const tr=document.createElement('tr');cells.forEach(c=>{const x=document.createElement(head?'th':'td');x.textContent=c;tr.appendChild(x)});t.appendChild(tr)}
-async function load(){
-  const j=await (await fetch('/admin/data')).json();
-  $('#g').innerHTML='';
-  [['Users',j.users],['Pro users',j.pro],['Revenue (INR)',j.revenue],['Credits used today',j.credits_today]].forEach(([l,v])=>{
-    const d=document.createElement('div');d.className='c';const b=document.createElement('b');b.textContent=v;const s=document.createElement('span');s.textContent=l;d.append(b,s);$('#g').appendChild(d)});
-  const u=$('#u');u.innerHTML='';row(u,['Email','Name','Sign-in','Joined','Plan','Pro until'],1);
-  j.recent_users.forEach(x=>row(u,[x.email,x.name,x.provider,fmt(x.ts),x.plan,fmt(x.until)]));
-  const p=$('#p');p.innerHTML='';row(p,['Email','Amount','When'],1);
-  j.recent_payments.forEach(x=>row(p,[x.email,x.currency+' '+x.amount,fmt(x.ts)]));
-}
-$('#b').onclick=async()=>{
-  const r=await fetch('/admin/grant',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:$('#e').value,days:$('#d').value})});
-  const j=await r.json();$('#m').textContent=j.ok?'Done.':(j.error||'Failed.');load();
-};
-load();
-</script></body></html>
-"""
-POLICIES_PAGE = r"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="color-scheme" content="light dark"><title>Terms, Privacy and Refunds - Deep OQ</title>
-<style>:root{--bg:#EAF0F3;--ink:#161B4A}@media(prefers-color-scheme:dark){:root{--bg:#0E1233;--ink:#EEF0FF}}
-body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.65 Georgia,serif;padding:28px}.w{max-width:760px;margin:auto}h1,h2{font-family:system-ui,sans-serif}a{color:#23797E}</style></head>
-<body><div class="w"><h1>Deep OQ: Terms, Privacy and Refunds</h1>
-<p><i>This is sample text to start from. Have it reviewed against the laws that apply to you before relying on it.</i></p>
-<h2>Using Deep OQ</h2><p>Deep OQ is an AI assistant. Answers can be wrong, so check anything important. Do not use it for illegal activity or to harm others. You are responsible for the files and content you add, and you must have the right to use them. Deep OQ does not provide movies or other copyrighted content.</p>
-<h2>Plans and payments</h2><p>The free plan has a daily limit of credits. Pro costs INR __PRICE__ for 30 days and has a higher daily limit. Payments are handled by Razorpay, and Deep OQ never sees or stores your card or UPI details. Pro does not renew by itself.</p>
-<h2>Refunds and cancellation</h2><p>Pro is not renewed automatically, so there is nothing to cancel. If something went wrong with your payment or you cannot use the service, write to us within 7 days and we will review it and refund where it is fair to do so.</p>
-<h2>Privacy</h2><p>We store your email, name and a hashed password (or your Google sign-in details), your plan, your daily usage and your payment records. Your questions are sent to AI providers to get answers. Things you add under Knowledge are stored in our database. We do not sell your data. Ask us at the address below to delete your account.</p>
-<h2>Contact</h2><p>__CONTACT__</p><p><a href="/">Back to Deep OQ</a></p></div></body></html>
-"""
+@app.get("/logout")
+def logout():
+    login_session.clear()
+    return redirect("/login")
 
 
-def _is_admin():
-    cu = current_user()
-    return bool(cu and cu["email"] in ADMINS)
+LOGOUT_PILL = (
+    '<a href="/logout" title="Log out" style="position:fixed;left:12px;bottom:12px;z-index:99999;'
+    'padding:7px 13px;border-radius:99px;font:600 12px system-ui,sans-serif;color:#cfd3f5;'
+    'background:rgba(20,22,45,.82);border:1px solid rgba(255,255,255,.14);text-decoration:none;'
+    'backdrop-filter:blur(8px)">%s &middot; Log out</a>')
 
 
-@app.get("/admin")
-def admin_page():
-    if not current_user():
-        return redirect("/login?next=/admin")
-    if not _is_admin():
-        return "Not allowed.", 403
-    return ADMIN_PAGE, 200, {"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store"}
+@app.get("/")
+def index():
+    pill = LOGOUT_PILL % _html.escape(login_session.get("user", ""))
+    html = PAGE.replace("</body>", pill + "</body>", 1)
+    return html, 200, {"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache"}
 
 
-@app.get("/admin/data")
-def admin_data():
-    if not _is_admin():
-        return jsonify(error="Not allowed."), 403
-    one = lambda sql, p=(): _q(sql, p, "one")[0]
-    now = time.time()
-    return jsonify(
-        users=one("SELECT COUNT(*) FROM T_users"),
-        pro=one("SELECT COUNT(*) FROM T_users WHERE plan='pro' AND plan_until>?", (now,)),
-        revenue=one("SELECT COALESCE(SUM(amount),0) FROM T_payments") / 100,
-        credits_today=one("SELECT COALESCE(SUM(units),0) FROM T_usage WHERE day=?", (_today(),)),
-        recent_users=[{"email": e, "name": n, "provider": p, "ts": t, "plan": pl, "until": u}
-                      for e, n, p, t, pl, u in _q("SELECT email,name,provider,created,plan,plan_until FROM T_users "
-                                                  "ORDER BY created DESC LIMIT 20", (), "all")],
-        recent_payments=[{"email": e, "amount": a / 100, "currency": c, "ts": t}
-                         for e, a, c, t in _q("SELECT email,amount,currency,ts FROM T_payments "
-                                              "ORDER BY ts DESC LIMIT 20", (), "all")])
+@app.get("/stats")
+def stats():
+    return jsonify(kb_stats())
 
 
-@app.post("/admin/grant")
-def admin_grant():
-    if not _is_admin():
-        return jsonify(error="Not allowed."), 403
-    d = request.get_json(silent=True) or {}
-    email = str(d.get("email", "")).strip().lower()
-    try:
-        days = int(d.get("days", 0))
-    except (TypeError, ValueError):
-        return jsonify(error="Days must be a number."), 400
-    if not _user_get(email):
-        return jsonify(error="No account with that email."), 404
-    if days > 0:
-        _grant_pro(email, min(days, 3650))
-    else:
-        _q("UPDATE T_users SET plan='free', plan_until=0 WHERE email=?", (email,))
-    return jsonify(ok=True)
-
-
-@app.get("/policies")
-def policies():
-    return (POLICIES_PAGE.replace("__CONTACT__", os.environ.get("CONTACT_EMAIL", "(set CONTACT_EMAIL)"))
-            .replace("__PRICE__", str(PRO_PRICE)), 200, {"Content-Type": "text/html; charset=utf-8"})
-
-
+def denied():
+    return ACCESS_KEY and request.headers.get("X-Access-Key", "") != ACCESS_KEY
 
 
 
 @app.post("/teach")
 def teach():
     if denied():
-        return _locked()
+        return jsonify(error="locked"), 401
     t = (request.get_json() or {}).get("text", "")
     n = kb_add_text(t, title="pasted note", source="pasted-" + uuid.uuid4().hex[:8])
     return jsonify(chunks_added=n)
@@ -1435,9 +930,9 @@ def teach():
 @app.post("/ask")
 def ask():
     if denied():
-        return _locked()
+        return jsonify(error="locked"), 401
     data = request.get_json()
-    session = data.get("session") or "default"
+    session = (login_session.get("user") or "guest") + ":" + str(data.get("session") or "default")
     try:
         answer = deep_oq(session, data["q"])
         kb_save_msg(session, "user", data["q"])
@@ -1563,6 +1058,30 @@ main{overflow-y:auto;scroll-behavior:smooth}
 .send:hover:not(:disabled){transform:scale(1.06)}
 .send:disabled{opacity:.35;cursor:default}
 .hint{margin:7px 6px 0;font-family:var(--ui);font-size:12.5px;color:var(--ink-2)}
+.field{padding-left:8px}
+.plusw{position:relative;flex:none}
+.plus{width:42px;height:42px;border-radius:50%;border:1px solid var(--line);background:transparent;color:var(--ink);cursor:pointer;display:grid;place-items:center}
+.plus:hover{background:rgba(127,130,170,.18)}
+.plus svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:2.2;stroke-linecap:round;transition:transform .15s}
+.plus[aria-expanded=true]{background:rgba(127,130,170,.25)}
+.plus[aria-expanded=true] svg{transform:rotate(45deg)}
+.pmenu{position:absolute;left:0;bottom:calc(100% + 12px);width:min(310px,86vw);background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:6px;box-shadow:0 18px 40px rgba(8,12,40,.28);z-index:30}
+.pmenu[hidden]{display:none}
+.pitem{display:flex;gap:12px;align-items:center;width:100%;text-align:left;border:0;background:none;padding:10px 12px;border-radius:12px;cursor:pointer;font-family:var(--ui)}
+.pitem:hover,.pitem:focus-visible{background:rgba(127,130,170,.18)}
+.pitem svg{flex:none;width:22px;height:22px;stroke:var(--river);fill:none;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+.pitem b{display:block;font-size:15px;font-weight:600}
+.pitem small{display:block;font-size:12.5px;color:var(--ink-2);font-weight:400;margin-top:1px}
+.atts{display:flex;flex-wrap:wrap;gap:8px;margin:0 6px 8px}
+.atts[hidden]{display:none}
+.achip{display:flex;align-items:center;gap:8px;max-width:100%;padding:6px 6px 6px 8px;border:1px solid var(--line);border-radius:14px;background:var(--surface);font-family:var(--ui);font-size:13.5px}
+.achip img{width:38px;height:38px;object-fit:cover;border-radius:9px}
+.achip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:260px}
+.achip button{border:0;background:none;cursor:pointer;font-size:19px;line-height:1;opacity:.7;padding:2px 7px}
+.achip button:hover{opacity:1}
+.genimg{display:block;max-width:min(100%,460px);border-radius:14px;margin:4px 0 10px;background:rgba(127,130,170,.15)}
+.ubox{white-space:pre-wrap}
+.ubox img{display:block;max-width:220px;max-height:200px;border-radius:12px;margin-bottom:6px}
 
 /* knowledge drawer */
 .shade{position:fixed;inset:0;background:var(--shade);opacity:0;visibility:hidden;transition:opacity .25s,visibility .25s}
@@ -1666,13 +1185,11 @@ a.primary{text-decoration:none;display:inline-block}
     <button class="tab" type="button" data-view="video">Video</button>
     <button class="tab" type="button" data-view="lab">Lab</button>
     <button class="tab" type="button" data-view="news">News</button>
-    <button class="tab" type="button" data-view="plans" id="plansTab" hidden>Plans</button>
     <a class="tab" href="/vr" style="text-decoration:none;display:inline-flex;align-items:center;background:linear-gradient(135deg,#00c9a7,#2f8cff);color:#04122b;font-weight:700">VR</a>
   </nav>
   <div class="tools" id="chatTools">
     <button class="btn" id="kbBtn" type="button" aria-haspopup="dialog">Knowledge <span class="badge" id="count">0</span></button>
     <button class="btn" id="newBtn" type="button">New chat</button>
-    <button class="btn" id="logoutBtn" type="button" hidden>Sign out</button>
   </div>
 </header>
 
@@ -1697,7 +1214,30 @@ a.primary{text-decoration:none;display:inline-block}
 
 <form class="composer" id="form">
   <div class="col" style="padding:0">
+    <div class="atts" id="atts" hidden></div>
     <div class="field">
+      <div class="plusw">
+        <button class="plus" id="plus" type="button" aria-label="Add files or create" aria-haspopup="menu" aria-expanded="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
+        <div class="pmenu" id="pmenu" role="menu" hidden>
+          <button class="pitem" type="button" role="menuitem" data-act="ask">
+            <svg viewBox="0 0 24 24"><path d="M21 11.5l-8.6 8.6a5 5 0 0 1-7-7l8.6-8.6a3.4 3.4 0 0 1 4.9 4.9l-8.6 8.6a1.7 1.7 0 0 1-2.4-2.4l7.9-7.9"/></svg>
+            <span><b>Upload to ask a question</b><small>Image, video, PDF or text file</small></span></button>
+          <button class="pitem" type="button" role="menuitem" data-act="photo">
+            <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="1.8"/><path d="m21 16-5-5-8 9"/></svg>
+            <span><b>Edit a photo</b><small>Opens the Photo editor</small></span></button>
+          <button class="pitem" type="button" role="menuitem" data-act="video">
+            <svg viewBox="0 0 24 24"><rect x="3" y="6" width="13" height="12" rx="3"/><path d="m16 10 5-3v10l-5-3z"/></svg>
+            <span><b>Edit a video</b><small>Opens the Video editor</small></span></button>
+          <button class="pitem" type="button" role="menuitem" data-act="image">
+            <svg viewBox="0 0 24 24"><path d="M12 3l1.8 4.7 4.7 1.8-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z"/><path d="M19 15l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z"/></svg>
+            <span><b>Create an image</b><small>Describe it and Deep OQ draws it</small></span></button>
+        </div>
+        <input type="file" id="fq" hidden accept="image/*,video/*,.pdf,.txt,.md,.csv,.tsv,.json,.xml,.yaml,.yml,.log,.html,.css,.js,.ts,.jsx,.tsx,.py,.java,.c,.cpp,.h,.cs,.go,.rs,.rb,.php,.kt,.swift,.sql,.sh,.bat">
+        <input type="file" id="fpe" hidden accept="image/*">
+        <input type="file" id="fve" hidden accept="video/*,.mkv">
+      </div>
       <textarea id="q" rows="1" placeholder="Ask Deep OQ" aria-label="Message" autocomplete="off"></textarea>
       <button class="send" id="send" type="submit" aria-label="Send" disabled>
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
@@ -1876,23 +1416,6 @@ a.primary{text-decoration:none;display:inline-block}
   </div>
 </section>
 
-<section class="view studio" id="v-plans">
-  <div class="wrap">
-    <h2 class="st-title">Your plan</h2>
-    <p class="st-sub" id="plSub">Loading your plan...</p>
-    <div class="panel">
-      <p><b id="plName"></b></p>
-      <div style="height:12px;border-radius:99px;background:rgba(127,130,170,.25);overflow:hidden"><div id="plBar" style="height:100%;width:0;background:#F2A02E"></div></div>
-      <p class="muted" id="plUse"></p>
-      <div><button class="primary" id="plUp" type="button">Upgrade to Pro</button> <a class="btn" id="plAdmin" href="/admin" hidden>Admin dashboard</a></div>
-      <p class="muted" id="plMsg" aria-live="polite"></p>
-      <h3>Your payments</h3>
-      <ul id="plPays" style="list-style:none;padding:0;margin:0"></ul>
-      <p class="muted"><a href="/policies">Terms, privacy and refunds</a></p>
-    </div>
-  </div>
-</section>
-
 <section class="view studio" id="v-video">
   <div class="wrap">
     <h2 class="st-title">Video</h2>
@@ -1971,7 +1494,7 @@ a.primary{text-decoration:none;display:inline-block}
 <script>
 const $=s=>document.querySelector(s);
 const log=$('#log'),scroller=$('#scroll'),box=$('#q'),send=$('#send');
-let sid=uid(),busy=false;
+let sid=uid(),busy=false,att=null,imgMode=false,attBusy=false;
 
 function uid(){return (crypto.randomUUID&&crypto.randomUUID())||String(Date.now())+Math.random()}
 const mark=(s,c='')=>`<svg class="mark ${c}" width="${s}" height="${s}" viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="24" r="15" fill="none" stroke="currentColor" stroke-width="4.5"/><g class="orbit"><circle cx="34.6" cy="34.6" r="4.6" fill="var(--accent)"/></g></svg>`;
@@ -2038,14 +1561,10 @@ function addBot(){
 }
 function toEnd(){scroller.scrollTo({top:scroller.scrollHeight})}
 
-const LOGIN_ON=__LOGIN_ON__;
 async function api(url,body){
   const go=()=>fetch(url,{method:'POST',headers:{'Content-Type':'application/json','X-Access-Key':localStorage.ak||''},body:JSON.stringify(body)});
   let r=await go();
-  if(r.status===401){
-    if(LOGIN_ON){location.href='/login?next='+encodeURIComponent(location.pathname);return r}
-    localStorage.ak=prompt('Enter the access key')||'';r=await go()
-  }
+  if(r.status===401){localStorage.ak=prompt('Enter the access key')||'';r=await go()}
   return r;
 }
 
@@ -2067,7 +1586,7 @@ async function ask(q){
     bot.lastChild.innerHTML='<div class="body"><p>Could not get an answer.</p><p>'+esc(e.message)+'</p></div><div class="acts"><button type="button" class="mini" data-retry>Try again</button></div>';
     bot.q=q;
   }
-  busy=false;send.disabled=!box.value.trim();toEnd();box.focus();
+  busy=false;send.disabled=!canSend();toEnd();box.focus();
 }
 
 log.addEventListener('click',e=>{
@@ -2082,11 +1601,184 @@ log.addEventListener('click',e=>{
 });
 
 /* composer */
-box.addEventListener('input',()=>{box.style.height='auto';box.style.height=Math.min(box.scrollHeight,200)+'px';send.disabled=busy||!box.value.trim()});
-box.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();ask(box.value)}});
-$('#form').addEventListener('submit',e=>{e.preventDefault();ask(box.value)});
+box.addEventListener('input',()=>{box.style.height='auto';box.style.height=Math.min(box.scrollHeight,200)+'px';send.disabled=!canSend()});
+box.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();submit()}});
+$('#form').addEventListener('submit',e=>{e.preventDefault();submit()});
 document.querySelectorAll('.ideas button').forEach(b=>b.onclick=()=>ask(b.textContent));
 $('#newBtn').onclick=()=>{sid=uid();log.innerHTML='';document.body.classList.remove('chatting');box.focus()};
+
+/* ================= plus menu: attach, edit, create image ================= */
+const canSend=()=>!busy&&!attBusy&&(!!box.value.trim()||!!att);
+const IMG_RE=/^\s*(?:please\s+)?(?:(?:can|could|will)\s+you\s+)?(?:(?:create|generate|make|draw|paint|design|show)\s+(?:me\s+)?(?:an?\s+|the\s+)?(?:image|picture|photo|pic|illustration|drawing|painting|wallpaper|poster|logo)(?=\s*(?:of|showing|with|about|for|that|where|:|,|\.|$))|draw\s+(?:me\s+)?(?:an?\s+|the\s+)(?!(?:table|flowchart|diagram|chart|graph|line|circle|square|box|button|layout|form|ui|canvas|svg|html|css|code|function|program|class|schema|tree|grid)\b))/i;
+const TEXT_EXT=/\.(txt|md|csv|tsv|json|xml|ya?ml|log|html?|css|js|ts|jsx|tsx|py|java|c|cpp|h|cs|go|rs|rb|php|kt|swift|sql|sh|bat)$/i;
+const plusBtn=$('#plus'),pmenu=$('#pmenu');
+function menu(open){pmenu.hidden=!open;plusBtn.setAttribute('aria-expanded',open)}
+plusBtn.onclick=e=>{e.stopPropagation();menu(pmenu.hidden);if(!pmenu.hidden)pmenu.querySelector('.pitem').focus()};
+document.addEventListener('click',e=>{if(!pmenu.hidden&&!e.target.closest('.plusw'))menu(false)});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!pmenu.hidden){menu(false);plusBtn.focus()}});
+pmenu.querySelectorAll('.pitem').forEach(b=>b.onclick=()=>{
+  menu(false);const a=b.dataset.act;
+  if(a==='ask')$('#fq').click();
+  else if(a==='photo')$('#fpe').click();
+  else if(a==='video')$('#fve').click();
+  else{setImgMode(true);box.focus()}
+});
+$('#fpe').onchange=e=>{const f=e.target.files[0];e.target.value='';if(f){showView('photo');loadPhoto(f)}};
+$('#fve').onchange=e=>{const f=e.target.files[0];e.target.value='';if(f){showView('video');loadVideo(f)}};
+$('#fq').onchange=e=>{const f=e.target.files[0];e.target.value='';if(f)attach(f)};
+box.addEventListener('paste',e=>{
+  const f=[...(e.clipboardData?.files||[])].find(x=>x.type.startsWith('image/'));
+  if(f){e.preventDefault();attach(f)}
+});
+
+function renderAtts(note){
+  const el=$('#atts');el.innerHTML='';
+  const chip=(thumb,label,onx)=>{
+    const c=document.createElement('div');c.className='achip';
+    if(thumb){const i=document.createElement('img');i.src=thumb;i.alt='';c.append(i)}
+    const s=document.createElement('span');s.textContent=label;c.append(s);
+    if(onx){const x=document.createElement('button');x.type='button';x.textContent='×';x.setAttribute('aria-label','Remove');x.onclick=onx;c.append(x)}
+    el.append(c);
+  };
+  if(note)chip('',note,null);
+  if(att)chip(att.thumb||'',(att.kind==='video'?'Video: ':att.kind==='doc'?'File: ':'')+att.name,clearAtt);
+  if(imgMode)chip('','Create image: describe it below',()=>setImgMode(false));
+  el.hidden=!el.children.length;
+  box.placeholder=imgMode?'Describe the image you want':att?'Ask something about this file':'Ask Deep OQ';
+  send.disabled=!canSend();
+}
+function clearAtt(){att=null;renderAtts()}
+function setImgMode(v){imgMode=v;if(v)att=null;renderAtts()}
+
+function readText(f){return new Promise((ok,no)=>{const r=new FileReader();r.onload=()=>ok(String(r.result));r.onerror=()=>no(new Error('That file could not be read.'));r.readAsText(f)})}
+function shrinkImage(f){return new Promise((ok,no)=>{
+  const url=URL.createObjectURL(f),img=new Image();
+  img.onload=()=>{
+    const k=Math.min(1,1024/Math.max(img.naturalWidth,img.naturalHeight)),c=document.createElement('canvas');
+    c.width=Math.round(img.naturalWidth*k);c.height=Math.round(img.naturalHeight*k);
+    c.getContext('2d').drawImage(img,0,0,c.width,c.height);URL.revokeObjectURL(url);
+    ok(c.toDataURL('image/jpeg',.85));
+  };
+  img.onerror=()=>{URL.revokeObjectURL(url);no(new Error('That picture could not be opened. Try a JPG or PNG.'))};
+  img.src=url;
+})}
+function videoGrid(f){return new Promise((ok,no)=>{
+  const url=URL.createObjectURL(f),v=document.createElement('video'),msg='This video could not be read in the browser. Try an MP4.';
+  v.muted=true;v.preload='auto';v.playsInline=true;v.src=url;
+  const bad=()=>{clearTimeout(t);URL.revokeObjectURL(url);no(new Error(msg))};
+  const t=setTimeout(bad,25000);v.onerror=bad;
+  v.onloadedmetadata=async()=>{
+    const d=v.duration;if(!isFinite(d)||d<=0||!v.videoWidth)return bad();
+    const tw=512,th=Math.round(tw*v.videoHeight/v.videoWidth),c=document.createElement('canvas');
+    c.width=tw*2;c.height=th*2;const g=c.getContext('2d');
+    try{
+      const ts=[.08,.35,.62,.9];
+      for(let i=0;i<4;i++){
+        await new Promise(r=>{const w=setTimeout(r,4000);v.onseeked=()=>{clearTimeout(w);r()};v.currentTime=Math.min(Math.max(d-.05,0),d*ts[i])});
+        g.drawImage(v,(i%2)*tw,Math.floor(i/2)*th,tw,th);
+      }
+    }catch(e){return bad()}
+    clearTimeout(t);URL.revokeObjectURL(url);ok(c.toDataURL('image/jpeg',.8));
+  };
+})}
+async function attach(f){
+  imgMode=false;att=null;attBusy=true;renderAtts('Reading '+f.name+'...');
+  try{
+    const ext=(f.name.split('.').pop()||'').toLowerCase();
+    if(f.type.startsWith('image/')){
+      const d=await shrinkImage(f);att={kind:'image',name:f.name,data:d,thumb:d};
+    }else if(f.type.startsWith('video/')||ext==='mkv'){
+      if(f.size>300*1048576)throw new Error('That video is over 300 MB. Choose a smaller one.');
+      const d=await videoGrid(f);att={kind:'video',name:f.name,data:d,thumb:d};
+    }else if(ext==='pdf'||f.type==='application/pdf'){
+      if(f.size>20*1048576)throw new Error('That PDF is over 20 MB. Choose a smaller one.');
+      const fd=new FormData();fd.append('file',f);
+      const r=await fetch('/readfile',{method:'POST',headers:{'X-Access-Key':localStorage.ak||''},body:fd});
+      const j=await r.json().catch(()=>({}));
+      if(!r.ok||j.error)throw new Error(j.error||'Could not read this PDF.');
+      att={kind:'doc',name:f.name,text:j.text};
+    }else if(f.type.startsWith('text/')||f.type==='application/json'||TEXT_EXT.test(f.name)){
+      const t=await readText(f);if(!t.trim())throw new Error('That file is empty.');
+      att={kind:'doc',name:f.name,text:t.slice(0,24000)};
+    }else throw new Error('That file type is not supported. Use an image, video, PDF, or a text, code, CSV or JSON file.');
+    attBusy=false;renderAtts();box.focus();
+  }catch(e){
+    attBusy=false;att=null;renderAtts();
+    const el=$('#atts');el.hidden=false;const c=document.createElement('div');c.className='achip';
+    c.innerHTML='<span></span><button type="button" aria-label="Dismiss">×</button>';
+    c.firstChild.textContent=e.message;c.lastChild.onclick=()=>{c.remove();el.hidden=!el.children.length};
+    el.append(c);setTimeout(()=>{c.remove();el.hidden=!el.children.length},9000);
+  }
+}
+
+function addUserRich(text,a){
+  const d=document.createElement('div');d.className='turn user';
+  const b=document.createElement('div');b.className='bubble ubox';
+  if(a&&a.thumb){const i=document.createElement('img');i.src=a.thumb;i.alt='Attached '+a.kind;b.append(i)}
+  else if(a)b.append(document.createTextNode('📄 '+a.name+(text?'\n':'')));
+  if(text)b.append(document.createTextNode(text));
+  d.append(b);log.append(d);return d;
+}
+function botDone(bot,answer){
+  bot.classList.remove('thinking');bot.raw=answer;
+  bot.lastChild.innerHTML='<div class="body">'+md(answer)+'</div><div class="acts"><button type="button" class="mini" data-copy="msg">Copy</button></div>';
+}
+function botFail(bot,e){
+  bot.classList.remove('thinking');bot.classList.add('err');
+  bot.lastChild.innerHTML='<div class="body"><p>Could not do that.</p><p>'+esc(e.message)+'</p></div>';
+}
+function loadPic(url){return new Promise((ok,no)=>{
+  const im=new Image(),t=setTimeout(()=>no(new Error('The picture service took too long. Try again.')),120000);
+  im.className='genimg';im.alt='Generated image';
+  im.onload=()=>{clearTimeout(t);ok(im)};
+  im.onerror=()=>{clearTimeout(t);no(new Error('The picture service did not answer. Try again in a moment.'))};
+  im.src=url;
+})}
+async function makeImage(bot,prompt){
+  const w=bot.querySelector('.wait');if(w)w.textContent='Creating your image';
+  const r=await api('/lab',{mod:'image',text:prompt}),j=await r.json().catch(()=>({}));
+  if(r.status===401)throw new Error('That access key was not accepted. Reload the page and enter it again.');
+  if(!r.ok||j.error)throw new Error(j.error||'The server did not answer.');
+  const im=await loadPic(j.image);
+  bot.classList.remove('thinking');
+  bot.lastChild.innerHTML='<div class="body"><div id="gi"></div><p class="muted"></p></div><div class="acts"><a class="mini" target="_blank" rel="noopener" style="text-decoration:none">Open full size</a></div>';
+  bot.lastChild.querySelector('#gi').replaceWith(im);
+  bot.lastChild.querySelector('.muted').textContent=j.answer||'';
+  bot.lastChild.querySelector('a').href=j.image;
+}
+async function askExtra(q,a,mode){
+  if(busy)return;
+  busy=true;send.disabled=true;document.body.classList.add('chatting');
+  box.value='';box.style.height='auto';
+  addUserRich(q,a);
+  if(a||mode){att=null;imgMode=false;renderAtts()}
+  const bot=addBot();toEnd();
+  try{
+    if(mode){await makeImage(bot,q)}
+    else if(a.kind==='doc'){
+      const r=await api('/askfile',{q,name:a.name,text:a.text,session:sid}),j=await r.json().catch(()=>({}));
+      if(r.status===401)throw new Error('That access key was not accepted. Reload the page and enter it again.');
+      if(!r.ok||j.error)throw new Error(j.error||'The server did not answer.');
+      botDone(bot,j.answer);
+    }else{
+      const lead=a.kind==='video'?'These four pictures are frames taken in order (left to right, top to bottom) from one video. ':'';
+      const r=await api('/lab',{mod:'vision',text:lead+(q||'Describe this '+(a.kind==='video'?'video':'photo')+' in detail.'),image:a.data}),j=await r.json().catch(()=>({}));
+      if(r.status===401)throw new Error('That access key was not accepted. Reload the page and enter it again.');
+      if(!r.ok||j.error)throw new Error(j.error||'The server did not answer.');
+      botDone(bot,(a.kind==='video'?'*I looked at four frames from your video. I cannot hear its sound.*\n\n':'')+j.answer);
+    }
+  }catch(e){botFail(bot,e)}
+  busy=false;send.disabled=!canSend();toEnd();box.focus();
+}
+function submit(){
+  const q=box.value.trim();
+  if(busy||attBusy)return;
+  if(att)return askExtra(q,att,false);
+  if(imgMode){if(!q)return;return askExtra(q,null,true)}
+  if(!q)return;
+  if(IMG_RE.test(q))return askExtra(q,null,true);
+  ask(q);
+}
 
 /* knowledge drawer */
 const kt=$('#kt'),teachBtn=$('#teach'),ks=$('#kstatus');
@@ -2114,7 +1806,7 @@ $('#drawer').setAttribute('aria-hidden','true');
 stats();box.focus();
 
 /* ================= tabs ================= */
-const VIEWS=['chat','code','photo','video','lab','news','plans'];
+const VIEWS=['chat','code','photo','video','lab','news'];
 function showView(v){
   if(!VIEWS.includes(v))v='chat';
   document.body.dataset.view=v;
@@ -2419,7 +2111,6 @@ function sendVideo(retry){
   const done=()=>{$('#v-go').disabled=false};
   x.onerror=()=>{vstatus('The connection failed. Check your internet and try again.');done()};
   x.onload=async()=>{
-    if(x.status===401&&LOGIN_ON){location.href='/login';return}
     if(x.status===401&&!retry){localStorage.ak=prompt('Enter the access key')||'';return sendVideo(true)}
     if(x.status===200){
       if(vres)URL.revokeObjectURL(vres);vres=URL.createObjectURL(x.response);
@@ -2570,46 +2261,6 @@ $('#nbrief').onclick=async()=>{
 document.querySelector('.tab[data-view="news"]').addEventListener('click',()=>{if(!nitems.length)loadNews()});
 applyNews();
 
-/* ================= plans, sign-out ================= */
-if(LOGIN_ON){
-  $('#plansTab').hidden=false;$('#logoutBtn').hidden=false;
-  $('#logoutBtn').onclick=async()=>{try{await fetch('/auth/logout',{method:'POST'})}catch(e){}location.href='/login'};
-  $('.tab[data-view="plans"]').addEventListener('click',()=>loadPlan());
-}
-const plmsg=m=>$('#plMsg').textContent=m;
-async function loadPlan(){
-  try{
-    const r=await fetch('/account');
-    if(r.status===401){location.href='/login';return}
-    const a=await r.json();
-    $('#plName').textContent=(a.plan==='pro'?'Pro':'Free')+' plan for '+a.email;
-    $('#plSub').textContent=a.plan==='pro'?'Pro is active until '+new Date(a.until*1000).toLocaleDateString(undefined,{day:'numeric',month:'long',year:'numeric'})+'.':(a.pay_on?'Free gives you '+a.free_daily+' credits a day. Pro gives you '+a.pro_daily+' a day for Rs '+a.price+' per 30 days.':'You get '+a.free_daily+' credits a day.');
-    $('#plUse').textContent='Used '+a.used+' of '+a.limit+' credits today. They reset at midnight India time. A normal question costs 1 credit, a /deep question 3, photo, video and Lab tools 1 to 2.';
-    $('#plBar').style.width=Math.min(100,Math.round(100*a.used/a.limit))+'%';
-    $('#plUp').textContent=a.plan==='pro'?'Add 30 more days (Rs '+a.price+')':'Upgrade to Pro (Rs '+a.price+')';
-    $('#plAdmin').hidden=!a.admin;
-    const ul=$('#plPays');ul.innerHTML='';
-    a.payments.forEach(p=>{const li=document.createElement('li');li.className='muted';li.textContent=new Date(p.ts*1000).toLocaleDateString()+'  |  '+p.currency+' '+p.amount;ul.appendChild(li)});
-    if(!a.payments.length){const li=document.createElement('li');li.className='muted';li.textContent='No payments yet.';ul.appendChild(li)}
-    $('#plUp').hidden=!a.pay_on;
-  }catch(e){plmsg('Could not load your plan.')}
-}
-function loadRzp(){return new Promise((ok,no)=>{if(window.Razorpay)return ok();const s=document.createElement('script');s.src='https://checkout.razorpay.com/v1/checkout.js';s.onload=ok;s.onerror=()=>no(new Error('Could not load the payment window.'));document.head.appendChild(s)})}
-$('#plUp').onclick=async()=>{
-  plmsg('Opening the payment window...');
-  try{
-    await loadRzp();
-    const r=await fetch('/pay/order',{method:'POST'}),o=await r.json();
-    if(!r.ok)throw new Error(o.error||'Could not start the payment.');
-    new Razorpay({key:o.key,amount:o.amount,currency:o.currency,name:'Deep OQ',description:'Pro plan, 30 days',order_id:o.order_id,
-      prefill:{name:o.name,email:o.email},notes:{email:o.email},theme:{color:'#F2A02E'},
-      handler:async res=>{
-        plmsg('Confirming your payment...');
-        const v=await fetch('/pay/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(res)}),j=await v.json();
-        plmsg(j.ok?'Payment received. You are on Pro!':(j.error||'We could not confirm the payment. If money was taken, it will be added shortly.'));loadPlan();
-      },modal:{ondismiss:()=>plmsg('')}}).open();
-  }catch(e){plmsg(e.message)}
-};
 showView(location.hash.slice(1));
 </script>
 </body>
@@ -2814,7 +2465,7 @@ def _lab(d):
 @app.post("/lab")
 def lab_route():
     if denied():
-        return _locked()
+        return jsonify(error="locked"), 401
     try:
         return jsonify(_lab(request.get_json(silent=True) or {}))
     except ValueError as e:
@@ -2893,8 +2544,6 @@ const scene=document.querySelector('#scene'),out=document.querySelector('#out'),
 const sid='vr-'+Math.random().toString(36).slice(2);
 const H=()=>({'Content-Type':'application/json','X-Access-Key':localStorage.ak||''});
 const post=(u,b)=>fetch(u,{method:'POST',headers:H(),body:JSON.stringify(b)});
-const LOGIN_ON=__LOGIN_ON__;
-function needLogin(){if(scene.is('vr-mode')){show('Please sign in first. Leave VR, then sign in on this page.');return}location.href='/login?next=/vr'}
 const WELCOME='Pick a button or press Mic and ask me anything.';
 let pages=[],idx=0,speak=true,link={code:'',role:'',after:0,timer:0};
 function logLine(t){const d=document.createElement('div');d.textContent=t;logEl.appendChild(d);logEl.scrollTop=logEl.scrollHeight}
@@ -2923,7 +2572,6 @@ async function ask(q,fromRemote){
     const r=await fetch('/ask',{method:'POST',headers:H(),
       body:JSON.stringify({session:sid,q:'[VR guide mode: answer in under 90 words, short plain sentences, no markdown, no lists.] '+q})});
     if(r.status===401){
-      if(LOGIN_ON){needLogin();return}
       if(!scene.is('vr-mode')){const k=prompt('Enter the access key');if(k){localStorage.ak=k;return ask(q,fromRemote)}}
       return show('Access key needed. Leave VR, reload this page and enter the key once.');
     }
@@ -2951,7 +2599,7 @@ function unlink(msg){
 async function hostLink(){
   try{
     const r=await post('/vr/new',{});
-    if(r.status===401){if(LOGIN_ON){needLogin();return}show('Access key needed. Leave VR, reload this page and enter the key once.');return}
+    if(r.status===401){show('Access key needed. Leave VR, reload this page and enter the key once.');return}
     const j=await r.json();if(!r.ok||!j.code)throw new Error('no code');
     unlink('');setLink(j.code,'host',0);codeT.setAttribute('value','Link code: '+j.code);
     show('Linked. On your phone or computer open this page, type the code '+j.code+' and ask questions from there.');
@@ -2962,7 +2610,7 @@ async function joinLink(code){
   code=(code||'').trim().toUpperCase();if(!code)return;
   try{
     const r=await fetch('/vr/poll?code='+encodeURIComponent(code)+'&kind=a&after=-1',{headers:H()});
-    if(r.status===401){if(LOGIN_ON){needLogin();return}const k=prompt('Enter the access key');if(k){localStorage.ak=k;return joinLink(code)}return}
+    if(r.status===401){const k=prompt('Enter the access key');if(k){localStorage.ak=k;return joinLink(code)}return}
     if(!r.ok){logLine('That link code is not valid or has expired.');return}
     const j=await r.json();unlink('');setLink(code,'remote',j.last);
     codeT.setAttribute('value','Remote: '+code);logLine('Linked to headset '+code+'. Type a question below.');
@@ -3128,7 +2776,7 @@ mfix.onclick=async()=>{
     return fetch('/video',{method:'POST',headers:{'X-Access-Key':localStorage.ak||''},body:fd})};
   try{
     let r=await go();
-    if(r.status===401){if(LOGIN_ON){needLogin();return}const k=prompt('Enter the access key');if(k){localStorage.ak=k;r=await go()}}
+    if(r.status===401){const k=prompt('Enter the access key');if(k){localStorage.ak=k;r=await go()}}
     if(!r.ok){let m='Could not convert this video.';try{m=(await r.json()).error||m}catch(e){}throw new Error(m)}
     const b=await r.blob();if(blobUrl)URL.revokeObjectURL(blobUrl);blobUrl=URL.createObjectURL(b);
     lastFile=null;loadMovie(blobUrl,'The converted video');
@@ -3169,8 +2817,7 @@ if(urlCode)joinLink(urlCode);
 
 @app.get("/vr")
 def vr_page():
-    return (VR_PAGE.replace("__LOGIN_ON__", "true" if REQUIRE_LOGIN else "false"), 200,
-            {"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache"})
+    return VR_PAGE, 200, {"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache"}
 
 
 _vr_lock = threading.Lock()
@@ -3235,7 +2882,7 @@ def _vr_fetch(code, kind, after):
 def vr_new():
     """The headset asks for a short link code."""
     if denied():
-        return _locked()
+        return jsonify(error="locked"), 401
     with _vr_lock:
         code = "".join(secrets.choice(_VR_ALPHA) for _ in range(6))
         _vr_create(code)
@@ -3246,7 +2893,7 @@ def vr_new():
 def vr_send():
     """kind q = a question from the remote to the headset, a = an answer from the headset to the remote."""
     if denied():
-        return _locked()
+        return jsonify(error="locked"), 401
     d = request.get_json(silent=True) or {}
     code = str(d.get("code", "")).upper().strip()[:12]
     kind = d.get("kind")
@@ -3263,7 +2910,7 @@ def vr_send():
 @app.get("/vr/poll")
 def vr_poll():
     if denied():
-        return _locked()
+        return jsonify(error="locked"), 401
     code = request.args.get("code", "").upper().strip()[:12]
     kind = "q" if request.args.get("kind") == "q" else "a"
     try:
@@ -3327,7 +2974,7 @@ def _fetch_rss(url):
 @app.post("/news")
 def news_route():
     if denied():
-        return _locked()
+        return jsonify(error="locked"), 401
     d = request.get_json(silent=True) or {}
     cat = str(d.get("cat", "top"))
     q = str(d.get("q", "")).strip()[:80]
@@ -3360,7 +3007,7 @@ def news_route():
 @app.post("/news/brief")
 def news_brief():
     if denied():
-        return _locked()
+        return jsonify(error="locked"), 401
     d = request.get_json(silent=True) or {}
     raw = d.get("titles", [])
     titles = [str(t)[:200] for t in raw[:30]] if isinstance(raw, list) else []
@@ -3409,7 +3056,7 @@ def _clamp(v, lo, hi):
 def edit_ai():
     """Turns a plain-language request into safe, validated editor settings."""
     if denied():
-        return _locked()
+        return jsonify(error="locked"), 401
     d = request.get_json(silent=True) or {}
     kind = d.get("kind")
     text = str(d.get("text", "")).strip()[:500]
@@ -3485,15 +3132,63 @@ def edit_ai():
 @app.post("/code")
 def code_route():
     if denied():
-        return _locked()
+        return jsonify(error="locked"), 401
     return _code()
 
 
 @app.post("/video")
 def video_route():
     if denied():
-        return _locked()
+        return jsonify(error="locked"), 401
     return _video()
+
+
+@app.post("/askfile")
+def askfile_route():
+    if denied():
+        return jsonify(error="locked"), 401
+    d = request.get_json(silent=True) or {}
+    q = str(d.get("q", "")).strip()[:2000] or "Summarize this file and list the key points."
+    name = re.sub(r"[\r\n]+", " ", str(d.get("name", "file")))[:120]
+    text = str(d.get("text", ""))[:24000]
+    if not text.strip():
+        return jsonify(error="That file has no readable text."), 400
+    sess = (login_session.get("user") or "guest") + ":" + str(d.get("session") or "default")
+    try:
+        today = datetime.date.today().strftime("%A, %d %B %Y")
+        msgs = ([{"role": "system", "content": SYSTEM + f" Today's date is {today}. The user attached a file. "
+                  "Answer from its content and say so if the answer is not in it. For code files, explain, "
+                  "fix or improve the code as asked."}]
+                + kb_load_history(sess, 6)
+                + [{"role": "user", "content": f"FILE NAME: {name}\n----- FILE START -----\n{text}\n"
+                    f"----- FILE END -----\n\nQUESTION:\n{q}"}])
+        answer = chat(msgs, 0.3, 2048)
+        kb_save_msg(sess, "user", f"[attached file: {name}] {q}")
+        kb_save_msg(sess, "assistant", answer)
+    except Exception as e:
+        print("askfile failed:", e)
+        return jsonify(error=str(e)[:300]), 500
+    return jsonify(answer=answer)
+
+
+@app.post("/readfile")
+def readfile_route():
+    if denied():
+        return jsonify(error="locked"), 401
+    f = request.files.get("file")
+    if not f:
+        return jsonify(error="Choose a file first."), 400
+    try:
+        from pypdf import PdfReader
+        text = "\n".join((pg.extract_text() or "") for pg in PdfReader(f.stream).pages).strip()
+    except ImportError:
+        return jsonify(error="PDF reading is not installed on the server (pip install pypdf)."), 500
+    except Exception as e:
+        print("readfile failed:", e)
+        return jsonify(error="Could not read this PDF. It may be damaged or password protected."), 400
+    if not text:
+        return jsonify(error="This PDF has no readable text. It may be a scanned picture."), 400
+    return jsonify(name=f.filename or "file.pdf", text=text[:30000])
 
 
 @app.errorhandler(413)
@@ -3532,6 +3227,264 @@ def ingest(paths):
                 total += n
                 print(f"{f}: {n} chunks")
     print("done.", kb_stats(), "added", total)
+
+
+LOGIN_PAGE = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deep OQ – Sign in</title>
+<style>
+  :root{
+    --bg:#04050d; --text:#eef0ff; --muted:#8e94b8; --border:rgba(255,255,255,.12);
+    --a:#7c5cff; --b:#00d4ff; --c:#ff4fd8; --ok:#33e6a1; --bad:#ff7a90;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    background:var(--bg);color:var(--text);overflow:hidden;
+    display:flex;align-items:center;justify-content:center;
+  }
+
+  /* ---------- background ---------- */
+  .aurora{position:fixed;inset:0;z-index:0;opacity:.9;
+    background:
+      radial-gradient(40% 35% at 20% 25%,rgba(124,92,255,.65),transparent 70%),
+      radial-gradient(35% 40% at 80% 20%,rgba(0,212,255,.45),transparent 70%),
+      radial-gradient(40% 40% at 70% 85%,rgba(255,79,216,.40),transparent 70%),
+      radial-gradient(30% 30% at 25% 85%,rgba(0,120,255,.35),transparent 70%);
+    }
+    .grid{position:fixed;inset:0;z-index:1;opacity:.35;
+    background-image:linear-gradient(rgba(255,255,255,.06) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.06) 1px,transparent 1px);
+    background-size:56px 56px;
+    -webkit-mask-image:radial-gradient(70% 70% at 50% 50%,#000 20%,transparent 100%);
+    mask-image:radial-gradient(70% 70% at 50% 50%,#000 20%,transparent 100%);
+    }
+    #net{position:fixed;inset:0;z-index:2}
+
+  /* ---------- layout ---------- */
+  .stage{position:relative;z-index:3;width:min(1080px,94vw);display:grid;grid-template-columns:1.05fr .95fr;gap:56px;align-items:center}
+  @media(max-width:900px){.stage{grid-template-columns:1fr;gap:0}.hero{display:none}}
+
+  /* ---------- hero ---------- */
+  .hero{}
+    .badge{display:inline-flex;align-items:center;gap:8px;padding:7px 14px;border-radius:99px;font-size:12.5px;letter-spacing:.4px;
+    background:rgba(255,255,255,.06);border:1px solid var(--border);color:#c9cdf0;}
+  .badge i{width:8px;height:8px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 0 rgba(51,230,161,.7);}
+    .hero h2{font-size:clamp(48px,6.4vw,86px);line-height:1;letter-spacing:-3px;margin:22px 0 18px;font-weight:800}
+  .grad{background:linear-gradient(90deg,var(--b),var(--a),var(--c),var(--b));background-size:250% 100%;
+    -webkit-background-clip:text;background-clip:text;color:transparent;}
+    .type{font-size:20px;color:#c4c9ee;min-height:30px;font-weight:500}
+    .chips{display:flex;flex-wrap:wrap;gap:10px;margin-top:34px}
+  .chip{padding:10px 16px;border-radius:14px;font-size:13.5px;color:#d5d9f5;background:rgba(255,255,255,.05);border:1px solid var(--border);
+    }
+  .chip:nth-child(2){}.chip:nth-child(3){}.chip:nth-child(4){}
+  
+  /* ---------- card ---------- */
+  .wrap{perspective:1100px;}
+    .card{
+    position:relative;padding:40px 36px 30px;border-radius:28px;
+    background:rgba(18,20,42,.94);
+    border:1px solid var(--border);
+    -webkit-
+    box-shadow:0 20px 50px rgba(0,0,0,.5);
+    }
+  .card::before{content:"";position:absolute;inset:-1px;border-radius:29px;padding:1.5px;z-index:-1;pointer-events:none;
+    background:linear-gradient(135deg,var(--b),var(--a),var(--c));
+    -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
+    -webkit-mask-composite:xor;mask-composite:exclude;}
+    
+  .card h1{font-size:30px;letter-spacing:-1px;font-weight:800}
+  .card h1 span{background:linear-gradient(90deg,var(--b),var(--a),var(--c),var(--b));background-size:250% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;}
+  .sub{color:var(--muted);font-size:14.5px;margin:8px 0 28px;min-height:20px}
+
+  /* ---------- inputs ---------- */
+  .field{position:relative;margin-bottom:16px;}
+  .field:nth-of-type(1){}.field:nth-of-type(2){}.field:nth-of-type(3){}
+  .field svg.ic{position:absolute;left:16px;top:50%;transform:translateY(-50%);width:19px;height:19px;stroke:var(--muted);fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;transition:.25s;pointer-events:none}
+  .field input{
+    width:100%;padding:22px 48px 8px 48px;border-radius:15px;font-size:15px;color:var(--text);
+    background:rgba(255,255,255,.05);border:1px solid var(--border);outline:none;transition:.25s}
+  .field label{position:absolute;left:48px;top:17px;color:var(--muted);font-size:15px;pointer-events:none;transition:.2s}
+  .field input:focus+label,.field input:not(:placeholder-shown)+label{top:7px;font-size:11px;color:var(--b);letter-spacing:.3px}
+  .field input:focus{border-color:var(--a);background:rgba(255,255,255,.08);box-shadow:0 0 0 4px rgba(124,92,255,.22),0 8px 30px rgba(124,92,255,.18)}
+  .field:focus-within svg.ic{stroke:var(--b)}
+  .eye{position:absolute;right:12px;top:50%;transform:translateY(-50%);background:none;border:0;color:var(--muted);cursor:pointer;padding:6px;display:grid;place-items:center}
+  .eye svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+  .eye:hover{color:var(--text)}
+  .name-field{display:none}
+  .signup .name-field{display:block}
+
+  .meter{display:none;height:4px;border-radius:4px;background:rgba(255,255,255,.08);margin:-6px 2px 16px;overflow:hidden}
+  .meter b{display:block;height:100%;width:0;border-radius:4px;transition:.35s}
+  .signup .meter{display:block}
+
+  .row{display:flex;justify-content:flex-start;align-items:center;font-size:13px;color:var(--muted);margin:4px 0 22px}
+  .row a{color:var(--b);text-decoration:none}.row a:hover{text-decoration:underline}
+  .row label{display:flex;gap:8px;align-items:center;cursor:pointer}
+  .row input{accent-color:var(--a);width:15px;height:15px}
+  .signup .row{display:none}
+
+  /* ---------- button ---------- */
+  .btn{
+    position:relative;overflow:hidden;width:100%;padding:16px;border:0;border-radius:15px;font-size:16px;font-weight:700;color:#fff;cursor:pointer;
+    background:linear-gradient(90deg,var(--a),var(--b),var(--c));background-size:220% 100%;
+    
+    transition:transform .2s,box-shadow .2s,background-position .6s}
+    .btn:hover{transform:translateY(-3px);background-position:100% 0;}
+  .btn:active{transform:scale(.98)}
+  .btn .spin{display:none;width:21px;height:21px;border:3px solid rgba(255,255,255,.35);border-top-color:#fff;border-radius:50%;margin:0 auto;animation:r .7s linear infinite}
+    @keyframes r{to{transform:rotate(360deg)}}
+  .btn.loading .t{display:none}.btn.loading .spin{display:block}
+
+  .divider{display:flex;align-items:center;gap:12px;color:var(--muted);font-size:12px;margin:24px 0 16px;text-transform:uppercase;letter-spacing:1.2px}
+  .divider::before,.divider::after{content:"";flex:1;height:1px;background:var(--border)}
+  .social button{
+    width:100%;display:flex;align-items:center;justify-content:center;gap:10px;padding:13px;border-radius:14px;
+    border:1px solid var(--border);background:rgba(255,255,255,.05);color:var(--text);font-size:14.5px;font-weight:500;cursor:pointer;transition:.2s}
+  .social button:hover{background:rgba(255,255,255,.12);transform:translateY(-2px)}
+  .social svg{width:18px;height:18px}
+  .switch{text-align:center;font-size:14px;color:var(--muted);margin-top:24px}
+  .switch a{color:var(--b);cursor:pointer;font-weight:600}
+  .switch a:hover{text-decoration:underline}
+  .msg{font-size:13px;text-align:center;margin-top:12px;min-height:18px;color:var(--bad)}
+  .shake{animation:shake .3s}
+  @keyframes shake{25%,75%{transform:translateX(-6px)}50%{transform:translateX(6px)}}
+  
+  /* ---------- success overlay ---------- */
+  .ok{position:absolute;inset:0;border-radius:28px;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    background:rgba(4,5,13,.94);opacity:0;pointer-events:none;transition:.5s;z-index:5}
+  .ok.show{opacity:1;pointer-events:auto}
+  .ok svg{width:96px;height:96px}
+  .ok circle{stroke:var(--b);stroke-width:4;fill:none;stroke-dasharray:260;stroke-dashoffset:260}
+  .ok path{stroke:#fff;stroke-width:5;fill:none;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:60;stroke-dashoffset:60}
+  .ok.show circle,.ok.show path{stroke-dashoffset:0}
+    .ok h2{margin-top:18px;font-size:24px}.ok p{color:var(--muted);margin-top:8px;font-size:14px}
+  </style>
+</head>
+<body>
+<div class="aurora"></div>
+
+<div class="stage">
+  <section class="hero">
+    <span class="badge"><i></i> Deep OQ is online</span>
+    <h2>Meet <span class="grad">Deep OQ</span></h2>
+    <p class="type" id="type"></p>
+    <div class="chips">
+      <span class="chip">⚡ Lightning fast</span>
+      <span class="chip">🧠 Deep reasoning</span>
+      <span class="chip">💻 Writes code</span>
+      <span class="chip">🎙 Voice ready</span>
+    </div>
+  </section>
+
+  <div class="wrap">
+    <div class="card" id="card">
+      <h1>Welcome to <span>Deep OQ</span></h1>
+      <p class="sub" id="sub">Sign in to continue to your AI</p>
+
+      <form id="form" novalidate>
+        <div class="field">
+          <svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>
+          <input id="username" type="text" placeholder=" " autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="40"><label for="username">Username</label>
+        </div>
+        <div class="field">
+          <svg class="ic" viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="11" rx="3"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+          <input id="pass" type="password" placeholder=" " autocomplete="current-password"><label for="pass">Password</label>
+          <button type="button" class="eye" id="eye" aria-label="Show password">
+            <svg viewBox="0 0 24 24" id="eyeIc"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+          </button>
+        </div>
+        <div class="field name-field">
+          <svg class="ic" viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="11" rx="3"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+          <input id="confirm" type="password" placeholder=" " autocomplete="new-password"><label for="confirm">Confirm password</label>
+        </div>
+        <div class="meter"><b id="bar"></b></div>
+        <div class="row">
+          <label><input type="checkbox" id="remember"> Remember me</label>
+        </div>
+        <button class="btn" id="go" type="submit"><span class="t" id="goText">Sign in</span><div class="spin"></div></button>
+        <div class="msg" id="msg"></div>
+      </form>
+
+      <p class="switch" id="switch">New here? <a id="toggle">Create an account</a></p>
+
+      <div class="ok" id="ok">
+        <svg viewBox="0 0 100 100"><circle cx="50" cy="50" r="41"/><path d="M30 52 L45 66 L71 36"/></svg>
+        <h2 id="okTitle">Welcome back!</h2><p>Launching Deep OQ…</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ===== Config ===== */
+const AFTER_LOGIN_URL = "/";       // where to go after login
+
+const card = document.getElementById("card");
+document.getElementById("type").textContent = "Ask anything. Get answers fast.";
+
+/* ===== Form logic ===== */
+const $ = id => document.getElementById(id);
+let signup = false;
+$("switch").addEventListener("click", e => {
+  if (e.target.tagName !== "A") return;
+  signup = !signup;
+  card.classList.toggle("signup", signup);
+  $("goText").textContent = signup ? "Create account" : "Sign in";
+  $("sub").textContent = signup ? "Create an account to save your chats and memory" : "Sign in to continue to your AI";
+  $("pass").autocomplete = signup ? "new-password" : "current-password";
+  $("switch").innerHTML = signup
+    ? 'Already have an account? <a id="toggle">Sign in</a>'
+    : 'New here? <a id="toggle">Create an account</a>';
+  $("msg").textContent = "";
+});
+
+const OPEN = '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>';
+const SHUT = '<path d="M3 3l18 18"/><path d="M10.6 6.1A9.8 9.8 0 0 1 12 6c6 0 10 6 10 6a17 17 0 0 1-3.2 3.9M6.6 7.6A17 17 0 0 0 2 12s4 7 10 7c1.6 0 3-.4 4.3-1"/>';
+$("eye").onclick = () => {
+  const p = $("pass"), show = p.type === "password";
+  p.type = show ? "text" : "password"; $("confirm").type = p.type;
+  $("eyeIc").innerHTML = show ? SHUT : OPEN;
+};
+
+/* password strength bar (sign-up) */
+$("pass").addEventListener("input", () => {
+  const v = $("pass").value; let s = 0;
+  if (v.length >= 8) s++; if (v.length >= 12) s++;
+  if (/[A-Z]/.test(v) && /[a-z]/.test(v)) s++; if (/\d/.test(v) && /[^A-Za-z0-9]/.test(v)) s++;
+  const bar = $("bar");
+  bar.style.width = (v ? Math.max(1, s) * 25 : 0) + "%";
+  bar.style.background = ["#ff5c7a","#ff5c7a","#ffb84d","#9be84d","#33e6a1"][v ? Math.max(1, s) : 0];
+});
+
+function fail(t){ $("msg").textContent = t; card.classList.remove("shake"); void card.offsetWidth; card.classList.add("shake"); }
+
+$("form").addEventListener("submit", async e => {
+  e.preventDefault();
+  const username = $("username").value.trim(), pass = $("pass").value;
+  if (!username) return fail("Please enter a username.");
+  if (pass.length < 8) return fail("Password must be at least 8 characters.");
+  if (signup && pass !== $("confirm").value) return fail("Passwords do not match.");
+  $("msg").textContent = ""; $("go").classList.add("loading");
+  try{
+    const r = await fetch(signup ? "/api/register" : "/api/login", {method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({username, password: pass, remember: $("remember").checked})});
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || "Something went wrong. Try again.");
+    $("okTitle").textContent = (signup ? "Account created, " : "Welcome back, ") + (j.username || username) + "!";
+    $("ok").classList.add("show");
+    setTimeout(() => location.href = AFTER_LOGIN_URL, 1800);
+  } catch(err){ fail(err.message); }
+  finally{ $("go").classList.remove("loading"); }
+});
+</script>
+</body>
+</html>
+"""
 
 
 if __name__ == "__main__":
