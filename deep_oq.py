@@ -20,7 +20,7 @@ RUN ON YOUR COMPUTER
 RUN ON RENDER (Web Service, language Python 3)
   Build command : pip install flask groq gunicorn pypdf ddgs imageio-ffmpeg
   Start command : gunicorn deep_oq:app --workers 1 --threads 4 --timeout 300
-  Environment   : GROQ_API_KEY (required), ACCESS_KEY (optional password), PYTHON_VERSION 3.12.3
+  Environment   : GROQ_API_KEY (required), SECRET_KEY (login cookie secret), ACCESS_KEY (optional password), PYTHON_VERSION 3.12.3
   Optional      : DEEP_OQ_MODEL, DEEP_OQ_SMART_MODEL, DEEP_OQ_DB, MAX_VIDEO_MB, MAX_VIDEO_SECONDS
 
 POSTGRESQL (optional, instead of the SQLite file)
@@ -46,7 +46,8 @@ import tempfile
 import threading
 import uuid
 
-from flask import Flask, jsonify, request, send_file
+from flask import Flask, jsonify, redirect, request, send_file, session as login_session
+from werkzeug.security import check_password_hash, generate_password_hash
 from groq import Groq
 
 
@@ -71,6 +72,8 @@ PG_SCHEMA = [
     "CREATE TABLE IF NOT EXISTS oq_vr_codes(code TEXT PRIMARY KEY, ts DOUBLE PRECISION)",
     "CREATE TABLE IF NOT EXISTS oq_vr_msgs(id BIGSERIAL PRIMARY KEY, code TEXT, kind TEXT, text TEXT, "
     "ts DOUBLE PRECISION)",
+    "CREATE TABLE IF NOT EXISTS oq_users(username TEXT PRIMARY KEY, pw TEXT NOT NULL, "
+    "created TIMESTAMPTZ DEFAULT now())",
 ]
 
 
@@ -108,6 +111,8 @@ def _kb_conn():
     c.execute("CREATE TABLE IF NOT EXISTS messages("
               "id INTEGER PRIMARY KEY, session TEXT, role TEXT, content TEXT, "
               "ts DATETIME DEFAULT CURRENT_TIMESTAMP)")
+    c.execute("CREATE TABLE IF NOT EXISTS users("
+              "username TEXT PRIMARY KEY, pw TEXT NOT NULL, created DATETIME DEFAULT CURRENT_TIMESTAMP)")
     return c
 
 
@@ -778,9 +783,129 @@ def deep_oq(session, question):
         "answer for the user, with no mention of this review."}], 0.1, smart=True)
 
 
+# ==========================================================================
+# LOGIN: accounts (username + password), cookie session, every page needs a login
+# ==========================================================================
+import hashlib
+
+app.secret_key = os.environ.get("SECRET_KEY") or hashlib.sha256(
+    ("deep-oq-login:" + os.environ.get("GROQ_API_KEY", "")).encode()).hexdigest()
+app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax",
+                  SESSION_COOKIE_SECURE=bool(os.environ.get("RENDER")),
+                  PERMANENT_SESSION_LIFETIME=60 * 60 * 24 * 30)
+USERNAME_RE = re.compile(r"^[a-z0-9_.]{3,24}$")
+_login_fails = {}
+
+
+def user_get(name):
+    if USE_PG:
+        return _pg("SELECT username, pw FROM oq_users WHERE username=%s", (name,), "one")
+    return DB.execute("SELECT username, pw FROM users WHERE username=?", (name,)).fetchone()
+
+
+def user_add(name, pw_hash):
+    if USE_PG:
+        _pg("INSERT INTO oq_users(username,pw) VALUES(%s,%s)", (name, pw_hash))
+    else:
+        with DB:
+            DB.execute("INSERT INTO users(username,pw) VALUES(?,?)", (name, pw_hash))
+
+
+def _client_ip():
+    return (request.headers.get("X-Forwarded-For", request.remote_addr or "") or "").split(",")[0].strip()
+
+
+def _too_many_fails():
+    now = time.time()
+    hits = [t for t in _login_fails.get(_client_ip(), []) if now - t < 600]
+    _login_fails[_client_ip()] = hits
+    return len(hits) >= 8
+
+
+def _start_login(name, remember):
+    login_session.clear()
+    login_session["user"] = name
+    login_session.permanent = bool(remember)
+
+
+@app.before_request
+def require_login():
+    p = request.path
+    if p in ("/login", "/logout", "/favicon.ico") or p.startswith(("/api/login", "/api/register", "/vr")):
+        return None
+    if login_session.get("user"):
+        return None
+    if request.method == "GET" and not p.startswith("/api/"):
+        return redirect("/login")
+    return jsonify(error="Please log in first."), 401
+
+
+@app.get("/login")
+def login_page():
+    if login_session.get("user"):
+        return redirect("/")
+    return LOGIN_PAGE, 200, {"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache"}
+
+
+@app.post("/api/register")
+def api_register():
+    d = request.get_json(silent=True) or {}
+    name = str(d.get("username", "")).strip().lower()
+    pw = str(d.get("password", ""))
+    if not USERNAME_RE.match(name):
+        return jsonify(error="Username: 3-24 letters, numbers, _ or ."), 400
+    if len(pw) < 8:
+        return jsonify(error="Password must be at least 8 characters."), 400
+    if len(pw) > 200:
+        return jsonify(error="Password is too long."), 400
+    try:
+        if user_get(name):
+            return jsonify(error="That username is taken. Try another."), 409
+        user_add(name, generate_password_hash(pw))
+    except Exception as e:
+        print("register failed:", e)
+        return jsonify(error="Could not create the account. Try again."), 500
+    _start_login(name, d.get("remember", True))
+    return jsonify(username=name)
+
+
+@app.post("/api/login")
+def api_login():
+    if _too_many_fails():
+        return jsonify(error="Too many tries. Wait 10 minutes and try again."), 429
+    d = request.get_json(silent=True) or {}
+    name = str(d.get("username", "")).strip().lower()
+    pw = str(d.get("password", ""))
+    try:
+        row = user_get(name)
+    except Exception as e:
+        print("login failed:", e)
+        return jsonify(error="Could not sign in. Try again."), 500
+    if not row or not check_password_hash(row[1], pw):
+        _login_fails.setdefault(_client_ip(), []).append(time.time())
+        return jsonify(error="Wrong username or password."), 401
+    _start_login(name, d.get("remember", True))
+    return jsonify(username=name)
+
+
+@app.get("/logout")
+def logout():
+    login_session.clear()
+    return redirect("/login")
+
+
+LOGOUT_PILL = (
+    '<a href="/logout" title="Log out" style="position:fixed;left:12px;bottom:12px;z-index:99999;'
+    'padding:7px 13px;border-radius:99px;font:600 12px system-ui,sans-serif;color:#cfd3f5;'
+    'background:rgba(20,22,45,.82);border:1px solid rgba(255,255,255,.14);text-decoration:none;'
+    'backdrop-filter:blur(8px)">%s &middot; Log out</a>')
+
+
 @app.get("/")
 def index():
-    return PAGE, 200, {"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache"}
+    pill = LOGOUT_PILL % login_session.get("user", "")
+    html = PAGE.replace("</body>", pill + "</body>", 1)
+    return html, 200, {"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache"}
 
 
 @app.get("/stats")
@@ -807,7 +932,7 @@ def ask():
     if denied():
         return jsonify(error="locked"), 401
     data = request.get_json()
-    session = data.get("session") or "default"
+    session = (login_session.get("user") or "guest") + ":" + str(data.get("session") or "default")
     try:
         answer = deep_oq(session, data["q"])
         kb_save_msg(session, "user", data["q"])
@@ -2834,6 +2959,330 @@ def ingest(paths):
                 total += n
                 print(f"{f}: {n} chunks")
     print("done.", kb_stats(), "added", total)
+
+
+LOGIN_PAGE = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deep OQ – Sign in</title>
+<style>
+  :root{
+    --bg:#04050d; --text:#eef0ff; --muted:#8e94b8; --border:rgba(255,255,255,.12);
+    --a:#7c5cff; --b:#00d4ff; --c:#ff4fd8; --ok:#33e6a1; --bad:#ff7a90;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    background:var(--bg);color:var(--text);overflow:hidden;
+    display:flex;align-items:center;justify-content:center;
+  }
+
+  /* ---------- background ---------- */
+  .aurora{position:fixed;inset:-20%;z-index:0;filter:blur(70px);opacity:.75;
+    background:
+      radial-gradient(40% 35% at 20% 25%,rgba(124,92,255,.65),transparent 70%),
+      radial-gradient(35% 40% at 80% 20%,rgba(0,212,255,.45),transparent 70%),
+      radial-gradient(40% 40% at 70% 85%,rgba(255,79,216,.40),transparent 70%),
+      radial-gradient(30% 30% at 25% 85%,rgba(0,120,255,.35),transparent 70%);
+    animation:drift 22s ease-in-out infinite alternate}
+  @keyframes drift{
+    0%{transform:translate(0,0) rotate(0deg) scale(1)}
+    50%{transform:translate(4%,-3%) rotate(6deg) scale(1.1)}
+    100%{transform:translate(-4%,3%) rotate(-5deg) scale(1.05)}}
+  .grid{position:fixed;inset:0;z-index:1;opacity:.35;
+    background-image:linear-gradient(rgba(255,255,255,.06) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.06) 1px,transparent 1px);
+    background-size:56px 56px;
+    -webkit-mask-image:radial-gradient(70% 70% at 50% 50%,#000 20%,transparent 100%);
+    mask-image:radial-gradient(70% 70% at 50% 50%,#000 20%,transparent 100%);
+    animation:gridmove 14s linear infinite}
+  @keyframes gridmove{to{background-position:56px 56px}}
+  #net{position:fixed;inset:0;z-index:2}
+
+  /* ---------- layout ---------- */
+  .stage{position:relative;z-index:3;width:min(1080px,94vw);display:grid;grid-template-columns:1.05fr .95fr;gap:56px;align-items:center}
+  @media(max-width:900px){.stage{grid-template-columns:1fr;gap:0}.hero{display:none}}
+
+  /* ---------- hero ---------- */
+  .hero{animation:fadeLeft 1s cubic-bezier(.2,.8,.2,1) both}
+  @keyframes fadeLeft{from{opacity:0;transform:translateX(-40px)}to{opacity:1;transform:none}}
+  .badge{display:inline-flex;align-items:center;gap:8px;padding:7px 14px;border-radius:99px;font-size:12.5px;letter-spacing:.4px;
+    background:rgba(255,255,255,.06);border:1px solid var(--border);color:#c9cdf0;backdrop-filter:blur(8px)}
+  .badge i{width:8px;height:8px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 0 rgba(51,230,161,.7);animation:ping 2s infinite}
+  @keyframes ping{70%{box-shadow:0 0 0 10px rgba(51,230,161,0)}100%{box-shadow:0 0 0 0 rgba(51,230,161,0)}}
+  .hero h2{font-size:clamp(48px,6.4vw,86px);line-height:1;letter-spacing:-3px;margin:22px 0 18px;font-weight:800}
+  .grad{background:linear-gradient(90deg,var(--b),var(--a),var(--c),var(--b));background-size:250% 100%;
+    -webkit-background-clip:text;background-clip:text;color:transparent;animation:shine 6s linear infinite}
+  @keyframes shine{to{background-position:250% 0}}
+  .type{font-size:20px;color:#c4c9ee;min-height:30px;font-weight:500}
+  .type::after{content:"";display:inline-block;width:2px;height:1.05em;background:var(--b);margin-left:4px;vertical-align:-3px;animation:blink 1s steps(1) infinite}
+  @keyframes blink{50%{opacity:0}}
+  .chips{display:flex;flex-wrap:wrap;gap:10px;margin-top:34px}
+  .chip{padding:10px 16px;border-radius:14px;font-size:13.5px;color:#d5d9f5;background:rgba(255,255,255,.05);border:1px solid var(--border);
+    backdrop-filter:blur(8px);animation:bob 5s ease-in-out infinite}
+  .chip:nth-child(2){animation-delay:-1.2s}.chip:nth-child(3){animation-delay:-2.4s}.chip:nth-child(4){animation-delay:-3.6s}
+  @keyframes bob{50%{transform:translateY(-7px)}}
+
+  /* ---------- card ---------- */
+  .wrap{perspective:1100px;animation:rise .9s .1s cubic-bezier(.2,.8,.2,1) both}
+  @keyframes rise{from{opacity:0;transform:translateY(46px) scale(.95)}to{opacity:1;transform:none}}
+  .card{
+    position:relative;padding:40px 36px 30px;border-radius:28px;
+    background:linear-gradient(160deg,rgba(255,255,255,.10),rgba(255,255,255,.03));
+    border:1px solid var(--border);
+    backdrop-filter:blur(26px) saturate(140%);-webkit-backdrop-filter:blur(26px) saturate(140%);
+    box-shadow:0 40px 90px rgba(0,0,0,.6),0 0 80px rgba(124,92,255,.15),inset 0 1px 0 rgba(255,255,255,.18);
+    transition:transform .15s ease-out}
+  .card::before{content:"";position:absolute;inset:-1px;border-radius:29px;padding:1.5px;z-index:-1;pointer-events:none;
+    background:conic-gradient(from var(--ang,0deg),transparent 0 62%,var(--b),var(--a),var(--c),transparent);
+    -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);
+    -webkit-mask-composite:xor;mask-composite:exclude;animation:spin 5s linear infinite}
+  @property --ang{syntax:"<angle>";inherits:false;initial-value:0deg}
+  @keyframes spin{to{--ang:360deg}}
+
+  .card h1{font-size:30px;letter-spacing:-1px;font-weight:800}
+  .card h1 span{background:linear-gradient(90deg,var(--b),var(--a),var(--c),var(--b));background-size:250% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:shine 5s linear infinite}
+  .sub{color:var(--muted);font-size:14.5px;margin:8px 0 28px;min-height:20px}
+
+  /* ---------- inputs ---------- */
+  .field{position:relative;margin-bottom:16px;animation:rise .7s both}
+  .field:nth-of-type(1){animation-delay:.25s}.field:nth-of-type(2){animation-delay:.33s}.field:nth-of-type(3){animation-delay:.41s}
+  .field svg.ic{position:absolute;left:16px;top:50%;transform:translateY(-50%);width:19px;height:19px;stroke:var(--muted);fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;transition:.25s;pointer-events:none}
+  .field input{
+    width:100%;padding:22px 48px 8px 48px;border-radius:15px;font-size:15px;color:var(--text);
+    background:rgba(255,255,255,.05);border:1px solid var(--border);outline:none;transition:.25s}
+  .field label{position:absolute;left:48px;top:17px;color:var(--muted);font-size:15px;pointer-events:none;transition:.2s}
+  .field input:focus+label,.field input:not(:placeholder-shown)+label{top:7px;font-size:11px;color:var(--b);letter-spacing:.3px}
+  .field input:focus{border-color:var(--a);background:rgba(255,255,255,.08);box-shadow:0 0 0 4px rgba(124,92,255,.22),0 8px 30px rgba(124,92,255,.18)}
+  .field:focus-within svg.ic{stroke:var(--b)}
+  .eye{position:absolute;right:12px;top:50%;transform:translateY(-50%);background:none;border:0;color:var(--muted);cursor:pointer;padding:6px;display:grid;place-items:center}
+  .eye svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+  .eye:hover{color:var(--text)}
+  .name-field{display:none}
+  .signup .name-field{display:block}
+
+  .meter{display:none;height:4px;border-radius:4px;background:rgba(255,255,255,.08);margin:-6px 2px 16px;overflow:hidden}
+  .meter b{display:block;height:100%;width:0;border-radius:4px;transition:.35s}
+  .signup .meter{display:block}
+
+  .row{display:flex;justify-content:flex-start;align-items:center;font-size:13px;color:var(--muted);margin:4px 0 22px}
+  .row a{color:var(--b);text-decoration:none}.row a:hover{text-decoration:underline}
+  .row label{display:flex;gap:8px;align-items:center;cursor:pointer}
+  .row input{accent-color:var(--a);width:15px;height:15px}
+  .signup .row{display:none}
+
+  /* ---------- button ---------- */
+  .btn{
+    position:relative;overflow:hidden;width:100%;padding:16px;border:0;border-radius:15px;font-size:16px;font-weight:700;color:#fff;cursor:pointer;
+    background:linear-gradient(90deg,var(--a),var(--b),var(--c));background-size:220% 100%;
+    box-shadow:0 12px 34px rgba(124,92,255,.45);
+    transition:transform .2s,box-shadow .2s,background-position .6s}
+  .btn::after{content:"";position:absolute;top:0;left:-60%;width:40%;height:100%;
+    background:linear-gradient(100deg,transparent,rgba(255,255,255,.45),transparent);transform:skewX(-20deg);animation:sweep 3.2s ease-in-out infinite}
+  @keyframes sweep{0%,55%{left:-60%}100%{left:130%}}
+  .btn:hover{transform:translateY(-3px);background-position:100% 0;box-shadow:0 18px 44px rgba(0,212,255,.4)}
+  .btn:active{transform:scale(.98)}
+  .btn .spin{display:none;width:21px;height:21px;border:3px solid rgba(255,255,255,.35);border-top-color:#fff;border-radius:50%;animation:r .7s linear infinite;margin:0 auto}
+  @keyframes r{to{transform:rotate(360deg)}}
+  .btn.loading .t{display:none}.btn.loading .spin{display:block}
+
+  .divider{display:flex;align-items:center;gap:12px;color:var(--muted);font-size:12px;margin:24px 0 16px;text-transform:uppercase;letter-spacing:1.2px}
+  .divider::before,.divider::after{content:"";flex:1;height:1px;background:var(--border)}
+  .social button{
+    width:100%;display:flex;align-items:center;justify-content:center;gap:10px;padding:13px;border-radius:14px;
+    border:1px solid var(--border);background:rgba(255,255,255,.05);color:var(--text);font-size:14.5px;font-weight:500;cursor:pointer;transition:.2s}
+  .social button:hover{background:rgba(255,255,255,.12);transform:translateY(-2px)}
+  .social svg{width:18px;height:18px}
+  .switch{text-align:center;font-size:14px;color:var(--muted);margin-top:24px}
+  .switch a{color:var(--b);cursor:pointer;font-weight:600}
+  .switch a:hover{text-decoration:underline}
+  .msg{font-size:13px;text-align:center;margin-top:12px;min-height:18px;color:var(--bad)}
+  .shake{animation:shake .4s}
+  @keyframes shake{20%,60%{transform:translateX(-8px)}40%,80%{transform:translateX(8px)}}
+
+  /* ---------- success overlay ---------- */
+  .ok{position:absolute;inset:0;border-radius:28px;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    background:rgba(4,5,13,.94);opacity:0;pointer-events:none;transition:.5s;z-index:5}
+  .ok.show{opacity:1;pointer-events:auto}
+  .ok svg{width:96px;height:96px;filter:drop-shadow(0 0 18px rgba(0,212,255,.6))}
+  .ok circle{stroke:var(--b);stroke-width:4;fill:none;stroke-dasharray:260;stroke-dashoffset:260}
+  .ok path{stroke:#fff;stroke-width:5;fill:none;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:60;stroke-dashoffset:60}
+  .ok.show circle{animation:draw .7s .1s forwards}.ok.show path{animation:draw .5s .7s forwards}
+  @keyframes draw{to{stroke-dashoffset:0}}
+  .ok h2{margin-top:18px;font-size:24px}.ok p{color:var(--muted);margin-top:8px;font-size:14px}
+  @media(prefers-reduced-motion:reduce){*{animation-duration:.01ms!important;animation-iteration-count:1!important}}
+</style>
+</head>
+<body>
+<div class="aurora"></div><div class="grid"></div>
+<canvas id="net"></canvas>
+
+<div class="stage">
+  <section class="hero">
+    <span class="badge"><i></i> Deep OQ is online</span>
+    <h2>Meet <span class="grad">Deep OQ</span></h2>
+    <p class="type" id="type"></p>
+    <div class="chips">
+      <span class="chip">⚡ Lightning fast</span>
+      <span class="chip">🧠 Deep reasoning</span>
+      <span class="chip">💻 Writes code</span>
+      <span class="chip">🎙 Voice ready</span>
+    </div>
+  </section>
+
+  <div class="wrap">
+    <div class="card" id="card">
+      <h1>Welcome to <span>Deep OQ</span></h1>
+      <p class="sub" id="sub">Sign in to continue to your AI</p>
+
+      <form id="form" novalidate>
+        <div class="field">
+          <svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>
+          <input id="username" type="text" placeholder=" " autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="24"><label for="username">Username</label>
+        </div>
+        <div class="field">
+          <svg class="ic" viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="11" rx="3"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+          <input id="pass" type="password" placeholder=" " autocomplete="current-password"><label for="pass">Password</label>
+          <button type="button" class="eye" id="eye" aria-label="Show password">
+            <svg viewBox="0 0 24 24" id="eyeIc"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+          </button>
+        </div>
+        <div class="field name-field">
+          <svg class="ic" viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="11" rx="3"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+          <input id="confirm" type="password" placeholder=" " autocomplete="new-password"><label for="confirm">Confirm password</label>
+        </div>
+        <div class="meter"><b id="bar"></b></div>
+        <div class="row">
+          <label><input type="checkbox" id="remember"> Remember me</label>
+          <a href="#">Forgot password?</a>
+        </div>
+        <button class="btn" id="go" type="submit"><span class="t" id="goText">Sign in</span><div class="spin"></div></button>
+        <div class="msg" id="msg"></div>
+      </form>
+
+      <p class="switch" id="switch">New here? <a id="toggle">Create an account</a></p>
+
+      <div class="ok" id="ok">
+        <svg viewBox="0 0 100 100"><circle cx="50" cy="50" r="41"/><path d="M30 52 L45 66 L71 36"/></svg>
+        <h2 id="okTitle">Welcome back!</h2><p>Launching Deep OQ…</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ===== Config ===== */
+const AFTER_LOGIN_URL = "/";       // where to go after login
+
+/* ===== Particle network ===== */
+const cv = document.getElementById("net"), cx = cv.getContext("2d");
+let W, H, pts = [], mouse = {x:-999,y:-999};
+function resize(){W = cv.width = innerWidth; H = cv.height = innerHeight;
+  pts = Array.from({length: Math.min(90, Math.floor(W*H/18000))}, () => ({
+    x:Math.random()*W, y:Math.random()*H, vx:(Math.random()-.5)*.5, vy:(Math.random()-.5)*.5}));}
+addEventListener("resize", resize); resize();
+addEventListener("mousemove", e => {mouse.x = e.clientX; mouse.y = e.clientY;});
+(function loop(){
+  cx.clearRect(0,0,W,H);
+  for (const p of pts){
+    p.x += p.vx; p.y += p.vy;
+    if (p.x<0||p.x>W) p.vx*=-1; if (p.y<0||p.y>H) p.vy*=-1;
+    cx.beginPath(); cx.arc(p.x,p.y,1.6,0,6.28); cx.fillStyle="rgba(190,205,255,.85)"; cx.fill();
+  }
+  for (let i=0;i<pts.length;i++){
+    for (let j=i+1;j<pts.length;j++){
+      const d = Math.hypot(pts[i].x-pts[j].x, pts[i].y-pts[j].y);
+      if (d<120){cx.strokeStyle=`rgba(124,160,255,${.25*(1-d/120)})`;cx.beginPath();
+        cx.moveTo(pts[i].x,pts[i].y);cx.lineTo(pts[j].x,pts[j].y);cx.stroke();}
+    }
+    const m = Math.hypot(pts[i].x-mouse.x, pts[i].y-mouse.y);
+    if (m<160){cx.strokeStyle=`rgba(0,212,255,${.5*(1-m/160)})`;cx.beginPath();
+      cx.moveTo(pts[i].x,pts[i].y);cx.lineTo(mouse.x,mouse.y);cx.stroke();}
+  }
+  requestAnimationFrame(loop);
+})();
+
+/* ===== Typewriter ===== */
+const lines = ["Ask anything. Get answers fast.","Solve hard problems step by step.","Write, debug and ship code.","Your own AI, built by you."];
+const tEl = document.getElementById("type");
+let li = 0, ci = 0, del = false;
+(function tick(){
+  const s = lines[li];
+  tEl.textContent = s.slice(0, ci);
+  if (!del && ci < s.length){ci++; return setTimeout(tick, 55);}
+  if (!del){del = true; return setTimeout(tick, 1600);}
+  if (ci > 0){ci--; return setTimeout(tick, 25);}
+  del = false; li = (li+1) % lines.length; setTimeout(tick, 300);
+})();
+
+/* ===== 3D tilt on card ===== */
+const card = document.getElementById("card");
+document.addEventListener("mousemove", e => {
+  const x = (e.clientX/innerWidth - .5), y = (e.clientY/innerHeight - .5);
+  card.style.transform = `rotateY(${x*7}deg) rotateX(${-y*7}deg)`;
+});
+
+/* ===== Form logic ===== */
+const $ = id => document.getElementById(id);
+let signup = false;
+$("switch").addEventListener("click", e => {
+  if (e.target.tagName !== "A") return;
+  signup = !signup;
+  card.classList.toggle("signup", signup);
+  $("goText").textContent = signup ? "Create account" : "Sign in";
+  $("sub").textContent = signup ? "Create an account to save your chats and memory" : "Sign in to continue to your AI";
+  $("pass").autocomplete = signup ? "new-password" : "current-password";
+  $("switch").innerHTML = signup
+    ? 'Already have an account? <a id="toggle">Sign in</a>'
+    : 'New here? <a id="toggle">Create an account</a>';
+  $("msg").textContent = "";
+});
+
+const OPEN = '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>';
+const SHUT = '<path d="M3 3l18 18"/><path d="M10.6 6.1A9.8 9.8 0 0 1 12 6c6 0 10 6 10 6a17 17 0 0 1-3.2 3.9M6.6 7.6A17 17 0 0 0 2 12s4 7 10 7c1.6 0 3-.4 4.3-1"/>';
+$("eye").onclick = () => {
+  const p = $("pass"), show = p.type === "password";
+  p.type = show ? "text" : "password"; $("confirm").type = p.type;
+  $("eyeIc").innerHTML = show ? SHUT : OPEN;
+};
+
+/* password strength bar (sign-up) */
+$("pass").addEventListener("input", () => {
+  const v = $("pass").value; let s = 0;
+  if (v.length >= 8) s++; if (v.length >= 12) s++;
+  if (/[A-Z]/.test(v) && /[a-z]/.test(v)) s++; if (/\d/.test(v) && /[^A-Za-z0-9]/.test(v)) s++;
+  const bar = $("bar");
+  bar.style.width = (v ? Math.max(1, s) * 25 : 0) + "%";
+  bar.style.background = ["#ff5c7a","#ff5c7a","#ffb84d","#9be84d","#33e6a1"][v ? Math.max(1, s) : 0];
+});
+
+function fail(t){ $("msg").textContent = t; card.classList.remove("shake"); void card.offsetWidth; card.classList.add("shake"); }
+
+$("form").addEventListener("submit", async e => {
+  e.preventDefault();
+  const username = $("username").value.trim().toLowerCase(), pass = $("pass").value;
+  if (!/^[a-z0-9_.]{3,24}$/.test(username)) return fail("Username: 3-24 letters, numbers, _ or .");
+  if (pass.length < 8) return fail("Password must be at least 8 characters.");
+  if (signup && pass !== $("confirm").value) return fail("Passwords do not match.");
+  $("msg").textContent = ""; $("go").classList.add("loading");
+  try{
+    const r = await fetch(signup ? "/api/register" : "/api/login", {method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({username, password: pass, remember: $("remember").checked})});
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || "Something went wrong. Try again.");
+    $("okTitle").textContent = (signup ? "Account created, " : "Welcome back, ") + (j.username || username) + "!";
+    $("ok").classList.add("show");
+    setTimeout(() => location.href = AFTER_LOGIN_URL, 1800);
+  } catch(err){ fail(err.message); }
+  finally{ $("go").classList.remove("loading"); }
+});
+</script>
+</body>
+</html>
+"""
 
 
 if __name__ == "__main__":
