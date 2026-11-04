@@ -1058,6 +1058,30 @@ main{overflow-y:auto;scroll-behavior:smooth}
 .send:hover:not(:disabled){transform:scale(1.06)}
 .send:disabled{opacity:.35;cursor:default}
 .hint{margin:7px 6px 0;font-family:var(--ui);font-size:12.5px;color:var(--ink-2)}
+.field{padding-left:8px}
+.plusw{position:relative;flex:none}
+.plus{width:42px;height:42px;border-radius:50%;border:1px solid var(--line);background:transparent;color:var(--ink);cursor:pointer;display:grid;place-items:center}
+.plus:hover{background:rgba(127,130,170,.18)}
+.plus svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:2.2;stroke-linecap:round;transition:transform .15s}
+.plus[aria-expanded=true]{background:rgba(127,130,170,.25)}
+.plus[aria-expanded=true] svg{transform:rotate(45deg)}
+.pmenu{position:absolute;left:0;bottom:calc(100% + 12px);width:min(310px,86vw);background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:6px;box-shadow:0 18px 40px rgba(8,12,40,.28);z-index:30}
+.pmenu[hidden]{display:none}
+.pitem{display:flex;gap:12px;align-items:center;width:100%;text-align:left;border:0;background:none;padding:10px 12px;border-radius:12px;cursor:pointer;font-family:var(--ui)}
+.pitem:hover,.pitem:focus-visible{background:rgba(127,130,170,.18)}
+.pitem svg{flex:none;width:22px;height:22px;stroke:var(--river);fill:none;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+.pitem b{display:block;font-size:15px;font-weight:600}
+.pitem small{display:block;font-size:12.5px;color:var(--ink-2);font-weight:400;margin-top:1px}
+.atts{display:flex;flex-wrap:wrap;gap:8px;margin:0 6px 8px}
+.atts[hidden]{display:none}
+.achip{display:flex;align-items:center;gap:8px;max-width:100%;padding:6px 6px 6px 8px;border:1px solid var(--line);border-radius:14px;background:var(--surface);font-family:var(--ui);font-size:13.5px}
+.achip img{width:38px;height:38px;object-fit:cover;border-radius:9px}
+.achip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:260px}
+.achip button{border:0;background:none;cursor:pointer;font-size:19px;line-height:1;opacity:.7;padding:2px 7px}
+.achip button:hover{opacity:1}
+.genimg{display:block;max-width:min(100%,460px);border-radius:14px;margin:4px 0 10px;background:rgba(127,130,170,.15)}
+.ubox{white-space:pre-wrap}
+.ubox img{display:block;max-width:220px;max-height:200px;border-radius:12px;margin-bottom:6px}
 
 /* knowledge drawer */
 .shade{position:fixed;inset:0;background:var(--shade);opacity:0;visibility:hidden;transition:opacity .25s,visibility .25s}
@@ -1190,7 +1214,30 @@ a.primary{text-decoration:none;display:inline-block}
 
 <form class="composer" id="form">
   <div class="col" style="padding:0">
+    <div class="atts" id="atts" hidden></div>
     <div class="field">
+      <div class="plusw">
+        <button class="plus" id="plus" type="button" aria-label="Add files or create" aria-haspopup="menu" aria-expanded="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
+        <div class="pmenu" id="pmenu" role="menu" hidden>
+          <button class="pitem" type="button" role="menuitem" data-act="ask">
+            <svg viewBox="0 0 24 24"><path d="M21 11.5l-8.6 8.6a5 5 0 0 1-7-7l8.6-8.6a3.4 3.4 0 0 1 4.9 4.9l-8.6 8.6a1.7 1.7 0 0 1-2.4-2.4l7.9-7.9"/></svg>
+            <span><b>Upload to ask a question</b><small>Image, video, PDF or text file</small></span></button>
+          <button class="pitem" type="button" role="menuitem" data-act="photo">
+            <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="1.8"/><path d="m21 16-5-5-8 9"/></svg>
+            <span><b>Edit a photo</b><small>Opens the Photo editor</small></span></button>
+          <button class="pitem" type="button" role="menuitem" data-act="video">
+            <svg viewBox="0 0 24 24"><rect x="3" y="6" width="13" height="12" rx="3"/><path d="m16 10 5-3v10l-5-3z"/></svg>
+            <span><b>Edit a video</b><small>Opens the Video editor</small></span></button>
+          <button class="pitem" type="button" role="menuitem" data-act="image">
+            <svg viewBox="0 0 24 24"><path d="M12 3l1.8 4.7 4.7 1.8-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z"/><path d="M19 15l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z"/></svg>
+            <span><b>Create an image</b><small>Describe it and Deep OQ draws it</small></span></button>
+        </div>
+        <input type="file" id="fq" hidden accept="image/*,video/*,.pdf,.txt,.md,.csv,.tsv,.json,.xml,.yaml,.yml,.log,.html,.css,.js,.ts,.jsx,.tsx,.py,.java,.c,.cpp,.h,.cs,.go,.rs,.rb,.php,.kt,.swift,.sql,.sh,.bat">
+        <input type="file" id="fpe" hidden accept="image/*">
+        <input type="file" id="fve" hidden accept="video/*,.mkv">
+      </div>
       <textarea id="q" rows="1" placeholder="Ask Deep OQ" aria-label="Message" autocomplete="off"></textarea>
       <button class="send" id="send" type="submit" aria-label="Send" disabled>
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
@@ -1447,7 +1494,7 @@ a.primary{text-decoration:none;display:inline-block}
 <script>
 const $=s=>document.querySelector(s);
 const log=$('#log'),scroller=$('#scroll'),box=$('#q'),send=$('#send');
-let sid=uid(),busy=false;
+let sid=uid(),busy=false,att=null,imgMode=false,attBusy=false;
 
 function uid(){return (crypto.randomUUID&&crypto.randomUUID())||String(Date.now())+Math.random()}
 const mark=(s,c='')=>`<svg class="mark ${c}" width="${s}" height="${s}" viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="24" r="15" fill="none" stroke="currentColor" stroke-width="4.5"/><g class="orbit"><circle cx="34.6" cy="34.6" r="4.6" fill="var(--accent)"/></g></svg>`;
@@ -1539,7 +1586,7 @@ async function ask(q){
     bot.lastChild.innerHTML='<div class="body"><p>Could not get an answer.</p><p>'+esc(e.message)+'</p></div><div class="acts"><button type="button" class="mini" data-retry>Try again</button></div>';
     bot.q=q;
   }
-  busy=false;send.disabled=!box.value.trim();toEnd();box.focus();
+  busy=false;send.disabled=!canSend();toEnd();box.focus();
 }
 
 log.addEventListener('click',e=>{
@@ -1554,11 +1601,184 @@ log.addEventListener('click',e=>{
 });
 
 /* composer */
-box.addEventListener('input',()=>{box.style.height='auto';box.style.height=Math.min(box.scrollHeight,200)+'px';send.disabled=busy||!box.value.trim()});
-box.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();ask(box.value)}});
-$('#form').addEventListener('submit',e=>{e.preventDefault();ask(box.value)});
+box.addEventListener('input',()=>{box.style.height='auto';box.style.height=Math.min(box.scrollHeight,200)+'px';send.disabled=!canSend()});
+box.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();submit()}});
+$('#form').addEventListener('submit',e=>{e.preventDefault();submit()});
 document.querySelectorAll('.ideas button').forEach(b=>b.onclick=()=>ask(b.textContent));
 $('#newBtn').onclick=()=>{sid=uid();log.innerHTML='';document.body.classList.remove('chatting');box.focus()};
+
+/* ================= plus menu: attach, edit, create image ================= */
+const canSend=()=>!busy&&!attBusy&&(!!box.value.trim()||!!att);
+const IMG_RE=/^\s*(?:please\s+)?(?:(?:can|could|will)\s+you\s+)?(?:(?:create|generate|make|draw|paint|design|show)\s+(?:me\s+)?(?:an?\s+|the\s+)?(?:image|picture|photo|pic|illustration|drawing|painting|wallpaper|poster|logo)(?=\s*(?:of|showing|with|about|for|that|where|:|,|\.|$))|draw\s+(?:me\s+)?(?:an?\s+|the\s+)(?!(?:table|flowchart|diagram|chart|graph|line|circle|square|box|button|layout|form|ui|canvas|svg|html|css|code|function|program|class|schema|tree|grid)\b))/i;
+const TEXT_EXT=/\.(txt|md|csv|tsv|json|xml|ya?ml|log|html?|css|js|ts|jsx|tsx|py|java|c|cpp|h|cs|go|rs|rb|php|kt|swift|sql|sh|bat)$/i;
+const plusBtn=$('#plus'),pmenu=$('#pmenu');
+function menu(open){pmenu.hidden=!open;plusBtn.setAttribute('aria-expanded',open)}
+plusBtn.onclick=e=>{e.stopPropagation();menu(pmenu.hidden);if(!pmenu.hidden)pmenu.querySelector('.pitem').focus()};
+document.addEventListener('click',e=>{if(!pmenu.hidden&&!e.target.closest('.plusw'))menu(false)});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!pmenu.hidden){menu(false);plusBtn.focus()}});
+pmenu.querySelectorAll('.pitem').forEach(b=>b.onclick=()=>{
+  menu(false);const a=b.dataset.act;
+  if(a==='ask')$('#fq').click();
+  else if(a==='photo')$('#fpe').click();
+  else if(a==='video')$('#fve').click();
+  else{setImgMode(true);box.focus()}
+});
+$('#fpe').onchange=e=>{const f=e.target.files[0];e.target.value='';if(f){showView('photo');loadPhoto(f)}};
+$('#fve').onchange=e=>{const f=e.target.files[0];e.target.value='';if(f){showView('video');loadVideo(f)}};
+$('#fq').onchange=e=>{const f=e.target.files[0];e.target.value='';if(f)attach(f)};
+box.addEventListener('paste',e=>{
+  const f=[...(e.clipboardData?.files||[])].find(x=>x.type.startsWith('image/'));
+  if(f){e.preventDefault();attach(f)}
+});
+
+function renderAtts(note){
+  const el=$('#atts');el.innerHTML='';
+  const chip=(thumb,label,onx)=>{
+    const c=document.createElement('div');c.className='achip';
+    if(thumb){const i=document.createElement('img');i.src=thumb;i.alt='';c.append(i)}
+    const s=document.createElement('span');s.textContent=label;c.append(s);
+    if(onx){const x=document.createElement('button');x.type='button';x.textContent='×';x.setAttribute('aria-label','Remove');x.onclick=onx;c.append(x)}
+    el.append(c);
+  };
+  if(note)chip('',note,null);
+  if(att)chip(att.thumb||'',(att.kind==='video'?'Video: ':att.kind==='doc'?'File: ':'')+att.name,clearAtt);
+  if(imgMode)chip('','Create image: describe it below',()=>setImgMode(false));
+  el.hidden=!el.children.length;
+  box.placeholder=imgMode?'Describe the image you want':att?'Ask something about this file':'Ask Deep OQ';
+  send.disabled=!canSend();
+}
+function clearAtt(){att=null;renderAtts()}
+function setImgMode(v){imgMode=v;if(v)att=null;renderAtts()}
+
+function readText(f){return new Promise((ok,no)=>{const r=new FileReader();r.onload=()=>ok(String(r.result));r.onerror=()=>no(new Error('That file could not be read.'));r.readAsText(f)})}
+function shrinkImage(f){return new Promise((ok,no)=>{
+  const url=URL.createObjectURL(f),img=new Image();
+  img.onload=()=>{
+    const k=Math.min(1,1024/Math.max(img.naturalWidth,img.naturalHeight)),c=document.createElement('canvas');
+    c.width=Math.round(img.naturalWidth*k);c.height=Math.round(img.naturalHeight*k);
+    c.getContext('2d').drawImage(img,0,0,c.width,c.height);URL.revokeObjectURL(url);
+    ok(c.toDataURL('image/jpeg',.85));
+  };
+  img.onerror=()=>{URL.revokeObjectURL(url);no(new Error('That picture could not be opened. Try a JPG or PNG.'))};
+  img.src=url;
+})}
+function videoGrid(f){return new Promise((ok,no)=>{
+  const url=URL.createObjectURL(f),v=document.createElement('video'),msg='This video could not be read in the browser. Try an MP4.';
+  v.muted=true;v.preload='auto';v.playsInline=true;v.src=url;
+  const bad=()=>{clearTimeout(t);URL.revokeObjectURL(url);no(new Error(msg))};
+  const t=setTimeout(bad,25000);v.onerror=bad;
+  v.onloadedmetadata=async()=>{
+    const d=v.duration;if(!isFinite(d)||d<=0||!v.videoWidth)return bad();
+    const tw=512,th=Math.round(tw*v.videoHeight/v.videoWidth),c=document.createElement('canvas');
+    c.width=tw*2;c.height=th*2;const g=c.getContext('2d');
+    try{
+      const ts=[.08,.35,.62,.9];
+      for(let i=0;i<4;i++){
+        await new Promise(r=>{const w=setTimeout(r,4000);v.onseeked=()=>{clearTimeout(w);r()};v.currentTime=Math.min(Math.max(d-.05,0),d*ts[i])});
+        g.drawImage(v,(i%2)*tw,Math.floor(i/2)*th,tw,th);
+      }
+    }catch(e){return bad()}
+    clearTimeout(t);URL.revokeObjectURL(url);ok(c.toDataURL('image/jpeg',.8));
+  };
+})}
+async function attach(f){
+  imgMode=false;att=null;attBusy=true;renderAtts('Reading '+f.name+'...');
+  try{
+    const ext=(f.name.split('.').pop()||'').toLowerCase();
+    if(f.type.startsWith('image/')){
+      const d=await shrinkImage(f);att={kind:'image',name:f.name,data:d,thumb:d};
+    }else if(f.type.startsWith('video/')||ext==='mkv'){
+      if(f.size>300*1048576)throw new Error('That video is over 300 MB. Choose a smaller one.');
+      const d=await videoGrid(f);att={kind:'video',name:f.name,data:d,thumb:d};
+    }else if(ext==='pdf'||f.type==='application/pdf'){
+      if(f.size>20*1048576)throw new Error('That PDF is over 20 MB. Choose a smaller one.');
+      const fd=new FormData();fd.append('file',f);
+      const r=await fetch('/readfile',{method:'POST',headers:{'X-Access-Key':localStorage.ak||''},body:fd});
+      const j=await r.json().catch(()=>({}));
+      if(!r.ok||j.error)throw new Error(j.error||'Could not read this PDF.');
+      att={kind:'doc',name:f.name,text:j.text};
+    }else if(f.type.startsWith('text/')||f.type==='application/json'||TEXT_EXT.test(f.name)){
+      const t=await readText(f);if(!t.trim())throw new Error('That file is empty.');
+      att={kind:'doc',name:f.name,text:t.slice(0,24000)};
+    }else throw new Error('That file type is not supported. Use an image, video, PDF, or a text, code, CSV or JSON file.');
+    attBusy=false;renderAtts();box.focus();
+  }catch(e){
+    attBusy=false;att=null;renderAtts();
+    const el=$('#atts');el.hidden=false;const c=document.createElement('div');c.className='achip';
+    c.innerHTML='<span></span><button type="button" aria-label="Dismiss">×</button>';
+    c.firstChild.textContent=e.message;c.lastChild.onclick=()=>{c.remove();el.hidden=!el.children.length};
+    el.append(c);setTimeout(()=>{c.remove();el.hidden=!el.children.length},9000);
+  }
+}
+
+function addUserRich(text,a){
+  const d=document.createElement('div');d.className='turn user';
+  const b=document.createElement('div');b.className='bubble ubox';
+  if(a&&a.thumb){const i=document.createElement('img');i.src=a.thumb;i.alt='Attached '+a.kind;b.append(i)}
+  else if(a)b.append(document.createTextNode('📄 '+a.name+(text?'\n':'')));
+  if(text)b.append(document.createTextNode(text));
+  d.append(b);log.append(d);return d;
+}
+function botDone(bot,answer){
+  bot.classList.remove('thinking');bot.raw=answer;
+  bot.lastChild.innerHTML='<div class="body">'+md(answer)+'</div><div class="acts"><button type="button" class="mini" data-copy="msg">Copy</button></div>';
+}
+function botFail(bot,e){
+  bot.classList.remove('thinking');bot.classList.add('err');
+  bot.lastChild.innerHTML='<div class="body"><p>Could not do that.</p><p>'+esc(e.message)+'</p></div>';
+}
+function loadPic(url){return new Promise((ok,no)=>{
+  const im=new Image(),t=setTimeout(()=>no(new Error('The picture service took too long. Try again.')),120000);
+  im.className='genimg';im.alt='Generated image';
+  im.onload=()=>{clearTimeout(t);ok(im)};
+  im.onerror=()=>{clearTimeout(t);no(new Error('The picture service did not answer. Try again in a moment.'))};
+  im.src=url;
+})}
+async function makeImage(bot,prompt){
+  const w=bot.querySelector('.wait');if(w)w.textContent='Creating your image';
+  const r=await api('/lab',{mod:'image',text:prompt}),j=await r.json().catch(()=>({}));
+  if(r.status===401)throw new Error('That access key was not accepted. Reload the page and enter it again.');
+  if(!r.ok||j.error)throw new Error(j.error||'The server did not answer.');
+  const im=await loadPic(j.image);
+  bot.classList.remove('thinking');
+  bot.lastChild.innerHTML='<div class="body"><div id="gi"></div><p class="muted"></p></div><div class="acts"><a class="mini" target="_blank" rel="noopener" style="text-decoration:none">Open full size</a></div>';
+  bot.lastChild.querySelector('#gi').replaceWith(im);
+  bot.lastChild.querySelector('.muted').textContent=j.answer||'';
+  bot.lastChild.querySelector('a').href=j.image;
+}
+async function askExtra(q,a,mode){
+  if(busy)return;
+  busy=true;send.disabled=true;document.body.classList.add('chatting');
+  box.value='';box.style.height='auto';
+  addUserRich(q,a);
+  if(a||mode){att=null;imgMode=false;renderAtts()}
+  const bot=addBot();toEnd();
+  try{
+    if(mode){await makeImage(bot,q)}
+    else if(a.kind==='doc'){
+      const r=await api('/askfile',{q,name:a.name,text:a.text,session:sid}),j=await r.json().catch(()=>({}));
+      if(r.status===401)throw new Error('That access key was not accepted. Reload the page and enter it again.');
+      if(!r.ok||j.error)throw new Error(j.error||'The server did not answer.');
+      botDone(bot,j.answer);
+    }else{
+      const lead=a.kind==='video'?'These four pictures are frames taken in order (left to right, top to bottom) from one video. ':'';
+      const r=await api('/lab',{mod:'vision',text:lead+(q||'Describe this '+(a.kind==='video'?'video':'photo')+' in detail.'),image:a.data}),j=await r.json().catch(()=>({}));
+      if(r.status===401)throw new Error('That access key was not accepted. Reload the page and enter it again.');
+      if(!r.ok||j.error)throw new Error(j.error||'The server did not answer.');
+      botDone(bot,(a.kind==='video'?'*I looked at four frames from your video. I cannot hear its sound.*\n\n':'')+j.answer);
+    }
+  }catch(e){botFail(bot,e)}
+  busy=false;send.disabled=!canSend();toEnd();box.focus();
+}
+function submit(){
+  const q=box.value.trim();
+  if(busy||attBusy)return;
+  if(att)return askExtra(q,att,false);
+  if(imgMode){if(!q)return;return askExtra(q,null,true)}
+  if(!q)return;
+  if(IMG_RE.test(q))return askExtra(q,null,true);
+  ask(q);
+}
 
 /* knowledge drawer */
 const kt=$('#kt'),teachBtn=$('#teach'),ks=$('#kstatus');
@@ -2921,6 +3141,54 @@ def video_route():
     if denied():
         return jsonify(error="locked"), 401
     return _video()
+
+
+@app.post("/askfile")
+def askfile_route():
+    if denied():
+        return jsonify(error="locked"), 401
+    d = request.get_json(silent=True) or {}
+    q = str(d.get("q", "")).strip()[:2000] or "Summarize this file and list the key points."
+    name = re.sub(r"[\r\n]+", " ", str(d.get("name", "file")))[:120]
+    text = str(d.get("text", ""))[:24000]
+    if not text.strip():
+        return jsonify(error="That file has no readable text."), 400
+    sess = (login_session.get("user") or "guest") + ":" + str(d.get("session") or "default")
+    try:
+        today = datetime.date.today().strftime("%A, %d %B %Y")
+        msgs = ([{"role": "system", "content": SYSTEM + f" Today's date is {today}. The user attached a file. "
+                  "Answer from its content and say so if the answer is not in it. For code files, explain, "
+                  "fix or improve the code as asked."}]
+                + kb_load_history(sess, 6)
+                + [{"role": "user", "content": f"FILE NAME: {name}\n----- FILE START -----\n{text}\n"
+                    f"----- FILE END -----\n\nQUESTION:\n{q}"}])
+        answer = chat(msgs, 0.3, 2048)
+        kb_save_msg(sess, "user", f"[attached file: {name}] {q}")
+        kb_save_msg(sess, "assistant", answer)
+    except Exception as e:
+        print("askfile failed:", e)
+        return jsonify(error=str(e)[:300]), 500
+    return jsonify(answer=answer)
+
+
+@app.post("/readfile")
+def readfile_route():
+    if denied():
+        return jsonify(error="locked"), 401
+    f = request.files.get("file")
+    if not f:
+        return jsonify(error="Choose a file first."), 400
+    try:
+        from pypdf import PdfReader
+        text = "\n".join((pg.extract_text() or "") for pg in PdfReader(f.stream).pages).strip()
+    except ImportError:
+        return jsonify(error="PDF reading is not installed on the server (pip install pypdf)."), 500
+    except Exception as e:
+        print("readfile failed:", e)
+        return jsonify(error="Could not read this PDF. It may be damaged or password protected."), 400
+    if not text:
+        return jsonify(error="This PDF has no readable text. It may be a scanned picture."), 400
+    return jsonify(name=f.filename or "file.pdf", text=text[:30000])
 
 
 @app.errorhandler(413)
