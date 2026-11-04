@@ -4,9 +4,16 @@ Made for Mayank Kumar Saw. Everything is in this single file.
 
 WHAT IT DOES
   Chat   knowledge database + exact calculator/counter + live web search + plan/solve/verify
-  Code   write, fix, explain, convert, review code in 16 languages (HTML and JavaScript can run)
+  Code   write, fix, explain, convert, review code in 19 languages (HTML and JavaScript can run)
   Photo  photo editor that runs in the browser (looks, sliders, rotate, crop, caption, download)
   Video  trim, speed, resize, rotate, looks, MP4 / GIF / MP3 output (needs ffmpeg, see below)
+  Image  make pictures from a description
+  Data   open a CSV: summary, charts, AI analysis
+  Music  compose a piece, play it, download MIDI
+  Work   emails, summaries, meeting actions, reports, SQL, video scripts
+  Farm   water-need calculator, crop plans, plant problems
+  Planet 7-day weather warnings, home energy and solar, carbon footprint
+  About  profile page (details live in mayank_profile.py)
 
 RUN ON YOUR COMPUTER
   pip install flask groq gunicorn pypdf ddgs imageio-ffmpeg
@@ -34,10 +41,20 @@ import subprocess
 import sys
 import tempfile
 import threading
+import urllib.parse
+import urllib.request
 import uuid
+from html import escape as _esc
 
 from flask import Flask, jsonify, request, send_file
 from groq import Groq
+
+
+def _friendly(e):
+    """What users see when something fails. The real error stays in the server log only,
+    so no model, provider or setup details ever reach the screen."""
+    print("request failed:", repr(e)[:400])
+    return "Deep OQ could not answer right now. Please try again in a moment."
 
 
 # ==========================================================================
@@ -268,7 +285,8 @@ CODE_RULES = {
                "improved version in ONE fenced code block."),
 }
 LANGS = {"Python", "JavaScript", "TypeScript", "Java", "C++", "C", "C#", "Go", "Rust", "PHP",
-         "Kotlin", "Swift", "SQL", "HTML/CSS", "Bash", "Dart"}
+         "Kotlin", "Swift", "SQL", "HTML/CSS", "Bash", "Dart", "Arduino (C++)",
+         "MicroPython", "ROS 2 (Python)"}
 
 
 def _code():
@@ -300,7 +318,7 @@ def _code():
         return jsonify(answer=chat(msgs, 0.2, 4096, smart=True))
     except Exception as e:
         print("code failed:", e)
-        return jsonify(error=str(e)[:300]), 500
+        return jsonify(error=_friendly(e)), 500
 
 
 # ---------------------------------------------------------------- video
@@ -448,6 +466,69 @@ ACCESS_KEY = os.environ.get("ACCESS_KEY", "")  # set on Render to lock the site
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = (MAX_UPLOAD_MB + 2) * 1024 * 1024
 
+# ---- About Mayank Kumar Saw: the details live in the separate file mayank_profile.py
+try:
+    from mayank_profile import PROFILE
+except ImportError:  # the app still runs without that file, with a bare profile
+    PROFILE = {"name": "Mayank Kumar Saw", "role": "Founder and developer of Deep OQ"}
+
+
+def _profile_text():
+    p = PROFILE
+    out = [f"{p.get('name', '')} is the {str(p.get('role', '')).lower()}. {p.get('about', '')}".strip()]
+    for e in p.get("education", []):
+        bits = [e.get("level", ""), e.get("field", ""), e.get("place", ""), e.get("years", "")]
+        line = ", ".join(b for b in bits if b)
+        if e.get("note"):
+            line += (" - " if line else "") + e["note"]
+        if line:
+            out.append("Education: " + line)
+    for k in p.get("skills", []):
+        out.append(f"Skills ({k.get('group', '')}): {k.get('items', '')}")
+    out += [f"Project {x['name']}: {x['text']}" for x in p.get("projects", [])]
+    if p.get("interests"):
+        out.append("Interests: " + p["interests"])
+    out += ["Goal: " + g for g in p.get("goals", [])]
+    return "\n".join(out)
+
+
+def _profile_html():
+    p = PROFILE
+    name = p.get("name", "")
+    initials = "".join(w[0] for w in name.split()[:3]).upper()
+
+    def section(title, body):
+        return f'<h3 class="ab-h">{title}</h3>{body}' if body else ""
+
+    def rows(pairs):
+        items = "".join(f"<li><b>{_esc(a)}</b>" + (f"<span>{_esc(b)}</span>" if b else "") + "</li>"
+                        for a, b in pairs)
+        return f'<ul class="projects">{items}</ul>' if items else ""
+
+    edu = []
+    for e in p.get("education", []):
+        title = " - ".join(x for x in (e.get("level", ""), e.get("field", "")) if x)
+        detail = " · ".join(x for x in (e.get("place", ""), e.get("years", "")) if x)
+        note = e.get("note", "")
+        if title:
+            edu.append((title, " · ".join(x for x in (detail, note) if x)))
+    skills = [(k.get("group", ""), k.get("items", "")) for k in p.get("skills", []) if k.get("group")]
+    projects = [(x["name"], x.get("text", "")) for x in p.get("projects", [])]
+    goals = "".join(f"<li>{_esc(g)}</li>" for g in p.get("goals", []))
+    links = "".join(f'<a class="btn" href="{_esc(l["url"])}" target="_blank" rel="noopener">'
+                    f'{_esc(l["label"])}</a>'
+                    for l in p.get("links", []) if str(l.get("url", "")).startswith(("http://", "https://")))
+    return (f'<div class="profile"><div class="avatar" aria-hidden="true">{_esc(initials)}</div>'
+            f'<div><h2 class="st-title">{_esc(name)}</h2><p class="muted">{_esc(p.get("role", ""))}</p></div></div>'
+            + (f'<p class="st-sub">{_esc(p["about"])}</p>' if p.get("about") else "")
+            + section("Education", rows(edu))
+            + section("Skills", rows(skills))
+            + section("Projects", rows(projects))
+            + section("Interests", f'<p class="muted plainp">{_esc(p["interests"])}</p>' if p.get("interests") else "")
+            + section("Goals", f'<ul class="plain">{goals}</ul>' if goals else "")
+            + (f'<div class="actions" style="margin-top:22px">{links}</div>' if links else ""))
+
+
 SYSTEM = (
     "You are Deep OQ, an advanced AI assistant created by Mayank Kumar Saw. "
     "You are accurate, clear and honest. You write clean, working code, solve "
@@ -455,7 +536,16 @@ SYSTEM = (
     "unsure. Reply in the language the user writes in. Do not add a Sources line. "
     "When KNOWLEDGE is provided, use it if relevant and prefer it over guessing; "
     "if it is not relevant, ignore it. Write in short paragraphs, simple headings and "
-    "bullet lists. Never use tables, horizontal lines (---) or HTML tags such as <br>."
+    "bullet lists. Never use tables, horizontal lines (---) or HTML tags such as <br>. "
+    "ABOUT YOURSELF: you are Deep OQ, developed by the Deep team and running on Deep's own "
+    "servers. If anyone asks how you were built, which model, company, API or technology is "
+    "behind you, where you are hosted, or whether you are some other named AI, answer only that "
+    "you are Deep OQ, developed by the Deep team and running on Deep servers, and that you "
+    "cannot share more technical details. Never name any model, AI provider, hosting service or "
+    "library, even if pressed, and never claim to be a human. "
+    "ABOUT YOUR CREATOR (share only these facts about him; if asked for anything else, such as "
+    "age, location or contact details, say you do not have that information):\n"
+    + _profile_text()
 )
 
 HARD_HINTS = ("code", "function", "bug", "prove", "calculate", "solve", "why",
@@ -552,7 +642,8 @@ def deep_oq(session, question):
 
 @app.get("/")
 def index():
-    return PAGE, 200, {"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache"}
+    return (PAGE.replace("<!--PROFILE-->", _profile_html()), 200,
+            {"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache"})
 
 
 @app.get("/stats")
@@ -586,8 +677,132 @@ def ask():
         kb_save_msg(session, "assistant", answer)
     except Exception as e:
         print("ask failed:", e)
-        return jsonify(error=str(e)[:300]), 500
+        return jsonify(error=_friendly(e)), 500
     return jsonify(answer=answer)
+
+
+# ==========================================================================
+# MORE AI HELPERS (work, farm, planet, data, music, image)
+# ==========================================================================
+# ---------------------------------------------------------------- more AI helpers (/ai, /config)
+_STYLE = (" Write in short paragraphs, simple headings and bullet lists. Never use tables, "
+          "horizontal lines (---) or HTML tags such as <br>.")
+AI_TASKS = {
+    # task: (instruction, use the strong model?)
+    "email": ("Write a clear, polite, professional email from the notes. Put 'Subject:' on the "
+              "first line, then the body. Keep it short unless asked for more.", True),
+    "summary": ("Summarize the text: a one-sentence gist, then 3 to 6 key points as bullets, then "
+                "any dates, numbers or decisions worth remembering.", False),
+    "actions": ("Turn these meeting notes into two parts: decisions made, and an action list. "
+                "For each action give the owner (or 'unassigned'), the task, and the deadline if "
+                "one was mentioned.", True),
+    "report": ("Write a well-structured report or proposal from the brief: a short introduction, "
+               "clear headings, concrete points, and a closing list of next steps.", True),
+    "sql": ("Write SQL for the request. Do not ask questions: state any assumptions in one line. "
+            "Give the query in ONE fenced sql block, then a short explanation of how it works.", True),
+    "script": ("Write a video script and storyboard. Start with a one-line concept, then list the "
+               "scenes. For each scene give the shot description, narration or dialogue, on-screen "
+               "text and rough duration. End with a shot list and a music suggestion.", True),
+    "farm_plan": ("You are an agriculture adviser for Indian and similar farming conditions. Give a "
+                  "practical crop plan: land preparation, sowing time and method, seed rate, "
+                  "fertilizer schedule, irrigation timing, pests and diseases to watch, harvest time "
+                  "and a realistic yield range. End by saying to check the plan with the nearest "
+                  "Krishi Vigyan Kendra or local agriculture officer.", True),
+    "farm_problem": ("You are an agriculture adviser. From the description, list the likely causes "
+                     "ranked from most to least likely, how to confirm each one, what to do now "
+                     "(organic first, then chemical options; tell the farmer to follow the product "
+                     "label for doses), and how to prevent it. Say clearly that this is a guess "
+                     "from a description and a local agriculture officer or lab should confirm it.", True),
+    "data": ("You are a careful data analyst. You get a summary of a dataset and optionally a "
+             "question. Give the key findings, anything that looks unusual, data quality problems, "
+             "and 3 useful analyses or charts to try next. Use only numbers present in the summary. "
+             "Never invent values.", True),
+    "planet_warning": ("You get a short list of weather warnings for a place. Explain in plain "
+                       "words what they mean and give practical steps for people, farms and homes "
+                       "for each warning. Be calm and specific. If there are no warnings, say so "
+                       "and give one useful tip.", False),
+    "planet_energy": ("You get a home's electricity use and solar numbers. Give a practical savings "
+                      "plan: the biggest savings first, with rough effect on the bill, plus tips for "
+                      "the solar setup. Use only the numbers given.", False),
+    "planet_carbon": ("You get a person's yearly carbon footprint breakdown. Give a realistic plan "
+                      "to cut it: the three biggest actions first, with the rough saving of each "
+                      "based on the numbers given.", False),
+    "image_prompt": ("Rewrite the idea as ONE detailed image-generation prompt covering subject, "
+                     "setting, lighting, style and mood, in under 60 words. Output only the prompt.", False),
+    "music_params": ("Turn the description into settings for a music composer. Reply with ONLY a "
+                     "JSON object like {\"mood\":\"happy\",\"key\":\"C\",\"tempo\":120,\"bars\":16,"
+                     "\"sound\":\"piano\",\"drums\":true}. mood is one of happy, calm, sad, epic, "
+                     "mysterious, playful. key is one of C, C#, D, D#, E, F, F#, G, G#, A, A#, B. "
+                     "tempo is 60 to 180. bars is 8, 16 or 32. sound is one of piano, pad, chip, "
+                     "strings. drums is true or false.", False),
+}
+IMAGE_URL = os.environ.get(
+    "DEEP_OQ_IMAGE_URL",
+    "https://image.pollinations.ai/prompt/{prompt}?width={w}&height={h}&seed={seed}&nologo=true")
+
+
+@app.post("/ai")
+def ai_route():
+    if denied():
+        return jsonify(error="locked"), 401
+    d = request.get_json(silent=True) or {}
+    task = d.get("task")
+    text = str(d.get("text", "")).strip()[:12000]
+    extra = str(d.get("extra", "")).strip()[:2000]
+    if task not in AI_TASKS:
+        return jsonify(error="Unknown task."), 400
+    if not text:
+        return jsonify(error="Add some text first."), 400
+    instruction, smart = AI_TASKS[task]
+    user = text + (("\n\nExtra instructions:\n" + extra) if extra else "")
+    msgs = [{"role": "system", "content": "You are Deep OQ, an expert assistant created by Mayank "
+             "Kumar Saw. " + instruction + _STYLE},
+            {"role": "user", "content": user}]
+    try:
+        return jsonify(answer=chat(msgs, 0.3, 3072, smart=smart))
+    except Exception as e:
+        print("ai failed:", e)
+        return jsonify(error=_friendly(e)), 500
+
+
+_image_slots = threading.Semaphore(2)
+IMAGE_SIZES = {(1024, 1024), (1344, 768), (768, 1344)}
+
+
+@app.post("/image")
+def image_route():
+    """Makes a picture from a description. The request goes through this server so the
+    browser never sees which image service is used."""
+    if denied():
+        return jsonify(error="locked"), 401
+    d = request.get_json(silent=True) or {}
+    prompt = str(d.get("prompt", "")).strip()[:900]
+    try:
+        w, h, seed = int(d.get("w", 1024)), int(d.get("h", 1024)), int(d.get("seed", 1)) % 10_000_000
+    except (TypeError, ValueError):
+        return jsonify(error="Check the picture settings."), 400
+    if not prompt:
+        return jsonify(error="Describe the picture first."), 400
+    if (w, h) not in IMAGE_SIZES:
+        return jsonify(error="Pick one of the listed shapes."), 400
+    if not _image_slots.acquire(blocking=False):
+        return jsonify(error="Deep OQ is busy making other pictures. Try again in a moment."), 503
+    try:
+        url = (IMAGE_URL.replace("{prompt}", urllib.parse.quote(prompt)).replace("{w}", str(w))
+               .replace("{h}", str(h)).replace("{seed}", str(seed)))
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; DeepOQ)"})
+        with urllib.request.urlopen(req, timeout=100) as r:
+            ctype = r.headers.get("Content-Type", "")
+            data = r.read(8 * 1024 * 1024 + 1)
+        if not ctype.startswith("image/") or not data or len(data) > 8 * 1024 * 1024:
+            raise ValueError("not an image")
+        return app.response_class(data, mimetype=ctype.split(";")[0])
+    except Exception as e:
+        print("image failed:", repr(e)[:300])
+        return jsonify(error="Could not make the picture right now. Try again in a minute."), 502
+    finally:
+        _image_slots.release()
+
 
 # ==========================================================================
 # THE PAGE (HTML, CSS and JavaScript)
@@ -737,7 +952,7 @@ body:not([data-view=chat]) #chatTools{display:none}
 .view{display:none;position:absolute;inset:0;min-height:0}
 #v-chat.on{display:grid;grid-template-rows:minmax(0,1fr) auto}
 .studio.on{display:block;overflow-y:auto}
-@media (max-width:720px){.tabs{order:3;width:100%;margin:0;justify-content:space-between}.tab{flex:1;padding:7px 6px}}
+@media (max-width:1240px){.tabs{order:3;width:100%;margin:0;justify-content:flex-start}}
 
 /* studios */
 .wrap{max-width:1180px;margin:0 auto;padding:4px clamp(16px,3vw,28px) 56px}
@@ -790,6 +1005,58 @@ a.primary{text-decoration:none;display:inline-block}
 .preview{width:100%;height:340px;border:1px solid var(--line);border-radius:12px;background:#fff}
 .consoleout{font-family:var(--mono);font-size:13.5px;line-height:1.5;background:var(--code-bg);color:var(--code-ink);border-radius:12px;padding:12px;white-space:pre-wrap;min-height:44px;margin:0;overflow-x:auto}
 .note{font-family:var(--ui);font-size:14px;color:var(--err);margin:0}
+.profile{display:flex;align-items:center;gap:20px;margin:18px 0 16px}
+.profile .st-title{margin:0}
+.profile .muted{margin-top:4px;font-size:17px}
+.avatar{flex:none;width:84px;height:84px;border-radius:50%;background:var(--ink);color:var(--bg);display:grid;place-items:center;
+  font-family:var(--ui);font-weight:700;font-size:27px;letter-spacing:-.02em;position:relative}
+.avatar::after{content:"";position:absolute;right:3px;bottom:5px;width:17px;height:17px;border-radius:50%;background:var(--accent);border:3px solid var(--bg)}
+.ab-h{font-family:var(--ui);font-size:19px;letter-spacing:-.015em;margin:26px 0 12px}
+.projects{list-style:none;margin:0;padding:0;display:grid;gap:14px;max-width:62ch}
+.projects li{display:grid;gap:2px}
+.projects b{font-family:var(--ui);font-size:17px;font-weight:600}
+.projects span{color:var(--ink-2);font-size:17px;line-height:1.5}
+.plain{margin:0;padding-left:1.2em;display:grid;gap:8px;max-width:62ch;color:var(--ink-2);font-size:17px;line-height:1.5}
+.plainp{max-width:62ch;font-size:17px;line-height:1.5}
+.tabs{overflow-x:auto;scrollbar-width:none;max-width:100%}
+.tabs::-webkit-scrollbar{display:none}
+body>*{min-width:0;max-width:100vw}
+.top{min-width:0;max-width:100%}
+.tabs{min-width:0;flex:0 1 auto}
+.tab{flex:none;white-space:nowrap}
+.row3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+@media (max-width:560px){.row3{grid-template-columns:minmax(0,1fr)}}
+.cardbox{border:1px solid var(--line);border-radius:16px;background:var(--surface);padding:16px;display:grid;gap:12px;min-width:0}
+.kv{display:grid;grid-template-columns:1fr auto;gap:8px 18px;font-family:var(--ui);font-size:15px;margin:0}
+.kv dt{color:var(--ink-2)}
+.kv dd{margin:0;text-align:right;font-weight:600;font-variant-numeric:tabular-nums}
+.big{font-family:var(--ui);font-weight:700;font-size:36px;letter-spacing:-.03em;line-height:1.1}
+.sub2{font-family:var(--ui);font-size:14px;color:var(--ink-2);margin:0;line-height:1.5}
+.days{display:grid;grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:10px}
+.day{border:1px solid var(--line);border-radius:14px;padding:10px 12px;background:var(--surface);font-family:var(--ui);font-size:14px;line-height:1.55}
+.day b{display:block;font-size:15px;font-weight:600}
+.alerts{display:grid;gap:8px}
+.alert{border-radius:12px;padding:10px 14px;font-family:var(--ui);font-size:15px;line-height:1.45}
+.alert.warn{background:rgba(242,160,46,.22)}
+.alert.severe{background:rgba(209,61,40,.24)}
+.alert.ok{background:rgba(35,121,126,.18)}
+.apps{display:grid;gap:8px}
+.approw{display:grid;grid-template-columns:minmax(0,1.5fr) 70px 46px 52px 34px;gap:6px;align-items:center}
+.approw .in{padding:8px 9px;font-size:14px}
+.approw .x{border:0;background:none;cursor:pointer;font-size:20px;color:var(--ink-2);border-radius:8px}
+.approw .x:hover{background:var(--surface)}
+.apphead{display:grid;grid-template-columns:minmax(0,1.5fr) 70px 46px 52px 34px;gap:6px;font-family:var(--ui);font-size:12.5px;color:var(--ink-2)}
+canvas.chart{width:100%;height:320px;display:block;border:1px solid var(--line);border-radius:14px;background:var(--surface)}
+.tbls{overflow:auto;max-height:340px;border:1px solid var(--line);border-radius:12px;background:var(--surface)}
+.tbls table{border-collapse:collapse;width:100%;font-family:var(--ui);font-size:14px}
+.tbls th{position:sticky;top:0;text-align:left;font-weight:600;padding:8px 12px;background:var(--bg)}
+.tbls td{padding:7px 12px;vertical-align:top}
+.tbls tr:nth-child(even) td{background:rgba(127,130,170,.08)}
+.bars{display:grid;gap:8px}
+.bar{display:grid;grid-template-columns:110px minmax(0,1fr) 64px;gap:10px;align-items:center;font-family:var(--ui);font-size:14px}
+.bar i{display:block;height:12px;border-radius:6px;background:var(--river)}
+.bar span:last-child{text-align:right;font-variant-numeric:tabular-nums}
+canvas.roll{width:100%;height:230px;display:block}
 .tbl{overflow-x:auto;margin:0 0 1em;border-radius:12px}
 .body table{border-collapse:collapse;width:100%;font-family:var(--ui);font-size:15px;line-height:1.5}
 .body th{text-align:left;font-weight:600;padding:9px 14px;background:rgba(127,130,170,.2)}
@@ -806,6 +1073,13 @@ a.primary{text-decoration:none;display:inline-block}
     <button class="tab" type="button" data-view="code">Code</button>
     <button class="tab" type="button" data-view="photo">Photo</button>
     <button class="tab" type="button" data-view="video">Video</button>
+    <button class="tab" type="button" data-view="image">Image</button>
+    <button class="tab" type="button" data-view="data">Data</button>
+    <button class="tab" type="button" data-view="music">Music</button>
+    <button class="tab" type="button" data-view="work">Work</button>
+    <button class="tab" type="button" data-view="farm">Farm</button>
+    <button class="tab" type="button" data-view="planet">Planet</button>
+    <button class="tab" type="button" data-view="about">About</button>
   </nav>
   <div class="tools" id="chatTools">
     <button class="btn" id="kbBtn" type="button" aria-haspopup="dialog">Knowledge <span class="badge" id="count">0</span></button>
@@ -848,7 +1122,7 @@ a.primary{text-decoration:none;display:inline-block}
 <section class="view studio" id="v-code">
   <div class="wrap">
     <h2 class="st-title">Code</h2>
-    <p class="st-sub">Write, fix, explain, convert or review code in 16 languages. Choose what you need, then press the button.</p>
+    <p class="st-sub">Write, fix, explain, convert or review code in 19 languages. Choose what you need, then press the button.</p>
     <div class="grid2 even">
       <div class="panel">
         <div class="seg" id="cmodes" role="group" aria-label="What to do">
@@ -859,9 +1133,10 @@ a.primary{text-decoration:none;display:inline-block}
           <button type="button" data-m="review" aria-pressed="false">Review</button>
         </div>
         <div class="row2">
-          <label class="lab">Language<select class="in" id="clang"><option>Python</option><option>JavaScript</option><option>TypeScript</option><option>Java</option><option>C++</option><option>C</option><option>C#</option><option>Go</option><option>Rust</option><option>PHP</option><option>Kotlin</option><option>Swift</option><option>SQL</option><option>HTML/CSS</option><option>Bash</option><option>Dart</option></select></label>
-          <label class="lab" id="ctgtWrap" hidden>Convert to<select class="in" id="ctgt"><option>Python</option><option>JavaScript</option><option>TypeScript</option><option>Java</option><option>C++</option><option>C</option><option>C#</option><option>Go</option><option>Rust</option><option>PHP</option><option>Kotlin</option><option>Swift</option><option>SQL</option><option>HTML/CSS</option><option>Bash</option><option>Dart</option></select></label>
+          <label class="lab">Language<select class="in" id="clang"><option>Python</option><option>JavaScript</option><option>TypeScript</option><option>Java</option><option>C++</option><option>C</option><option>C#</option><option>Go</option><option>Rust</option><option>PHP</option><option>Kotlin</option><option>Swift</option><option>SQL</option><option>HTML/CSS</option><option>Bash</option><option>Dart</option><option>Arduino (C++)</option><option>MicroPython</option><option>ROS 2 (Python)</option></select></label>
+          <label class="lab" id="ctgtWrap" hidden>Convert to<select class="in" id="ctgt"><option>Python</option><option>JavaScript</option><option>TypeScript</option><option>Java</option><option>C++</option><option>C</option><option>C#</option><option>Go</option><option>Rust</option><option>PHP</option><option>Kotlin</option><option>Swift</option><option>SQL</option><option>HTML/CSS</option><option>Bash</option><option>Dart</option><option>Arduino (C++)</option><option>MicroPython</option><option>ROS 2 (Python)</option></select></label>
         </div>
+        <div class="grp"><h3>Robotics starters</h3><div class="seg" id="crobo"></div></div>
         <label class="lab"><span id="ctaskL">What should the code do?</span>
           <textarea class="in" id="ctask" rows="3" placeholder="A function that checks if a number is prime"></textarea></label>
         <label class="lab"><span id="ccodeL">Starting code (optional)</span>
@@ -985,6 +1260,238 @@ a.primary{text-decoration:none;display:inline-block}
       </div>
     </div>
   </div>
+</section>
+
+<section class="view studio" id="v-image">
+  <div class="wrap">
+    <h2 class="st-title">Image</h2>
+    <p class="st-sub">Describe a picture and Deep OQ makes it. A picture can take 10 to 40 seconds.</p>
+    <div class="grid2 rev">
+      <div class="stage" id="istage">
+        <div class="drop" id="idrop" style="cursor:default"><strong>Your picture appears here</strong><span>Describe it, then press Create image.</span></div>
+        <img id="i-img" alt="The picture Deep OQ made" hidden>
+      </div>
+      <div class="panel">
+        <label class="lab">Describe the picture
+          <textarea class="in" id="i-prompt" rows="4" placeholder="A tiger resting under a banyan tree at sunrise"></textarea></label>
+        <div><button class="btn" id="i-better" type="button">Improve my description</button></div>
+        <div class="grp"><h3>Style</h3>
+          <div class="seg" id="istyles">
+            <button type="button" data-s="photo" aria-pressed="true">Photo</button>
+            <button type="button" data-s="art" aria-pressed="false">Illustration</button>
+            <button type="button" data-s="three" aria-pressed="false">3D</button>
+            <button type="button" data-s="anime" aria-pressed="false">Anime</button>
+            <button type="button" data-s="water" aria-pressed="false">Watercolour</button>
+            <button type="button" data-s="logo" aria-pressed="false">Logo</button>
+            <button type="button" data-s="none" aria-pressed="false">None</button>
+          </div></div>
+        <label class="lab">Shape<select class="in" id="i-size"><option value="1024x1024">Square</option><option value="1344x768">Wide</option><option value="768x1344">Tall</option></select></label>
+        <div class="actions"><button class="primary" id="i-go" type="button">Create image</button>
+          <button class="btn" id="i-again" type="button" disabled>New variation</button>
+          <button class="btn" id="i-dl" type="button" disabled>Download</button></div>
+        <div class="status" id="istatus" role="status"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="view studio" id="v-data">
+  <div class="wrap">
+    <h2 class="st-title">Data</h2>
+    <p class="st-sub">Open a CSV file to see a summary, draw charts and ask questions about it. The file is read in your browser. Only a short summary is sent when you ask for analysis.</p>
+    <div class="stage" id="dstage" style="min-height:170px">
+      <label class="drop"><input type="file" id="dfile" accept=".csv,.tsv,.txt,text/csv" hidden><strong>Choose a CSV file</strong><span>or drop one here. Up to 8 MB.</span></label>
+    </div>
+    <p class="note" id="dnote" hidden></p>
+    <div id="dwork" hidden>
+      <p class="muted" id="dinfo" style="margin-top:14px"></p>
+      <h3 class="ab-h">Columns</h3>
+      <div class="tbls"><table id="dsum"></table></div>
+      <h3 class="ab-h">Chart</h3>
+      <div class="seg" id="dkind" style="margin-bottom:12px">
+        <button type="button" data-k="bar" aria-pressed="true">Bar</button>
+        <button type="button" data-k="hist" aria-pressed="false">Histogram</button>
+        <button type="button" data-k="line" aria-pressed="false">Line</button>
+      </div>
+      <div class="row3" style="margin-bottom:12px">
+        <label class="lab" id="dxw">Group by<select class="in" id="d-x"></select></label>
+        <label class="lab">Number column<select class="in" id="d-y"></select></label>
+        <label class="lab" id="daggw">Combine with<select class="in" id="d-agg"><option value="sum">Sum</option><option value="avg">Average</option><option value="count">Count of rows</option></select></label>
+      </div>
+      <canvas class="chart" id="dchart" role="img" aria-label="Chart of your data"></canvas>
+      <h3 class="ab-h">Ask about this data</h3>
+      <div class="panel" style="max-width:720px">
+        <textarea class="in" id="d-q" rows="2" placeholder="Which region sells the most? Leave this empty for an overview."></textarea>
+        <div><button class="primary" id="d-go" type="button">Analyse</button></div>
+        <div class="outpane" id="d-out" style="min-height:90px" aria-live="polite"><p class="muted">The analysis appears here.</p></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="view studio" id="v-music">
+  <div class="wrap">
+    <h2 class="st-title">Music</h2>
+    <p class="st-sub">Deep OQ composes a short piece with a melody, chords, bass and drums. Play it here, or download it as a MIDI file for any music app.</p>
+    <div class="grid2 rev">
+      <div class="stagecol">
+        <div class="stage" style="min-height:0;padding:14px"><canvas class="roll" id="m-roll" role="img" aria-label="Notes of the piece"></canvas></div>
+        <div class="actions"><button class="primary" id="m-play" type="button">Play</button>
+          <button class="btn" id="m-new" type="button">Compose a new piece</button>
+          <button class="btn" id="m-dl" type="button">Download MIDI</button></div>
+        <div class="status" id="m-status" role="status"></div>
+      </div>
+      <div class="panel">
+        <label class="lab">Describe the music
+          <textarea class="in" id="m-desc" rows="2" placeholder="A calm, rainy evening in the mountains"></textarea></label>
+        <div><button class="btn" id="m-fromdesc" type="button">Set from description</button></div>
+        <div class="row2">
+          <label class="lab">Mood<select class="in" id="m-mood"><option value="happy">Happy</option><option value="calm">Calm</option><option value="sad">Sad</option><option value="epic">Epic</option><option value="mysterious">Mysterious</option><option value="playful">Playful</option></select></label>
+          <label class="lab">Key<select class="in" id="m-key"><option>C</option><option>C#</option><option>D</option><option>D#</option><option>E</option><option>F</option><option>F#</option><option>G</option><option>G#</option><option>A</option><option>A#</option><option>B</option></select></label>
+          <label class="lab">Length<select class="in" id="m-bars"><option value="8">8 bars</option><option value="16" selected>16 bars</option><option value="32">32 bars</option></select></label>
+          <label class="lab">Sound<select class="in" id="m-sound"><option value="piano">Piano</option><option value="pad">Soft pad</option><option value="chip">Chiptune</option><option value="strings">Strings</option></select></label>
+        </div>
+        <label class="sl" style="grid-template-columns:70px minmax(0,1fr) 60px">Tempo<input type="range" id="m-tempo" min="60" max="180" value="110"><output id="m-tempoo">110 bpm</output></label>
+        <label style="display:flex;gap:10px;align-items:center;font-family:var(--ui);font-size:15px"><input type="checkbox" id="m-drums" checked> Add drums</label>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="view studio" id="v-work">
+  <div class="wrap">
+    <h2 class="st-title">Work</h2>
+    <p class="st-sub">Everyday office jobs, done in seconds. Choose a job, add your notes and read the result.</p>
+    <div class="grid2 even">
+      <div class="panel">
+        <div class="seg" id="wkinds" role="group" aria-label="Job">
+          <button type="button" data-k="email" aria-pressed="true">Email</button>
+          <button type="button" data-k="summary" aria-pressed="false">Summary</button>
+          <button type="button" data-k="actions" aria-pressed="false">Meeting actions</button>
+          <button type="button" data-k="report" aria-pressed="false">Report</button>
+          <button type="button" data-k="sql" aria-pressed="false">SQL</button>
+          <button type="button" data-k="script" aria-pressed="false">Video script</button>
+        </div>
+        <label class="lab"><span id="wtextL">What should the email say?</span><textarea class="in" id="w-text" rows="9"></textarea></label>
+        <label class="lab"><span id="wextraL">Tone (optional)</span><textarea class="in" id="w-extra" rows="2"></textarea></label>
+        <div><button class="primary" id="w-go" type="button">Write email</button></div>
+      </div>
+      <div class="panel"><div class="outpane" id="w-out" aria-live="polite"><p class="muted">Your result appears here.</p></div></div>
+    </div>
+  </div>
+</section>
+
+<section class="view studio" id="v-farm">
+  <div class="wrap">
+    <h2 class="st-title">Farm</h2>
+    <p class="st-sub">Work out how much water a crop needs, get a crop plan, or describe a plant problem. These are guides. Check important decisions with your local agriculture officer.</p>
+    <div class="seg" id="fmodes" role="group" aria-label="Farm tool" style="margin-bottom:22px">
+      <button type="button" data-m="water" aria-pressed="true">Water needs</button>
+      <button type="button" data-m="plan" aria-pressed="false">Crop plan</button>
+      <button type="button" data-m="problem" aria-pressed="false">Plant problem</button>
+    </div>
+    <div id="f-water" class="grid2 even">
+      <div class="panel">
+        <div class="row2">
+          <label class="lab">Crop<select class="in" id="f-crop"></select></label>
+          <label class="lab">Growth stage<select class="in" id="f-stage"><option value="ini">Just planted</option><option value="dev">Growing fast</option><option value="mid" selected>Fully grown</option><option value="end">Ripening</option></select></label>
+          <label class="lab">Weather<select class="in" id="f-clim"><option value="3">Cool (3 mm/day)</option><option value="4">Mild (4 mm/day)</option><option value="5" selected>Warm (5 mm/day)</option><option value="6.5">Hot (6.5 mm/day)</option><option value="8">Very hot and dry (8 mm/day)</option></select></label>
+          <label class="lab">Water system<select class="in" id="f-eff"><option value="0.9">Drip (90%)</option><option value="0.75" selected>Sprinkler (75%)</option><option value="0.6">Flood (60%)</option></select></label>
+          <label class="lab">Field size<input class="in" id="f-area" type="number" min="0" step="0.1" value="1"></label>
+          <label class="lab">Unit<select class="in" id="f-unit"><option value="4046.86">Acre</option><option value="10000">Hectare</option><option value="1">Square metre</option></select></label>
+          <label class="lab">Useful rain (mm/day)<input class="in" id="f-rain" type="number" min="0" step="0.5" value="0"></label>
+        </div>
+      </div>
+      <div class="cardbox" id="f-wout" aria-live="polite"></div>
+    </div>
+    <div id="f-ai" class="grid2 even" hidden>
+      <div class="panel">
+        <div id="f-planform" class="panel">
+          <label class="lab">Crop<input class="in" id="fp-crop" type="text" placeholder="Wheat"></label>
+          <div class="row2">
+            <label class="lab">Place<input class="in" id="fp-place" type="text" placeholder="Nagpur, Maharashtra"></label>
+            <label class="lab">Season<select class="in" id="fp-season"><option>Kharif (monsoon)</option><option>Rabi (winter)</option><option>Zaid (summer)</option><option>Not sure</option></select></label>
+            <label class="lab">Soil<input class="in" id="fp-soil" type="text" placeholder="Black cotton soil"></label>
+            <label class="lab">Field size<input class="in" id="fp-area" type="text" placeholder="2 acres"></label>
+          </div>
+          <div><button class="primary" id="fp-go" type="button">Make a crop plan</button></div>
+        </div>
+        <div id="f-probform" class="panel" hidden>
+          <label class="lab">Crop<input class="in" id="fq-crop" type="text" placeholder="Tomato"></label>
+          <label class="lab">What do you see?<textarea class="in" id="fq-what" rows="5" placeholder="Yellow spots on lower leaves, spreading upward. Started 5 days ago."></textarea></label>
+          <label class="lab">Weather and care lately (optional)<input class="in" id="fq-ctx" type="text" placeholder="Humid, rain last week, no spray yet"></label>
+          <div><button class="primary" id="fq-go" type="button">Find likely causes</button></div>
+        </div>
+      </div>
+      <div class="panel"><div class="outpane" id="f-out" aria-live="polite"><p class="muted">Your result appears here.</p></div></div>
+    </div>
+  </div>
+</section>
+
+<section class="view studio" id="v-planet">
+  <div class="wrap">
+    <h2 class="st-title">Planet</h2>
+    <p class="st-sub">See weather warnings for the next 7 days, plan home energy and solar power, or estimate your carbon footprint.</p>
+    <div class="seg" id="pmodes" role="group" aria-label="Planet tool" style="margin-bottom:22px">
+      <button type="button" data-m="warn" aria-pressed="true">Weather warnings</button>
+      <button type="button" data-m="energy" aria-pressed="false">Home energy</button>
+      <button type="button" data-m="carbon" aria-pressed="false">Carbon footprint</button>
+    </div>
+
+    <div id="pl-warn">
+      <form class="actions" id="pw-form" style="margin-bottom:14px;max-width:560px"><input class="in" id="pw-city" type="text" placeholder="Search a city, for example Nagpur" aria-label="City" style="flex:1"><button class="primary" type="submit">Check</button></form>
+      <div class="seg" id="pw-places" style="margin-bottom:12px" hidden></div>
+      <p class="note" id="pw-note" hidden></p>
+      <div id="pw-result" hidden>
+        <h3 class="ab-h" style="margin-top:6px" id="pw-title"></h3>
+        <div class="alerts" id="pw-alerts"></div>
+        <h3 class="ab-h">Next 7 days</h3>
+        <div class="days" id="pw-days"></div>
+        <div class="grid2 even" style="margin-top:22px"><div class="panel"><div><button class="btn" id="pw-explain" type="button">Explain and advise</button></div>
+          <div class="outpane" id="pw-out" style="min-height:70px" aria-live="polite"><p class="muted">Advice appears here.</p></div></div></div>
+      </div>
+    </div>
+
+    <div id="pl-energy" hidden class="grid2 even">
+      <div class="panel">
+        <div class="grp"><h3>Appliances</h3>
+          <div class="apphead"><span>Appliance</span><span>Watts</span><span>Qty</span><span>Hours</span><span></span></div>
+          <div class="apps" id="e-apps"></div>
+          <div><button class="btn" id="e-add" type="button">Add appliance</button></div></div>
+        <div class="row2">
+          <label class="lab">Price per unit (₹/kWh)<input class="in" id="e-tariff" type="number" min="0" step="0.5" value="8"></label>
+          <label class="lab">Sunny hours per day<input class="in" id="e-sun" type="number" min="1" max="9" step="0.5" value="5"></label>
+          <label class="lab">Panel size (watts)<input class="in" id="e-panel" type="number" min="100" step="10" value="400"></label>
+          <label class="lab">Solar cost (₹ per kW)<input class="in" id="e-cost" type="number" min="0" step="1000" value="50000"></label>
+        </div>
+        <p class="sub2">Prices are examples. Change them to match your area and your quotes.</p>
+      </div>
+      <div class="panel"><div class="cardbox" id="e-out" aria-live="polite"></div>
+        <div><button class="btn" id="e-ai" type="button">Make a savings plan</button></div>
+        <div class="outpane" id="e-aiout" style="min-height:70px"><p class="muted">The plan appears here.</p></div></div>
+    </div>
+
+    <div id="pl-carbon" hidden class="grid2 even">
+      <div class="panel">
+        <div class="row2">
+          <label class="lab">Electricity (units per month)<input class="in" id="c-kwh" type="number" min="0" value="200"></label>
+          <label class="lab">Vehicle (km per month)<input class="in" id="c-km" type="number" min="0" value="500"></label>
+          <label class="lab">Fuel<select class="in" id="c-fuel"><option value="2.31">Petrol</option><option value="2.68">Diesel</option><option value="0">No vehicle or electric</option></select></label>
+          <label class="lab">Vehicle mileage (km per litre)<input class="in" id="c-mil" type="number" min="1" value="15"></label>
+          <label class="lab">LPG cylinders per year<input class="in" id="c-lpg" type="number" min="0" value="6"></label>
+          <label class="lab">Flight hours per year<input class="in" id="c-fly" type="number" min="0" value="4"></label>
+        </div>
+        <p class="sub2">These are rough estimates from common emission factors, good for comparing choices.</p>
+      </div>
+      <div class="panel"><div class="cardbox" id="c-out" aria-live="polite"></div>
+        <div><button class="btn" id="c-ai" type="button">Make a reduction plan</button></div>
+        <div class="outpane" id="c-aiout" style="min-height:70px"><p class="muted">The plan appears here.</p></div></div>
+    </div>
+  </div>
+</section>
+
+<section class="view studio" id="v-about">
+  <div class="wrap"><!--PROFILE--></div>
 </section>
 </div>
 
@@ -1139,7 +1646,7 @@ $('#drawer').setAttribute('aria-hidden','true');
 stats();box.focus();
 
 /* ================= tabs ================= */
-const VIEWS=['chat','code','photo','video'];
+const VIEWS=['chat','code','photo','video','image','data','music','work','farm','planet','about'];
 function showView(v){
   if(!VIEWS.includes(v))v='chat';
   document.body.dataset.view=v;
@@ -1150,6 +1657,9 @@ function showView(v){
   });
   if(location.hash!=='#'+v)history.replaceState(null,'','#'+v);
   if(v==='chat')box.focus();
+  if(v!=='music'&&typeof mAC!=='undefined'&&mAC)stopMusic();
+  if(v==='music')drawRoll(-1);
+  if(v==='data')drawChart();
 }
 document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>showView(t.dataset.view));
 
@@ -1379,6 +1889,577 @@ function sendVideo(retry){
   x.send(fd);
 }
 $('#v-go').onclick=()=>{if(!vfile)return;$('#v-go').disabled=true;vstatus('Uploading 0%');sendVideo(false)};
+
+
+/* ================= shared helpers for the new sections ================= */
+async function askAI(task,text,extra){
+  const r=await api('/ai',{task,text,extra:extra||''});
+  const j=await r.json().catch(()=>({}));
+  if(!r.ok||j.error)throw new Error(j.error||'The server did not answer.');
+  return j.answer;
+}
+async function runAI(task,text,extra,out,btn){
+  btn.disabled=true;out.innerHTML='<p class="muted">Working on it. This can take up to a minute.</p>';
+  try{const a=await askAI(task,text,extra);out.innerHTML='<div class="body">'+md(a)+'</div>';return a}
+  catch(e){out.innerHTML='<p class="note">Could not get an answer. '+esc(e.message)+'</p>';return null}
+  finally{btn.disabled=false}
+}
+function segment(sel,cb){
+  document.querySelectorAll(sel+' button').forEach(b=>b.onclick=()=>{
+    document.querySelectorAll(sel+' button').forEach(x=>x.setAttribute('aria-pressed',x===b));cb(b);
+  });
+}
+const fmtN=(n,d=2)=>Number.isFinite(n)?(Math.abs(n)>=1000?Math.round(n).toLocaleString('en-IN'):String(+n.toFixed(d))):'-';
+const cssv=v=>getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const FONT='system-ui, -apple-system, "Segoe UI", sans-serif';
+function setupCanvas(cv){
+  const dpr=window.devicePixelRatio||1,w=cv.clientWidth,h=cv.clientHeight;
+  cv.width=Math.max(1,Math.round(w*dpr));cv.height=Math.max(1,Math.round(h*dpr));
+  const g=cv.getContext('2d');g.setTransform(dpr,0,0,dpr,0,0);g.clearRect(0,0,w,h);return {g,w,h};
+}
+
+/* ================= image ================= */
+const ISTYLE={photo:', realistic photograph, natural light, fine detail',art:', digital illustration, rich colours, fine detail',
+  three:', 3D render, soft studio lighting, fine detail',anime:', anime style, vibrant colours, clean lines',
+  water:', watercolour painting, soft edges, paper texture',logo:', minimal flat vector logo, white background',none:''};
+let istyle='photo',iurl='',iext='png',iseed=0;
+const istat=m=>$('#istatus').textContent=m;
+segment('#istyles',b=>istyle=b.dataset.s);
+async function makeImage(fresh){
+  const p=$('#i-prompt').value.trim();
+  if(!p){istat('Describe the picture first.');$('#i-prompt').focus();return}
+  if(fresh||!iseed)iseed=1+Math.floor(Math.random()*9999999);
+  const [w,h]=$('#i-size').value.split('x').map(Number);
+  $('#i-go').disabled=true;$('#i-again').disabled=true;istat('Making your picture. This can take up to 40 seconds.');
+  try{
+    const r=await api('/image',{prompt:p+ISTYLE[istyle],w,h,seed:iseed});
+    if(!r.ok){const j=await r.json().catch(()=>({}));throw new Error(j.error||'Could not make the picture. Try again.')}
+    const blob=await r.blob();
+    iext=/jpe?g/.test(blob.type)?'jpg':/webp/.test(blob.type)?'webp':'png';
+    if(iurl)URL.revokeObjectURL(iurl);iurl=URL.createObjectURL(blob);
+    const img=$('#i-img');img.src=iurl;img.hidden=false;$('#idrop').hidden=true;$('#i-dl').disabled=false;istat('');
+  }catch(e){istat(e.message)}
+  $('#i-go').disabled=false;$('#i-again').disabled=false;
+}
+$('#i-go').onclick=()=>makeImage(false);
+$('#i-again').onclick=()=>makeImage(true);
+$('#i-better').onclick=async()=>{
+  const t=$('#i-prompt').value.trim();if(!t){istat('Write a short idea first.');return}
+  $('#i-better').disabled=true;istat('Improving your description...');
+  try{$('#i-prompt').value=(await askAI('image_prompt',t)).trim();istat('')}catch(e){istat(e.message)}
+  $('#i-better').disabled=false;
+};
+$('#i-dl').onclick=()=>{
+  if(!iurl)return;const a=document.createElement('a');a.href=iurl;a.download='deep-oq-image.'+iext;
+  document.body.append(a);a.click();a.remove();
+};
+
+/* ================= work ================= */
+const WORK={
+  email:{text:'What should the email say?',ph:'Tell Rahul the meeting moves to Friday 4 pm. Polite and short.',extra:'Tone (optional)',btn:'Write email'},
+  summary:{text:'Text to summarize',ph:'Paste the text here',extra:'Length or focus (optional)',btn:'Summarize'},
+  actions:{text:'Meeting notes',ph:'Paste your meeting notes here',extra:'People or deadlines to keep in mind (optional)',btn:'Find the actions'},
+  report:{text:'What is the report about?',ph:'Topic, who will read it, and the main points',extra:'Length or format (optional)',btn:'Write report'},
+  sql:{text:'What data do you need?',ph:'The top 5 customers by total order value in 2025',extra:'Database and tables, for example: PostgreSQL; customers(id, name), orders(id, customer_id, total, order_date)',btn:'Write SQL'},
+  script:{text:'What is the video about?',ph:'A 60 second ad for a local bakery',extra:'Style, platform or length (optional)',btn:'Write script'}
+};
+let wkind='email';
+function setWork(k){
+  wkind=k;const w=WORK[k];
+  $('#wtextL').textContent=w.text;$('#w-text').placeholder=w.ph;$('#wextraL').textContent=w.extra;$('#w-go').textContent=w.btn;
+}
+segment('#wkinds',b=>setWork(b.dataset.k));setWork('email');
+$('#w-go').onclick=()=>{
+  const t=$('#w-text').value.trim();
+  if(!t){$('#w-out').innerHTML='<p class="note">Add some text first.</p>';$('#w-text').focus();return}
+  runAI(wkind,t,$('#w-extra').value.trim(),$('#w-out'),$('#w-go'));
+};
+
+/* ================= robotics starters (in the Code section) ================= */
+const ROBO=[
+  ['Line follower','Arduino (C++)','A line following robot car with two IR sensors and an L298N motor driver. Include the pin definitions, sensor reading and smooth turning logic.'],
+  ['Obstacle avoider','Arduino (C++)','An obstacle avoiding robot with an HC-SR04 ultrasonic sensor on a servo and an L298N motor driver. It should scan left and right and choose the clearer side.'],
+  ['Servo arm','Arduino (C++)','A 3 servo robotic arm controlled by 3 potentiometers, with smooth movement and a safe angle limit on each servo.'],
+  ['ROS 2 node','ROS 2 (Python)','A ROS 2 node that subscribes to /scan (LaserScan) and publishes /cmd_vel (Twist) so the robot stops when anything is closer than 0.5 m.'],
+  ['Camera detection','Python','A script for a Jetson-style board that opens the camera with OpenCV, runs an object detection model, and draws boxes and labels on the live video.']
+];
+ROBO.forEach(r=>{
+  const b=document.createElement('button');b.type='button';b.textContent=r[0];
+  b.onclick=()=>{setMode('write');$('#clang').value=r[1];$('#ctask').value=r[2];$('#ctask').focus()};
+  $('#crobo').append(b);
+});
+
+/* ================= data ================= */
+const D={head:[],rows:[],cols:[]};let dkind='bar';
+function parseCSV(text){
+  const nl=text.indexOf('\n'),first=text.slice(0,nl>-1?nl:text.length);
+  let delim=',',best=0;
+  for(const c of [',',';','\t','|']){const n=first.split(c).length;if(n>best){best=n;delim=c}}
+  const rows=[];let row=[],cur='',q=false;
+  for(let i=0;i<text.length;i++){
+    const ch=text[i];
+    if(q){if(ch==='"'){if(text[i+1]==='"'){cur+='"';i++}else q=false}else cur+=ch}
+    else if(ch==='"')q=true;
+    else if(ch===delim){row.push(cur);cur=''}
+    else if(ch==='\n'||ch==='\r'){
+      if(ch==='\r'&&text[i+1]==='\n')i++;
+      row.push(cur);cur='';
+      if(row.length>1||row[0].trim()!=='')rows.push(row);
+      row=[];
+    }else cur+=ch;
+  }
+  if(cur!==''||row.length){row.push(cur);if(row.length>1||row[0].trim()!=='')rows.push(row)}
+  return rows;
+}
+const numOf=v=>{const t=String(v==null?'':v).replace(/[,\s₹$€£%]/g,'');return t!==''&&Number.isFinite(+t)?+t:NaN};
+function analyseCols(head,rows){
+  return head.map((name,ci)=>{
+    const vals=rows.map(r=>r[ci]).filter(v=>String(v).trim()!=='');
+    const nums=vals.map(numOf).filter(Number.isFinite);
+    const isNum=vals.length>0&&nums.length/vals.length>=.9;
+    const c={name:name||('Column '+(ci+1)),idx:ci,filled:vals.length,type:isNum?'number':'text'};
+    if(isNum){
+      const s=[...nums].sort((a,b)=>a-b),n=s.length,sum=s.reduce((a,b)=>a+b,0);
+      c.min=s[0];c.max=s[n-1];c.sum=sum;c.mean=sum/n;c.median=n%2?s[(n-1)/2]:(s[n/2-1]+s[n/2])/2;
+    }else{
+      const m=new Map();vals.forEach(v=>m.set(v,(m.get(v)||0)+1));
+      c.uniq=m.size;c.top=[...m.entries()].sort((a,b)=>b[1]-a[1]).slice(0,3).map(e=>e[0]+' ('+e[1]+')');
+    }
+    return c;
+  });
+}
+function colDetail(c){
+  return c.type==='number'?'lowest '+fmtN(c.min)+', highest '+fmtN(c.max)+', average '+fmtN(c.mean)
+    :c.uniq+' different values. Most common: '+c.top.join(', ');
+}
+function loadData(file){
+  if(!file)return;const note=$('#dnote');note.hidden=true;
+  if(file.size>8*1024*1024){note.textContent='That file is '+(file.size/1048576).toFixed(1)+' MB. The limit is 8 MB.';note.hidden=false;return}
+  const fr=new FileReader();
+  fr.onerror=()=>{note.textContent='This file could not be read.';note.hidden=false};
+  fr.onload=()=>{
+    const rows=parseCSV(String(fr.result).replace(/^﻿/,''));
+    if(rows.length<2){note.textContent='No table found. Use a CSV file with a header row and at least one row of data.';note.hidden=false;return}
+    const head=rows[0].map(h=>h.trim());
+    D.head=head;D.rows=rows.slice(1).map(r=>head.map((_,i)=>r[i]===undefined?'':r[i]));D.cols=analyseCols(head,D.rows);
+    D.name=file.name;showData();
+  };
+  fr.readAsText(file);
+}
+function showData(){
+  $('#dwork').hidden=false;
+  $('#dinfo').textContent=D.name+': '+D.rows.length.toLocaleString('en-IN')+' rows and '+D.head.length+' columns.';
+  $('#dsum').innerHTML='<thead><tr><th>Column</th><th>Type</th><th>Filled</th><th>Details</th></tr></thead><tbody>'
+    +D.cols.map(c=>'<tr><td><b>'+esc(c.name)+'</b></td><td>'+(c.type==='number'?'Number':'Text')+'</td><td>'+c.filled+' of '+D.rows.length+'</td><td>'+esc(colDetail(c))+'</td></tr>').join('')+'</tbody>';
+  const all=D.cols.map(c=>'<option value="'+c.idx+'">'+esc(c.name)+'</option>').join('');
+  const nums=D.cols.filter(c=>c.type==='number');
+  $('#d-x').innerHTML=all;$('#d-y').innerHTML=nums.map(c=>'<option value="'+c.idx+'">'+esc(c.name)+'</option>').join('');
+  const t=D.cols.find(c=>c.type==='text');$('#d-x').value=String(t?t.idx:0);
+  $('#d-out').innerHTML='<p class="muted">The analysis appears here.</p>';
+  setKind(dkind);
+}
+function setKind(k){
+  dkind=k;
+  document.querySelectorAll('#dkind button').forEach(b=>b.setAttribute('aria-pressed',b.dataset.k===k));
+  $('#dxw').hidden=k!=='bar';$('#daggw').hidden=k!=='bar';
+  drawChart();
+}
+function chartMsg(cv,text){const {g,w,h}=setupCanvas(cv);g.fillStyle=cssv('--ink-2');g.font='15px '+FONT;g.textAlign='center';g.fillText(text,w/2,h/2)}
+function drawChart(){
+  const cv=$('#dchart');if(!cv.clientWidth||!D.cols.length)return;
+  const nums=D.cols.filter(c=>c.type==='number');
+  const agg=$('#d-agg').value,xi=+$('#d-x').value,yv=$('#d-y').value,yi=yv===''?-1:+yv;
+  if(dkind!=='bar'&&!nums.length)return chartMsg(cv,'This file has no number columns to chart.');
+  if(dkind==='bar'&&agg!=='count'&&yi<0)return chartMsg(cv,'Choose "Count of rows", or a file with a number column.');
+  const {g,w,h}=setupCanvas(cv),ink=cssv('--ink'),ink2=cssv('--ink-2'),line=cssv('--line'),col=cssv('--river');
+  g.font='13px '+FONT;
+  if(dkind==='bar'){
+    const m=new Map();
+    D.rows.forEach(r=>{
+      const k=String(r[xi]).trim()||'(empty)',v=numOf(r[yi]),e=m.get(k)||{sum:0,n:0,rows:0};
+      e.rows++;if(Number.isFinite(v)){e.sum+=v;e.n++}m.set(k,e);
+    });
+    let items=[...m.entries()].map(([k,e])=>[k,agg==='count'?e.rows:agg==='avg'?(e.n?e.sum/e.n:0):e.sum]);
+    items.sort((a,b)=>b[1]-a[1]);items=items.slice(0,12);
+    const left=Math.min(170,Math.max(60,...items.map(i=>g.measureText(i[0]).width+14))),right=70,top=8,rowH=(h-top-8)/items.length;
+    const max=Math.max(...items.map(i=>Math.abs(i[1])),1e-9);
+    items.forEach(([k,v],i)=>{
+      const y=top+i*rowH,bh=Math.min(26,rowH*.66),bw=Math.max(2,(w-left-right)*Math.abs(v)/max);
+      g.fillStyle=ink;g.textAlign='right';g.textBaseline='middle';
+      let label=k;while(label.length>3&&g.measureText(label).width>left-12)label=label.slice(0,-2);if(label!==k)label+='…';
+      g.fillText(label,left-10,y+rowH/2);
+      g.fillStyle=col;g.fillRect(left,y+(rowH-bh)/2,bw,bh);
+      g.fillStyle=ink2;g.textAlign='left';g.fillText(fmtN(v),left+bw+8,y+rowH/2);
+    });
+    return;
+  }
+  const c=nums.find(c=>c.idx===yi)||nums[0],vals=D.rows.map(r=>numOf(r[c.idx])).filter(Number.isFinite);
+  if(!vals.length)return chartMsg(cv,'No numbers to draw.');
+  const pad={l:46,r:14,t:16,b:30};
+  if(dkind==='hist'){
+    const bins=10,lo=Math.min(...vals),hi=Math.max(...vals),span=(hi-lo)||1,counts=new Array(bins).fill(0);
+    vals.forEach(v=>counts[Math.min(bins-1,Math.floor((v-lo)/span*bins))]++);
+    const mx=Math.max(...counts),bw=(w-pad.l-pad.r)/bins;
+    counts.forEach((n,i)=>{
+      const bh=(h-pad.t-pad.b)*n/mx,x=pad.l+i*bw;
+      g.fillStyle=col;g.fillRect(x+2,h-pad.b-bh,bw-4,bh);
+      g.fillStyle=ink2;g.textAlign='center';g.fillText(String(n),x+bw/2,h-pad.b-bh-8);
+    });
+    g.fillStyle=ink2;g.textAlign='left';g.fillText(fmtN(lo),pad.l,h-8);g.textAlign='right';g.fillText(fmtN(hi),w-pad.r,h-8);
+    g.textAlign='center';g.fillText(c.name,w/2,h-8);
+    return;
+  }
+  const step=Math.max(1,Math.ceil(vals.length/400)),pts=vals.filter((_,i)=>i%step===0);
+  const lo=Math.min(...pts),hi=Math.max(...pts),span=(hi-lo)||1;
+  g.strokeStyle=line;g.lineWidth=1;g.beginPath();g.moveTo(pad.l,h-pad.b);g.lineTo(w-pad.r,h-pad.b);g.stroke();
+  g.strokeStyle=col;g.lineWidth=2;g.beginPath();
+  pts.forEach((v,i)=>{const x=pad.l+(w-pad.l-pad.r)*(pts.length>1?i/(pts.length-1):.5),y=h-pad.b-(h-pad.t-pad.b)*(v-lo)/span;i?g.lineTo(x,y):g.moveTo(x,y)});
+  g.stroke();
+  g.fillStyle=ink2;g.textAlign='right';g.fillText(fmtN(hi),pad.l-6,pad.t+4);g.fillText(fmtN(lo),pad.l-6,h-pad.b);
+  g.textAlign='left';g.fillText('first row',pad.l,h-8);g.textAlign='right';g.fillText('last row',w-pad.r,h-8);
+  g.textAlign='center';g.fillText(c.name,w/2,h-8);
+}
+function dataSummary(){
+  let s='File: '+D.name+'. Rows: '+D.rows.length+'. Columns: '+D.head.length+'.\n';
+  D.cols.forEach(c=>{s+='- '+c.name+' ('+(c.type==='number'?'number':'text')+', '+c.filled+' filled): '+colDetail(c)+(c.type==='number'?', total '+fmtN(c.sum)+', median '+fmtN(c.median):'')+'\n'});
+  s+='First rows:\n'+D.rows.slice(0,5).map(r=>r.map(x=>String(x).slice(0,30)).join(' ; ')).join('\n');
+  return s.slice(0,6000);
+}
+segment('#dkind',b=>setKind(b.dataset.k));
+['#d-x','#d-y','#d-agg'].forEach(s=>$(s).addEventListener('change',drawChart));
+$('#dfile').onchange=e=>{loadData(e.target.files[0]);e.target.value=''};
+dropZone($('#dstage'),loadData);
+$('#d-go').onclick=()=>{
+  const q=$('#d-q').value.trim();
+  runAI('data',dataSummary()+(q?'\n\nQUESTION: '+q:'\n\nNo question. Give an overview.'),'',$('#d-out'),$('#d-go'));
+};
+let rz=0;window.addEventListener('resize',()=>{clearTimeout(rz);rz=setTimeout(()=>{if($('#v-data').classList.contains('on'))drawChart();if($('#v-music').classList.contains('on'))drawRoll(-1)},150)});
+
+/* ================= music ================= */
+const KEYS=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+const MOOD={
+  happy:{scale:[0,2,4,5,7,9,11],progs:[[0,4,5,3],[0,3,4,0],[0,5,3,4]],gate:.92},
+  calm:{scale:[0,2,4,5,7,9,11],progs:[[0,5,3,4],[0,3,0,4]],gate:1},
+  sad:{scale:[0,2,3,5,7,8,10],progs:[[0,5,2,6],[0,3,4,0],[0,6,5,4]],gate:1},
+  epic:{scale:[0,2,3,5,7,8,10],progs:[[0,5,2,6],[0,6,2,4],[0,3,5,4]],gate:.95},
+  mysterious:{scale:[0,1,3,5,7,8,10],progs:[[0,1,0,6],[0,5,1,0]],gate:1},
+  playful:{scale:[0,2,4,5,7,9,11],progs:[[0,3,0,4],[0,4,3,4]],gate:.55}
+};
+const RHYTHMS=[[1,1,1,1],[1,.5,.5,1,1],[.5,.5,1,.5,.5,1],[2,1,1],[1.5,.5,1,1],[1,1,2],[.5,.5,.5,.5,1,1],[1,.5,.5,2],[.5,.5,1,2]];
+function rng(seed){let a=seed>>>0;return()=>{a=(a+0x6D2B79F5)|0;let t=Math.imul(a^(a>>>15),1|a);t=(t+Math.imul(t^(t>>>7),61|t))^t;return((t^(t>>>14))>>>0)/4294967296}}
+
+/* Builds the whole piece from a seed. Same seed and settings always give the same music. */
+function composeSong(o){
+  const R=rng(o.seed),M=MOOD[o.mood],base=60+KEYS.indexOf(o.key);
+  const deg=i=>{const oc=Math.floor(i/7),r=((i%7)+7)%7;return base+12*oc+M.scale[r]};
+  const pick=a=>a[Math.floor(R()*a.length)];
+  const prog=pick(M.progs),ev=[];
+  const block=[];let cur=7+pick([0,2,4]);
+  for(let b=0;b<4;b++){
+    const ch=prog[b],tones=[ch,ch+2,ch+4].flatMap(d=>[d,d+7,d-7]).filter(i=>i>=4&&i<=13);
+    const pat=pick(RHYTHMS);let t=0;
+    for(const dur of pat){
+      const strong=t===0||t===2;
+      if(strong){cur=tones.reduce((best,i)=>Math.abs(i-cur)<Math.abs(best-cur)?i:best,tones[0])}
+      else{cur=Math.max(4,Math.min(13,cur+pick([-2,-1,-1,0,1,1,2])))}
+      if(strong||R()>.12)block.push({t:b*4+t,d:dur*M.gate,i:cur,v:strong?92:78});
+      t+=dur;
+    }
+  }
+  const blocks=o.bars/4;
+  for(let k=0;k<blocks;k++){
+    block.forEach(n=>{
+      let i=n.i;if(k>0&&R()<.2)i=Math.max(4,Math.min(13,i+pick([-1,1])));
+      ev.push({tr:'mel',t:n.t+16*k,d:n.d,n:deg(i),v:n.v});
+    });
+  }
+  const last=(o.bars-1)*4;
+  for(let j=ev.length-1;j>=0;j--)if(ev[j].tr==='mel'&&ev[j].t>=last)ev.splice(j,1);
+  ev.push({tr:'mel',t:last,d:4,n:deg(7),v:88});
+  for(let b=0;b<o.bars;b++){
+    const ch=b===o.bars-1?0:prog[b%4];
+    [ch-7,ch-5,ch-3].forEach(i=>ev.push({tr:'chord',t:b*4,d:3.95,n:deg(i),v:50}));
+    if(b===o.bars-1)ev.push({tr:'bass',t:b*4,d:4,n:deg(ch-14),v:82});
+    else{ev.push({tr:'bass',t:b*4,d:1.9,n:deg(ch-14),v:84});ev.push({tr:'bass',t:b*4+2,d:1.9,n:deg(ch-14),v:76})}
+    if(o.drums){
+      if(b===o.bars-1)ev.push({tr:'drums',t:b*4,d:.2,n:36,v:100});
+      else for(let q=0;q<8;q++){
+        const t=b*4+q*.5;ev.push({tr:'drums',t,d:.1,n:42,v:q%2?38:55});
+        if(q===0||q===4)ev.push({tr:'drums',t,d:.2,n:36,v:100});
+        if(q===2||q===6)ev.push({tr:'drums',t,d:.2,n:38,v:88});
+      }
+    }
+  }
+  return {events:ev,bpm:o.bpm,bars:o.bars,total:o.bars*4,mood:o.mood,key:o.key};
+}
+
+/* ---- sound ---- */
+const freqOf=n=>440*Math.pow(2,(n-69)/12);
+function voice(ac,dest,n,t0,dur,vel,type){
+  const f=freqOf(n),g=ac.createGain(),o=ac.createOscillator(),peak=(vel/127)*.32;
+  o.type=type==='chip'?'square':type==='strings'?'sawtooth':type==='pad'?'sine':'triangle';
+  o.frequency.value=f;o.connect(g);
+  if(type==='piano'){const o2=ac.createOscillator(),g2=ac.createGain();o2.type='sine';o2.frequency.value=f*2;g2.gain.value=.22;o2.connect(g2).connect(g);o2.start(t0);o2.stop(t0+dur+.4)}
+  let out=g;
+  if(type==='strings'||type==='chip'){const lp=ac.createBiquadFilter();lp.type='lowpass';lp.frequency.value=type==='chip'?3200:1800;g.connect(lp);out=lp}
+  out.connect(dest);
+  const att=(type==='pad'||type==='strings')?.06:.008;
+  g.gain.setValueAtTime(.0001,t0);g.gain.exponentialRampToValueAtTime(peak,t0+att);
+  if(type==='piano'||type==='chip')g.gain.exponentialRampToValueAtTime(peak*.4,t0+Math.max(.12,dur*.8));
+  g.gain.setTargetAtTime(.0001,t0+dur,.05);
+  o.start(t0);o.stop(t0+dur+.4);
+}
+function drumHit(ac,dest,n,t0,vel){
+  const v=vel/127;
+  if(n===36){
+    const o=ac.createOscillator(),g=ac.createGain();
+    o.frequency.setValueAtTime(150,t0);o.frequency.exponentialRampToValueAtTime(45,t0+.12);
+    g.gain.setValueAtTime(.9*v,t0);g.gain.exponentialRampToValueAtTime(.001,t0+.22);
+    o.connect(g).connect(dest);o.start(t0);o.stop(t0+.25);return;
+  }
+  const len=n===38?.18:.05,buf=ac.createBuffer(1,Math.floor(ac.sampleRate*len),ac.sampleRate),d=buf.getChannelData(0);
+  for(let i=0;i<d.length;i++)d[i]=Math.random()*2-1;
+  const s=ac.createBufferSource(),hp=ac.createBiquadFilter(),g=ac.createGain();
+  s.buffer=buf;hp.type='highpass';hp.frequency.value=n===38?1500:7000;
+  g.gain.setValueAtTime((n===38?.5:.22)*v,t0);g.gain.exponentialRampToValueAtTime(.001,t0+len);
+  s.connect(hp).connect(g).connect(dest);s.start(t0);
+}
+
+/* ---- state, controls, playback ---- */
+let song=null,mAC=null,mRAF=0,mStart=0,mSeed=Math.floor(Math.random()*1e9);
+const mset=m=>$('#m-status').textContent=m;
+function mOptions(){
+  return {mood:$('#m-mood').value,key:$('#m-key').value,bpm:+$('#m-tempo').value,bars:+$('#m-bars').value,drums:$('#m-drums').checked,seed:mSeed};
+}
+function rebuild(){stopMusic();song=composeSong(mOptions());drawRoll(-1);mset(song.bars+' bars in '+song.key+', '+song.mood+', '+song.bpm+' beats per minute.')}
+function drawRoll(playBeat){
+  const cv=$('#m-roll');if(!cv.clientWidth||!song)return;
+  const {g,w,h}=setupCanvas(cv),pads={t:6,b:6},colors={mel:cssv('--accent'),chord:cssv('--river'),bass:cssv('--ink-2')};
+  const mel=song.events.filter(e=>e.tr!=='drums'),lo=Math.min(...mel.map(e=>e.n))-1,hi=Math.max(...mel.map(e=>e.n))+1;
+  const ph=h-pads.t-pads.b-14,py=n=>pads.t+ph*(1-(n-lo)/(hi-lo)),bh=Math.max(3,ph/(hi-lo)*.9);
+  ['chord','bass','mel'].forEach(tr=>{g.fillStyle=colors[tr];song.events.filter(e=>e.tr===tr).forEach(e=>g.fillRect(e.t/song.total*w,py(e.n)-bh/2,Math.max(2,e.d/song.total*w-1),bh))});
+  g.fillStyle=cssv('--ink-2');song.events.filter(e=>e.tr==='drums'&&e.n!==42).forEach(e=>g.fillRect(e.t/song.total*w,h-12,2,8));
+  if(playBeat>=0){g.fillStyle=cssv('--ink');g.fillRect(Math.min(w-2,playBeat/song.total*w),0,2,h)}
+}
+function stopMusic(){
+  cancelAnimationFrame(mRAF);
+  if(mAC){try{mAC.close()}catch(e){}mAC=null}
+  $('#m-play').textContent='Play';if(song)drawRoll(-1);
+}
+function playMusic(){
+  stopMusic();if(!song)return;
+  const AC=window.AudioContext||window.webkitAudioContext;if(!AC){mset('This browser cannot play sound. Download the MIDI file instead.');return}
+  const ac=new AC();mAC=ac;
+  const comp=ac.createDynamicsCompressor(),master=ac.createGain();master.gain.value=.85;comp.connect(master).connect(ac.destination);
+  const snd=$('#m-sound').value,spb=60/song.bpm;mStart=ac.currentTime+.15;
+  song.events.forEach(e=>{
+    const t=mStart+e.t*spb,d=Math.max(.05,e.d*spb);
+    if(e.tr==='drums')drumHit(ac,comp,e.n,t,e.v);else voice(ac,comp,e.n,t,d,e.v,e.tr==='mel'?snd:'pad');
+  });
+  $('#m-play').textContent='Stop';mset('Playing...');
+  const total=song.total*spb;
+  (function tick(){
+    if(mAC!==ac)return;
+    const el=ac.currentTime-mStart;
+    if(el>total+.6){stopMusic();mset('Finished. Press Play to hear it again.');return}
+    drawRoll(Math.max(0,el/spb));mRAF=requestAnimationFrame(tick);
+  })();
+}
+
+/* ---- MIDI file ---- */
+function vlq(n){const out=[n&127];while((n>>=7)>0)out.unshift((n&127)|128);return out}
+function chunk(tag,bytes){const l=bytes.length;return [...tag].map(c=>c.charCodeAt(0)).concat([l>>>24&255,l>>>16&255,l>>>8&255,l&255],bytes)}
+function trackBytes(list){
+  list.sort((a,b)=>a.tick-b.tick||a.order-b.order);
+  const out=[];let last=0;
+  for(const e of list){out.push(...vlq(e.tick-last),...e.data);last=e.tick}
+  out.push(0,0xFF,0x2F,0);return out;
+}
+function toMidi(sg,sound){
+  const TPQ=480,prog={piano:0,pad:89,chip:80,strings:48},tracks=[];
+  const us=Math.round(60000000/sg.bpm);
+  tracks.push(trackBytes([{tick:0,order:-2,data:[0xFF,0x51,3,us>>>16&255,us>>>8&255,us&255]},{tick:0,order:-2,data:[0xFF,0x58,4,4,2,24,8]}]));
+  [['mel',0,prog[sound]],['chord',1,89],['bass',2,33],['drums',9,null]].forEach(([tr,ch,pg])=>{
+    const l=[];if(pg!==null)l.push({tick:0,order:-1,data:[0xC0|ch,pg]});
+    sg.events.filter(e=>e.tr===tr).forEach(e=>{
+      const a=Math.round(e.t*TPQ),b=a+Math.max(1,Math.round(e.d*TPQ));
+      l.push({tick:a,order:1,data:[0x90|ch,e.n,e.v]},{tick:b,order:0,data:[0x80|ch,e.n,0]});
+    });
+    tracks.push(trackBytes(l));
+  });
+  const head=chunk('MThd',[0,1,0,tracks.length,TPQ>>8,TPQ&255]);
+  return new Uint8Array(head.concat(...tracks.map(t=>chunk('MTrk',t))));
+}
+
+['m-mood','m-key','m-bars','m-drums'].forEach(id=>$('#'+id).addEventListener('change',rebuild));
+$('#m-tempo').addEventListener('input',e=>{$('#m-tempoo').textContent=e.target.value+' bpm';rebuild()});
+$('#m-sound').addEventListener('change',()=>{if(mAC)playMusic()});
+$('#m-new').onclick=()=>{mSeed=Math.floor(Math.random()*1e9);rebuild();playMusic()};
+$('#m-play').onclick=()=>{if(mAC){stopMusic();mset('Stopped.')}else playMusic()};
+$('#m-dl').onclick=()=>{
+  if(!song)return;
+  const a=document.createElement('a'),url=URL.createObjectURL(new Blob([toMidi(song,$('#m-sound').value)],{type:'audio/midi'}));
+  a.href=url;a.download='deep-oq-music.mid';document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),4000);
+};
+$('#m-fromdesc').onclick=async()=>{
+  const t=$('#m-desc').value.trim();if(!t){mset('Describe the music first.');return}
+  $('#m-fromdesc').disabled=true;mset('Reading your description...');
+  try{
+    const a=await askAI('music_params',t),m=a.match(/\{[\s\S]*\}/);if(!m)throw new Error('Could not understand the reply. Try different words.');
+    const p=JSON.parse(m[0]);
+    if(MOOD[p.mood])$('#m-mood').value=p.mood;
+    if(KEYS.includes(p.key))$('#m-key').value=p.key;
+    if(Number.isFinite(+p.tempo)){const v=Math.max(60,Math.min(180,Math.round(+p.tempo)));$('#m-tempo').value=v;$('#m-tempoo').textContent=v+' bpm'}
+    if([8,16,32].includes(+p.bars))$('#m-bars').value=String(+p.bars);
+    if(['piano','pad','chip','strings'].includes(p.sound))$('#m-sound').value=p.sound;
+    if(typeof p.drums==='boolean')$('#m-drums').checked=p.drums;
+    mSeed=Math.floor(Math.random()*1e9);rebuild();playMusic();
+  }catch(e){mset(e.message||'Could not use that description.')}
+  $('#m-fromdesc').disabled=false;
+};
+rebuild();
+
+/* ================= farm ================= */
+/* Crop factors (Kc): start, middle and end of season, typical values from FAO guidance. */
+const CROPS={Wheat:[.3,1.15,.4],Rice:[1.05,1.2,.9],Maize:[.3,1.2,.6],Sugarcane:[.4,1.25,.75],Cotton:[.35,1.15,.7],
+  Soybean:[.4,1.15,.5],Groundnut:[.4,1.15,.6],Mustard:[.35,1.15,.35],Chickpea:[.4,1,.35],Potato:[.5,1.15,.75],
+  Tomato:[.6,1.15,.8],Onion:[.7,1.05,.75],Banana:[.5,1.1,1]};
+$('#f-crop').innerHTML=Object.keys(CROPS).map(c=>'<option>'+c+'</option>').join('');
+function farmWater(){
+  const c=CROPS[$('#f-crop').value],st=$('#f-stage').value;
+  const kc=st==='ini'?c[0]:st==='dev'?(c[0]+c[1])/2:st==='mid'?c[1]:c[2];
+  const et0=+$('#f-clim').value,rain=Math.max(0,+$('#f-rain').value||0),eff=+$('#f-eff').value;
+  const area=Math.max(0,+$('#f-area').value||0)*(+$('#f-unit').value);
+  const need=Math.max(0,kc*et0-rain),litres=need*area/eff;
+  $('#f-wout').innerHTML='<div><div class="big">'+fmtN(litres,0)+' litres</div><p class="sub2">of water to apply per day for the whole field</p></div>'
+    +'<dl class="kv"><dt>Crop factor (Kc)</dt><dd>'+fmtN(kc)+'</dd>'
+    +'<dt>Crop water need</dt><dd>'+fmtN(need)+' mm per day</dd>'
+    +'<dt>Field area</dt><dd>'+fmtN(area,0)+' m²</dd>'
+    +'<dt>Per week</dt><dd>'+fmtN(litres*7,0)+' litres</dd>'
+    +'<dt>Per hectare per day</dt><dd>'+fmtN(need*10000/eff,0)+' litres</dd></dl>'
+    +'<p class="sub2">Water need = crop factor × weather demand − useful rain, divided by how well your system delivers water. Soil and local advice can change this.</p>';
+}
+['f-crop','f-stage','f-clim','f-eff','f-area','f-unit','f-rain'].forEach(id=>$('#'+id).addEventListener('input',farmWater));
+farmWater();
+segment('#fmodes',b=>{
+  const m=b.dataset.m;
+  $('#f-water').hidden=m!=='water';$('#f-ai').hidden=m==='water';
+  $('#f-planform').hidden=m!=='plan';$('#f-probform').hidden=m!=='problem';
+  $('#f-out').innerHTML='<p class="muted">Your result appears here.</p>';
+});
+$('#fp-go').onclick=()=>{
+  const crop=$('#fp-crop').value.trim();
+  if(!crop){$('#f-out').innerHTML='<p class="note">Enter the crop first.</p>';$('#fp-crop').focus();return}
+  runAI('farm_plan','Crop: '+crop+'\nPlace: '+($('#fp-place').value.trim()||'not given')+'\nSeason: '+$('#fp-season').value
+    +'\nSoil: '+($('#fp-soil').value.trim()||'not given')+'\nField size: '+($('#fp-area').value.trim()||'not given'),'',$('#f-out'),$('#fp-go'));
+};
+$('#fq-go').onclick=()=>{
+  const crop=$('#fq-crop').value.trim(),what=$('#fq-what').value.trim();
+  if(!crop||!what){$('#f-out').innerHTML='<p class="note">Enter the crop and what you see.</p>';return}
+  runAI('farm_problem','Crop: '+crop+'\nWhat the farmer sees: '+what+'\nRecent weather and care: '+($('#fq-ctx').value.trim()||'not given'),'',$('#f-out'),$('#fq-go'));
+};
+
+/* ================= planet ================= */
+segment('#pmodes',b=>{
+  const m=b.dataset.m;
+  $('#pl-warn').hidden=m!=='warn';$('#pl-energy').hidden=m!=='energy';$('#pl-carbon').hidden=m!=='carbon';
+});
+const WCODE={0:'Clear',1:'Mostly clear',2:'Partly cloudy',3:'Cloudy',45:'Fog',48:'Fog',51:'Light drizzle',53:'Drizzle',55:'Heavy drizzle',
+  56:'Freezing drizzle',57:'Freezing drizzle',61:'Light rain',63:'Rain',65:'Heavy rain',66:'Freezing rain',67:'Freezing rain',71:'Light snow',
+  73:'Snow',75:'Heavy snow',77:'Snow grains',80:'Rain showers',81:'Rain showers',82:'Violent showers',85:'Snow showers',86:'Snow showers',
+  95:'Thunderstorm',96:'Thunderstorm with hail',99:'Thunderstorm with hail'};
+function dayAlerts(d){
+  const a=[],add=(level,text)=>a.push({level,text});
+  if(d.max>=45)add('severe','Extreme heat, up to '+Math.round(d.max)+'°C');else if(d.max>=40)add('warn','Heatwave conditions, up to '+Math.round(d.max)+'°C');
+  if(d.min<=0)add('warn','Frost risk, as low as '+Math.round(d.min)+'°C');
+  if(d.rain>=100)add('severe','Extremely heavy rain, about '+Math.round(d.rain)+' mm');else if(d.rain>=50)add('warn','Heavy rain, about '+Math.round(d.rain)+' mm');
+  if(d.wind>=80)add('severe','Damaging winds, up to '+Math.round(d.wind)+' km/h');else if(d.wind>=50)add('warn','Strong winds, up to '+Math.round(d.wind)+' km/h');
+  if(d.uv>=11)add('severe','Extreme UV index '+Math.round(d.uv));else if(d.uv>=8)add('warn','Very high UV index '+Math.round(d.uv));
+  if(d.code>=95)add('warn',WCODE[d.code]||'Thunderstorm');
+  return a;
+}
+let pwText='';
+const pwnote=m=>{const n=$('#pw-note');n.textContent=m;n.hidden=!m};
+async function pickPlace(p){
+  pwnote('');$('#pw-result').hidden=true;
+  const name=[p.name,p.admin1,p.country].filter(Boolean).join(', ');
+  try{
+    const r=await fetch('https://api.open-meteo.com/v1/forecast?latitude='+p.latitude+'&longitude='+p.longitude
+      +'&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,wind_speed_10m_max,uv_index_max&timezone=auto&forecast_days=7');
+    if(!r.ok)throw new Error('bad');
+    const j=(await r.json()).daily,days=j.time.map((t,i)=>({date:t,max:j.temperature_2m_max[i],min:j.temperature_2m_min[i],
+      rain:j.precipitation_sum[i]||0,wind:j.wind_speed_10m_max[i]||0,uv:j.uv_index_max[i]||0,code:j.weather_code[i]}));
+    const label=d=>new Date(d+'T12:00:00').toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short'});
+    const lines=[],html=[];
+    days.forEach(d=>dayAlerts(d).forEach(x=>{lines.push(label(d.date)+': '+x.text);html.push('<div class="alert '+x.level+'"><b>'+esc(label(d.date))+'</b> '+esc(x.text)+'</div>')}));
+    $('#pw-title').textContent=name;
+    $('#pw-alerts').innerHTML=html.length?html.join(''):'<div class="alert ok">No weather warnings for the next 7 days.</div>';
+    $('#pw-days').innerHTML=days.map(d=>'<div class="day"><b>'+esc(label(d.date))+'</b>'+esc(WCODE[d.code]||'')+'<br>'+Math.round(d.max)+'° / '+Math.round(d.min)+'°<br>Rain '+fmtN(d.rain,1)+' mm<br>Wind '+Math.round(d.wind)+' km/h<br>UV '+Math.round(d.uv)+'</div>').join('');
+    pwText='Place: '+name+'\nWarnings in the next 7 days:\n'+(lines.join('\n')||'None');
+    $('#pw-out').innerHTML='<p class="muted">Advice appears here.</p>';$('#pw-result').hidden=false;
+  }catch(e){pwnote('Could not load the forecast. Check your internet and try again.')}
+}
+$('#pw-form').onsubmit=async e=>{
+  e.preventDefault();const q=$('#pw-city').value.trim();if(!q)return;
+  pwnote('');$('#pw-places').hidden=true;
+  try{
+    const r=await fetch('https://geocoding-api.open-meteo.com/v1/search?name='+encodeURIComponent(q)+'&count=5&language=en&format=json');
+    const list=(await r.json()).results||[];
+    if(!list.length){pwnote('No place found with that name. Try a nearby city.');$('#pw-result').hidden=true;return}
+    const box=$('#pw-places');box.innerHTML='';
+    if(list.length>1){
+      list.forEach(p=>{const b=document.createElement('button');b.type='button';b.textContent=[p.name,p.admin1,p.country].filter(Boolean).join(', ');b.onclick=()=>pickPlace(p);box.append(b)});
+      box.hidden=false;
+    }
+    pickPlace(list[0]);
+  }catch(err){pwnote('Could not reach the weather data. Check your internet and try again.')}
+};
+$('#pw-explain').onclick=()=>runAI('planet_warning',pwText,'',$('#pw-out'),$('#pw-explain'));
+
+/* ---- home energy and solar ---- */
+const APPS=[['LED bulbs',9,6,5],['Ceiling fans',70,3,10],['Refrigerator',150,1,8],['Television',100,1,4],['Air conditioner',1500,1,6],['Laptop',60,1,6]];
+function addApp(a){
+  const r=document.createElement('div');r.className='approw';
+  r.innerHTML='<input class="in" type="text" aria-label="Appliance" value="'+esc(a[0])+'"><input class="in" type="number" min="0" aria-label="Watts" value="'+a[1]+'">'
+    +'<input class="in" type="number" min="0" aria-label="Quantity" value="'+a[2]+'"><input class="in" type="number" min="0" max="24" step="0.5" aria-label="Hours per day" value="'+a[3]+'">'
+    +'<button class="x" type="button" aria-label="Remove appliance">×</button>';
+  $('#e-apps').append(r);
+}
+APPS.forEach(addApp);
+let eText='';
+function energyCalc(){
+  let daily=0;
+  document.querySelectorAll('#e-apps .approw').forEach(r=>{const i=r.querySelectorAll('input');daily+=(+i[1].value||0)*(+i[2].value||0)*(+i[3].value||0)/1000});
+  const tariff=+$('#e-tariff').value||0,sun=Math.max(1,+$('#e-sun').value||5),pw=Math.max(100,+$('#e-panel').value||400),cpk=+$('#e-cost').value||0;
+  const monthly=daily*30,bill=monthly*tariff,needKw=daily/(sun*.75),panels=daily>0?Math.ceil(needKw*1000/pw):0,kw=panels*pw/1000;
+  const gen=kw*sun*.75*365,use=daily*365,saved=Math.min(gen,use)*tariff,cost=kw*cpk,payback=saved>0?cost/saved:null;
+  $('#e-out').innerHTML='<div><div class="big">'+fmtN(daily)+' kWh</div><p class="sub2">used per day</p></div>'
+    +'<dl class="kv"><dt>Per month</dt><dd>'+fmtN(monthly,0)+' kWh</dd><dt>Monthly bill</dt><dd>₹'+fmtN(bill,0)+'</dd>'
+    +'<dt>Solar system needed</dt><dd>'+panels+' panels ('+fmtN(kw)+' kW)</dd><dt>Roof space</dt><dd>about '+fmtN(panels*2,0)+' m²</dd>'
+    +'<dt>Power made per year</dt><dd>'+fmtN(gen,0)+' kWh</dd><dt>Saving per year</dt><dd>₹'+fmtN(saved,0)+'</dd>'
+    +'<dt>Estimated cost</dt><dd>₹'+fmtN(cost,0)+'</dd><dt>Pays back in</dt><dd>'+(payback?fmtN(payback,1)+' years':'-')+'</dd></dl>';
+  const rows=[];document.querySelectorAll('#e-apps .approw').forEach(r=>{const i=r.querySelectorAll('input');rows.push(i[0].value+': '+i[1].value+' W x '+i[2].value+', '+i[3].value+' hours a day')});
+  eText='Appliances:\n'+rows.join('\n')+'\nUse per day: '+fmtN(daily)+' kWh. Monthly bill: Rs '+fmtN(bill,0)+' at Rs '+tariff+' per kWh.\nSolar needed: '+panels+' panels of '+pw+' W ('+fmtN(kw)+' kW) with '+sun+' sunny hours a day. Cost about Rs '+fmtN(cost,0)+', saving Rs '+fmtN(saved,0)+' a year.';
+}
+$('#pl-energy').addEventListener('input',energyCalc);
+$('#e-apps').addEventListener('click',e=>{if(e.target.closest('.x')){e.target.closest('.approw').remove();energyCalc()}});
+$('#e-add').onclick=()=>{addApp(['New appliance',100,1,2]);energyCalc()};
+$('#e-ai').onclick=()=>{energyCalc();runAI('planet_energy',eText,'',$('#e-aiout'),$('#e-ai'))};
+energyCalc();
+
+/* ---- carbon footprint (rough yearly estimate, kg CO2e) ---- */
+let cText='';
+function carbonCalc(){
+  const kwh=+$('#c-kwh').value||0,km=+$('#c-km').value||0,fuel=+$('#c-fuel').value,mil=Math.max(1,+$('#c-mil').value||15),lpg=+$('#c-lpg').value||0,fly=+$('#c-fly').value||0;
+  const parts=[['Electricity',kwh*12*.82],['Vehicle',fuel?(km*12/mil)*fuel:0],['Cooking gas',lpg*14.2*3],['Flights',fly*120]];
+  const total=parts.reduce((a,p)=>a+p[1],0),mx=Math.max(...parts.map(p=>p[1]),1);
+  $('#c-out').innerHTML='<div><div class="big">'+fmtN(total/1000,1)+' tonnes</div><p class="sub2">of CO₂ per year. Roughly 2 tonnes is the average in India and 4.7 tonnes worldwide.</p></div>'
+    +'<div class="bars">'+parts.map(p=>'<div class="bar"><span>'+p[0]+'</span><i style="width:'+Math.round(p[1]/mx*100)+'%"></i><span>'+fmtN(p[1]/1000,2)+' t</span></div>').join('')+'</div>';
+  cText='Yearly carbon footprint: '+fmtN(total/1000,1)+' tonnes CO2.\n'+parts.map(p=>p[0]+': '+fmtN(p[1]/1000,2)+' tonnes').join('\n');
+}
+$('#pl-carbon').addEventListener('input',carbonCalc);
+$('#c-ai').onclick=()=>{carbonCalc();runAI('planet_carbon',cText,'',$('#c-aiout'),$('#c-ai'))};
+carbonCalc();
 
 showView(location.hash.slice(1));
 </script>
