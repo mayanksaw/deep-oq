@@ -1,13 +1,10 @@
 """
-app.py - Deep OQ server (Flask + Groq + PostgreSQL)
+app.py - Deep OQ server (Flask + Groq + SQLite)
 
 Run locally:   python app.py
 Production:    gunicorn app:app
-Env vars:      GROQ_API_KEY (required), DATABASE_URL (PostgreSQL connection string),
-               ALLOWED_ORIGIN (optional, for a separate frontend),
-               ADMIN_USERS (comma separated admin usernames),
-               TRUSTED_PROXIES (optional, number of reverse proxies in front
-               of the app, default 1; set 0 if running without a proxy)
+Env vars:      GROQ_API_KEY (required), DEEPOQ_DB (optional db path),
+               ALLOWED_ORIGIN (optional, for a separate frontend)
 """
 
 import os
@@ -18,7 +15,6 @@ from functools import wraps
 
 import requests
 from flask import Flask, g, jsonify, request
-from werkzeug.middleware.proxy_fix import ProxyFix
 
 import ai_advanced as adv
 import ai_tools
@@ -58,13 +54,6 @@ db.init()
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 1_000_000  # 1 MB request limit
 
-# Trust only the real number of proxies in front of the app, so a client can't
-# spoof X-Forwarded-For to get around the rate limits. Set TRUSTED_PROXIES=0
-# if you run without a reverse proxy.
-_proxies = int(os.environ.get("TRUSTED_PROXIES", "1"))
-if _proxies > 0:
-    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=_proxies, x_proto=_proxies, x_host=_proxies)
-
 
 # ---------------- security helpers ----------------
 
@@ -85,8 +74,7 @@ def rate_limited(key, limit, window=60):
 
 
 def client_ip():
-    # ProxyFix has already put the real client address in remote_addr
-    return request.remote_addr or "?"
+    return (request.headers.get("X-Forwarded-For", request.remote_addr) or "?").split(",")[0].strip()
 
 
 def token_from_request():
@@ -246,7 +234,7 @@ def admin_required(fn):
     def wrapper(*a, **kw):
         user = db.user_from_token(token_from_request())
         admins = {x.strip().lower() for x in os.environ.get("ADMIN_USERS", "").split(",") if x.strip()}
-        if not user or user["username"].lower() not in admins:
+        if not user or user["username"] not in admins:
             return jsonify({"error": "Admins only."}), 403
         if rate_limited(("admin", user["id"]), 60):
             return jsonify({"error": "Too many requests."}), 429
@@ -298,7 +286,7 @@ button{background:var(--acc);border:0;color:#fff;cursor:pointer}button.del{backg
 .row .t{flex:1;background:#171a24;border-radius:5px}#login{display:flex;gap:8px;flex-wrap:wrap}#msg{color:var(--bad);margin:8px 0}
 </style></head><body><div class="wrap">
 <h1>Deep OQ Admin</h1><div style="color:var(--mut)" id="sub">Log in with an admin account</div>
-<form id="login"><input id="u" placeholder="admin username" autocomplete="username"><input id="p" type="password" placeholder="password" autocomplete="current-password"><button>Log in</button></form>
+<div id="login"><input id="u" placeholder="admin username"><input id="p" type="password" placeholder="password"><button onclick="signin()">Log in</button></div>
 <div id="msg"></div><div id="main" hidden>
 <div class="grid" id="cards"></div>
 <h2>Messages per day (last 14 days)</h2><div class="card" id="daily"></div>
@@ -316,11 +304,10 @@ function bars(box,items,label,val){box.replaceChildren();const max=Math.max(1,..
   items.forEach(i=>{const r=el('div');r.className='row';r.append(el('span',i[label],{className:'n'}));
     const t=el('div');t.className='t';const b=el('div');b.className='bar';b.style.width=(i[val]/max*100)+'%';t.append(b);
     r.append(t,el('span',i[val],{className:'v'}));box.append(r);});}
-$('login').onsubmit=async e=>{
-  e.preventDefault();
+async function signin(){
   const r=await fetch('/api/login',{method:'POST',headers:H(),body:JSON.stringify({username:$('u').value,password:$('p').value})});
   const d=await r.json();if(!d.token){$('msg').textContent=d.error;return;}
-  token=d.token;sessionStorage.setItem('adm',token);load();};
+  token=d.token;sessionStorage.setItem('adm',token);load();}
 async function load(){
   const r=await fetch('/api/admin/overview',{headers:H()});
   if(!r.ok){$('msg').textContent=r.status==403?'This account is not an admin. Set ADMIN_USERS on the server.':'Please log in.';return;}
@@ -351,167 +338,41 @@ def health():
     return jsonify({"status": "ok", "tools": len(ai_tools.TOOLS)})
 
 
-# ---------------- web page (login card + chat) ----------------
+# ---------------- simple web page ----------------
 
-PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+PAGE = """<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Deep OQ</title>
 <style>
-:root{--bg:#0b0d14;--card:#151926;--line:#262c45;--fg:#eceef5;--mut:#8f96b2;--acc:#6272ff;--acc2:#8a5bff;--bad:#ff6b7a;--ok:#4cd9a0}
-*{box-sizing:border-box}
-body{margin:0;font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:var(--bg);color:var(--fg);min-height:100vh}
-[hidden]{display:none!important}
-button,input,select{font:inherit;color:inherit}
-
-/* ---------- auth screen ---------- */
-#authView{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;
-  background:radial-gradient(900px 500px at 15% -10%,rgba(98,114,255,.22),transparent 60%),
-             radial-gradient(800px 500px at 100% 110%,rgba(138,91,255,.18),transparent 60%),var(--bg)}
-.card{width:100%;max-width:400px;background:var(--card);border:1px solid var(--line);border-radius:18px;padding:32px 28px;
-  box-shadow:0 20px 60px rgba(0,0,0,.45)}
-.logo{width:48px;height:48px;border-radius:14px;margin:0 auto 14px;display:grid;place-items:center;font-weight:700;font-size:18px;
-  background:linear-gradient(135deg,var(--acc),var(--acc2));color:#fff}
-.card h1{margin:0;text-align:center;font-size:22px}
-.card .sub{margin:6px 0 22px;text-align:center;color:var(--mut);font-size:14px}
-.tabs{display:grid;grid-template-columns:1fr 1fr;background:#0f1220;border:1px solid var(--line);border-radius:10px;padding:4px;margin-bottom:20px}
-.tabs button{border:0;background:transparent;padding:9px;border-radius:7px;color:var(--mut);cursor:pointer;font-weight:600}
-.tabs button.on{background:var(--line);color:var(--fg)}
-label{display:block;font-size:13px;color:var(--mut);margin:0 0 6px}
-.field{margin-bottom:16px}
-.inp{position:relative}
-.inp input{width:100%;padding:12px 14px;background:#0f1220;border:1px solid var(--line);border-radius:10px;outline:none;transition:border-color .15s,box-shadow .15s}
-.inp input:focus{border-color:var(--acc);box-shadow:0 0 0 3px rgba(98,114,255,.22)}
-.inp input.pw{padding-right:62px}
-.inp .eye{position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none;border:0;color:var(--mut);cursor:pointer;font-size:12px;padding:6px}
-.hint{font-size:12px;color:var(--mut);margin-top:6px}
-#err{min-height:20px;margin:-4px 0 12px;font-size:13px;color:var(--bad)}
-.go{width:100%;padding:13px;border:0;border-radius:10px;cursor:pointer;font-weight:600;color:#fff;
-  background:linear-gradient(135deg,var(--acc),var(--acc2));transition:opacity .15s,transform .05s}
-.go:hover{opacity:.92}.go:active{transform:translateY(1px)}.go:disabled{opacity:.55;cursor:wait}
-
-/* ---------- chat screen ---------- */
-#appView{max-width:760px;margin:0 auto;padding:16px}
-.top{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px}
-.top h1{margin:0;font-size:22px}
-.top .right{display:flex;align-items:center;gap:10px;color:var(--mut);font-size:14px}
-.ghost{background:transparent;border:1px solid var(--line);border-radius:8px;padding:7px 12px;cursor:pointer}
-.ghost:hover{border-color:var(--acc)}
-#log{min-height:45vh;padding:8px 0}
-.m{margin:10px 0;padding:10px 12px;border-radius:10px;white-space:pre-wrap;line-height:1.45;overflow-wrap:anywhere}
+body{font-family:system-ui,sans-serif;max-width:760px;margin:0 auto;padding:16px;background:#0f1117;color:#e8e8ea}
+h1{margin:0 0 12px}#log{min-height:45vh;padding:8px 0}
+.m{margin:10px 0;padding:10px 12px;border-radius:10px;white-space:pre-wrap;line-height:1.45}
 .u{background:#2a2f45;margin-left:15%}.a{background:#1b1f2d;margin-right:15%}
-#f{display:flex;gap:8px;margin-top:8px}
-#f input{flex:1;padding:12px;border-radius:8px;border:1px solid var(--line);background:#171a24}
-#f button{padding:12px 18px;border:0;border-radius:8px;background:var(--acc);color:#fff;cursor:pointer}
-#tool{padding:10px;border-radius:8px;border:1px solid var(--line);background:#171a24;max-width:100%}
+form{display:flex;gap:8px}input,select,button{padding:12px;border-radius:8px;border:1px solid #333;background:#171a24;color:inherit;font:inherit}
+input{flex:1}button{background:#5b6cff;border:0;color:#fff;cursor:pointer}
+#auth{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}#auth input{min-width:140px}
 </style></head><body>
-
-<!-- LOGIN / SIGN UP -->
-<div id="authView">
-  <form class="card" id="authForm" autocomplete="on" novalidate>
-    <div class="logo">OQ</div>
-    <h1 id="title">Welcome back</h1>
-    <p class="sub" id="subtitle">Log in to continue to Deep OQ</p>
-
-    <div class="tabs" role="tablist">
-      <button type="button" id="tabLogin" class="on" role="tab">Log in</button>
-      <button type="button" id="tabReg" role="tab">Sign up</button>
-    </div>
-
-    <div class="field">
-      <label for="u">Username</label>
-      <div class="inp"><input id="u" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required></div>
-    </div>
-    <div class="field">
-      <label for="p">Password</label>
-      <div class="inp">
-        <input id="p" name="password" type="password" class="pw" autocomplete="current-password" required>
-        <button type="button" class="eye" id="eye">Show</button>
-      </div>
-      <div class="hint" id="pwHint" hidden>Use at least 8 characters.</div>
-    </div>
-
-    <div id="err" role="alert" aria-live="polite"></div>
-    <button class="go" id="submit">Log in</button>
-  </form>
-</div>
-
-<!-- CHAT -->
-<div id="appView" hidden>
-  <div class="top">
-    <h1>Deep OQ</h1>
-    <div class="right"><span id="who"></span><button class="ghost" id="logout" type="button">Log out</button></div>
-  </div>
-  <select id="tool"><option value="">Auto (smart)</option></select>
-  <div id="log"></div>
-  <form id="f"><input id="q" placeholder="Ask anything..." autocomplete="off"><button>Send</button></form>
-</div>
-
+<h1>Deep OQ</h1>
+<div id="auth"><input id="u" placeholder="username"><input id="p" type="password" placeholder="password (8+ chars)">
+<button onclick="go('login')">Log in</button><button onclick="go('register')">Sign up</button><span id="who"></span></div>
+<select id="tool"><option value="">Auto (smart)</option></select>
+<div id="log"></div>
+<form id="f"><input id="q" placeholder="Ask anything..." autocomplete="off"><button>Send</button></form>
 <script>
-const $=id=>document.getElementById(id);
-let token=sessionStorage.getItem('t')||'', name=sessionStorage.getItem('n')||'', cid=null, mode='login';
+let token=sessionStorage.getItem('t')||'',cid=null;
+const log=document.getElementById('log'),q=document.getElementById('q'),sel=document.getElementById('tool'),who=document.getElementById('who');
 const H=()=>({'Content-Type':'application/json','Authorization':'Bearer '+token});
-
-/* ----- auth UI ----- */
-function setMode(m){
-  mode=m;const reg=m==='register';
-  $('tabLogin').classList.toggle('on',!reg);$('tabReg').classList.toggle('on',reg);
-  $('title').textContent=reg?'Create your account':'Welcome back';
-  $('subtitle').textContent=reg?'Sign up to start using Deep OQ':'Log in to continue to Deep OQ';
-  $('submit').textContent=reg?'Create account':'Log in';
-  $('pwHint').hidden=!reg;
-  $('p').autocomplete=reg?'new-password':'current-password';
-  $('err').textContent='';
-}
-$('tabLogin').onclick=()=>setMode('login');
-$('tabReg').onclick=()=>setMode('register');
-$('eye').onclick=()=>{const s=$('p').type==='password';$('p').type=s?'text':'password';$('eye').textContent=s?'Hide':'Show';};
-
-function showApp(){
-  const on=!!token;
-  $('authView').hidden=on;$('appView').hidden=!on;
-  $('who').textContent=on&&name?name:'';
-  if(on)$('q').focus();else $('u').focus();
-}
-function signedOut(msg){
-  token='';name='';cid=null;sessionStorage.removeItem('t');sessionStorage.removeItem('n');
-  $('log').replaceChildren();$('p').value='';$('err').textContent=msg||'';showApp();
-}
-
-$('authForm').onsubmit=async e=>{
-  e.preventDefault();
-  const username=$('u').value.trim(),password=$('p').value;
-  if(!username||!password){$('err').textContent='Enter your username and password.';return;}
-  if(mode==='register'&&password.length<8){$('err').textContent='Password must be at least 8 characters.';return;}
-  $('err').textContent='';$('submit').disabled=true;
-  try{
-    const r=await fetch('/api/'+mode,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username,password})});
-    const d=await r.json().catch(()=>({}));
-    if(d.token){token=d.token;name=username;sessionStorage.setItem('t',token);sessionStorage.setItem('n',name);$('p').value='';showApp();}
-    else $('err').textContent=d.error||'Something went wrong. Try again.';
-  }catch(_){$('err').textContent='Could not reach the server.';}
-  $('submit').disabled=false;
-};
-
-$('logout').onclick=async()=>{
-  try{await fetch('/api/logout',{method:'POST',headers:H()});}catch(_){}
-  signedOut();
-};
-
-/* ----- chat ----- */
-const log=$('log'),q=$('q'),sel=$('tool');
 function add(t,c){const d=document.createElement('div');d.className='m '+c;d.textContent=t;log.appendChild(d);d.scrollIntoView();return d;}
+function show(){who.textContent=token?'Logged in':'';}show();
 fetch('/api/tools').then(r=>r.json()).then(d=>d.tools.forEach(t=>{const o=document.createElement('option');o.value=t.name;o.textContent=t.category+' / '+t.name;sel.appendChild(o);}));
-$('f').onsubmit=async e=>{
+async function go(kind){
+  const r=await fetch('/api/'+kind,{method:'POST',headers:H(),body:JSON.stringify({username:u.value,password:p.value})});
+  const d=await r.json();if(d.token){token=d.token;sessionStorage.setItem('t',token);show();add('Logged in.','a');}else add(d.error,'a');}
+document.getElementById('f').onsubmit=async e=>{
   e.preventDefault();const text=q.value.trim();if(!text)return;
+  if(!token){add('Log in or sign up first.','a');return;}
   q.value='';add(text,'u');const w=add('Thinking...','a');
-  try{
-    const r=await fetch('/api/chat',{method:'POST',headers:H(),body:JSON.stringify({message:text,tool:sel.value,conversation_id:cid})});
-    if(r.status===401){signedOut('Your session expired. Please log in again.');return;}
-    const d=await r.json();if(d.conversation_id)cid=d.conversation_id;
-    w.textContent=d.answer||d.error||'No answer';
-  }catch(_){w.textContent='Could not reach the server.';}
-};
-
-showApp();
+  const r=await fetch('/api/chat',{method:'POST',headers:H(),body:JSON.stringify({message:text,tool:sel.value,conversation_id:cid})});
+  const d=await r.json();if(d.conversation_id)cid=d.conversation_id;w.textContent=d.answer||d.error||'No answer';};
 </script></body></html>"""
 
 
