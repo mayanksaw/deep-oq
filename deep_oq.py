@@ -61,15 +61,15 @@ CHUNK = 900      # characters per chunk
 OVERLAP = 150
 
 PG_SCHEMA = [
-    "CREATE TABLE IF NOT EXISTS docs(id BIGSERIAL PRIMARY KEY, content TEXT NOT NULL, title TEXT, source TEXT, "
+    "CREATE TABLE IF NOT EXISTS oq_docs(id BIGSERIAL PRIMARY KEY, content TEXT NOT NULL, title TEXT, source TEXT, "
     "tsv tsvector GENERATED ALWAYS AS (to_tsvector('english', content)) STORED)",
-    "CREATE INDEX IF NOT EXISTS docs_tsv_idx ON docs USING GIN(tsv)",
-    "CREATE TABLE IF NOT EXISTS sources(source TEXT PRIMARY KEY, chunks INT NOT NULL DEFAULT 0)",
-    "CREATE TABLE IF NOT EXISTS messages(id BIGSERIAL PRIMARY KEY, session TEXT, role TEXT, content TEXT, "
+    "CREATE INDEX IF NOT EXISTS oq_docs_tsv_idx ON oq_docs USING GIN(tsv)",
+    "CREATE TABLE IF NOT EXISTS oq_sources(source TEXT PRIMARY KEY, chunks INT NOT NULL DEFAULT 0)",
+    "CREATE TABLE IF NOT EXISTS oq_messages(id BIGSERIAL PRIMARY KEY, session TEXT, role TEXT, content TEXT, "
     "ts TIMESTAMPTZ DEFAULT now())",
-    "CREATE INDEX IF NOT EXISTS messages_session_idx ON messages(session, id)",
-    "CREATE TABLE IF NOT EXISTS vr_codes(code TEXT PRIMARY KEY, ts DOUBLE PRECISION)",
-    "CREATE TABLE IF NOT EXISTS vr_msgs(id BIGSERIAL PRIMARY KEY, code TEXT, kind TEXT, text TEXT, "
+    "CREATE INDEX IF NOT EXISTS oq_messages_session_idx ON oq_messages(session, id)",
+    "CREATE TABLE IF NOT EXISTS oq_vr_codes(code TEXT PRIMARY KEY, ts DOUBLE PRECISION)",
+    "CREATE TABLE IF NOT EXISTS oq_vr_msgs(id BIGSERIAL PRIMARY KEY, code TEXT, kind TEXT, text TEXT, "
     "ts DOUBLE PRECISION)",
 ]
 
@@ -133,10 +133,10 @@ def kb_add_text(text, title="note", source="manual"):
         with PG.connection() as conn:
             with conn.transaction():
                 for ch in _split(text):
-                    conn.execute("INSERT INTO docs(content,title,source) VALUES(%s,%s,%s)", (ch, title, source))
+                    conn.execute("INSERT INTO oq_docs(content,title,source) VALUES(%s,%s,%s)", (ch, title, source))
                     n += 1
-                conn.execute("INSERT INTO sources(source,chunks) VALUES(%s,%s) "
-                             "ON CONFLICT(source) DO UPDATE SET chunks=sources.chunks+EXCLUDED.chunks",
+                conn.execute("INSERT INTO oq_sources(source,chunks) VALUES(%s,%s) "
+                             "ON CONFLICT(source) DO UPDATE SET chunks=oq_sources.chunks+EXCLUDED.chunks",
                              (source, n))
         return n
     with DB:
@@ -157,7 +157,7 @@ def kb_search(query, k=6):
     if USE_PG:
         q = " or ".join(words[:20])
         try:
-            rows = _pg("SELECT content,title,source FROM docs "
+            rows = _pg("SELECT content,title,source FROM oq_docs "
                        "WHERE tsv @@ websearch_to_tsquery('english', %s) "
                        "ORDER BY ts_rank_cd(tsv, websearch_to_tsquery('english', %s)) DESC LIMIT %s",
                        (q, q, k), "all")
@@ -177,7 +177,7 @@ def kb_search(query, k=6):
 
 def kb_save_msg(session, role, content):
     if USE_PG:
-        _pg("INSERT INTO messages(session,role,content) VALUES(%s,%s,%s)", (session, role, content))
+        _pg("INSERT INTO oq_messages(session,role,content) VALUES(%s,%s,%s)", (session, role, content))
         return
     with DB:
         DB.execute("INSERT INTO messages(session,role,content) VALUES(?,?,?)",
@@ -186,7 +186,7 @@ def kb_save_msg(session, role, content):
 
 def kb_load_history(session, n=12):
     if USE_PG:
-        rows = _pg("SELECT role,content FROM messages WHERE session=%s ORDER BY id DESC LIMIT %s",
+        rows = _pg("SELECT role,content FROM oq_messages WHERE session=%s ORDER BY id DESC LIMIT %s",
                    (session, n), "all")
     else:
         rows = DB.execute("SELECT role,content FROM messages WHERE session=? "
@@ -196,8 +196,8 @@ def kb_load_history(session, n=12):
 
 def kb_stats():
     if USE_PG:
-        return {"chunks": _pg("SELECT COUNT(*) FROM docs", (), "one")[0],
-                "sources": _pg("SELECT COUNT(*) FROM sources", (), "one")[0]}
+        return {"chunks": _pg("SELECT COUNT(*) FROM oq_docs", (), "one")[0],
+                "sources": _pg("SELECT COUNT(*) FROM oq_sources", (), "one")[0]}
     d = DB.execute("SELECT COUNT(*) FROM docs").fetchone()[0]
     s = DB.execute("SELECT COUNT(*) FROM sources").fetchone()[0]
     return {"chunks": d, "sources": s}
@@ -210,7 +210,7 @@ def migrate_sqlite_to_pg(path=None):
     path = path or DB_PATH
     if not os.path.exists(path):
         sys.exit("No SQLite file found at " + path)
-    if _pg("SELECT COUNT(*) FROM docs", (), "one")[0] > 0:
+    if _pg("SELECT COUNT(*) FROM oq_docs", (), "one")[0] > 0:
         sys.exit("PostgreSQL already has knowledge in it, so nothing was copied (this prevents duplicates).")
     src = sqlite3.connect(path)
     docs = src.execute("SELECT content,title,source FROM docs").fetchall()
@@ -219,10 +219,10 @@ def migrate_sqlite_to_pg(path=None):
     with PG.connection() as conn:
         with conn.transaction():
             cur = conn.cursor()
-            cur.executemany("INSERT INTO docs(content,title,source) VALUES(%s,%s,%s)", docs)
-            cur.executemany("INSERT INTO sources(source,chunks) VALUES(%s,%s) "
+            cur.executemany("INSERT INTO oq_docs(content,title,source) VALUES(%s,%s,%s)", docs)
+            cur.executemany("INSERT INTO oq_sources(source,chunks) VALUES(%s,%s) "
                             "ON CONFLICT(source) DO UPDATE SET chunks=EXCLUDED.chunks", srcs)
-            cur.executemany("INSERT INTO messages(session,role,content,ts) "
+            cur.executemany("INSERT INTO oq_messages(session,role,content,ts) "
                             "VALUES(%s,%s,%s,COALESCE(%s::timestamptz, now()))", msgs)
     print(f"copied {len(docs)} chunks, {len(srcs)} sources, {len(msgs)} messages into PostgreSQL")
 
@@ -2489,7 +2489,7 @@ if not USE_PG:  # PostgreSQL creates these tables with the others at start-up
 
 def _vr_valid(code):
     if USE_PG:
-        row = _pg("SELECT ts FROM vr_codes WHERE code=%s", (code,), "one")
+        row = _pg("SELECT ts FROM oq_vr_codes WHERE code=%s", (code,), "one")
     else:
         row = DB.execute("SELECT ts FROM vr_codes WHERE code=?", (code,)).fetchone()
     return bool(row) and time.time() - row[0] < _VR_TTL
@@ -2500,9 +2500,9 @@ def _vr_create(code):
     if USE_PG:
         with PG.connection() as conn:
             with conn.transaction():
-                conn.execute("DELETE FROM vr_msgs WHERE ts<%s", (old,))
-                conn.execute("DELETE FROM vr_codes WHERE ts<%s", (old,))
-                conn.execute("INSERT INTO vr_codes(code,ts) VALUES(%s,%s) "
+                conn.execute("DELETE FROM oq_vr_msgs WHERE ts<%s", (old,))
+                conn.execute("DELETE FROM oq_vr_codes WHERE ts<%s", (old,))
+                conn.execute("INSERT INTO oq_vr_codes(code,ts) VALUES(%s,%s) "
                              "ON CONFLICT(code) DO UPDATE SET ts=EXCLUDED.ts", (code, time.time()))
         return
     DB.execute("DELETE FROM vr_msgs WHERE ts<?", (old,))
@@ -2513,7 +2513,7 @@ def _vr_create(code):
 
 def _vr_add(code, kind, text):
     if USE_PG:
-        _pg("INSERT INTO vr_msgs(code,kind,text,ts) VALUES(%s,%s,%s,%s)", (code, kind, text, time.time()))
+        _pg("INSERT INTO oq_vr_msgs(code,kind,text,ts) VALUES(%s,%s,%s,%s)", (code, kind, text, time.time()))
         return
     DB.execute("INSERT INTO vr_msgs(code,kind,text,ts) VALUES(?,?,?,?)", (code, kind, text, time.time()))
     DB.commit()
@@ -2521,9 +2521,9 @@ def _vr_add(code, kind, text):
 
 def _vr_fetch(code, kind, after):
     if USE_PG:
-        last = _pg("SELECT COALESCE(MAX(id),0) FROM vr_msgs WHERE code=%s", (code,), "one")[0]
+        last = _pg("SELECT COALESCE(MAX(id),0) FROM oq_vr_msgs WHERE code=%s", (code,), "one")[0]
         rows = [] if after < 0 else _pg(
-            "SELECT id,text FROM vr_msgs WHERE code=%s AND kind=%s AND id>%s ORDER BY id LIMIT 20",
+            "SELECT id,text FROM oq_vr_msgs WHERE code=%s AND kind=%s AND id>%s ORDER BY id LIMIT 20",
             (code, kind, after), "all")
         return last, rows
     last = DB.execute("SELECT COALESCE(MAX(id),0) FROM vr_msgs WHERE code=?", (code,)).fetchone()[0]
