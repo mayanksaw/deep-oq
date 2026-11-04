@@ -648,6 +648,7 @@ for _m in (SMART_MODEL, "qwen/qwen3.8-27b", "qwen/qwen3.6-27b", "openai/gpt-oss-
 _smart = {"model": None}
 client = Groq(api_key=os.environ["GROQ_API_KEY"])
 ACCESS_KEY = os.environ.get("ACCESS_KEY", "")  # set on Render to lock the site
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "").strip()  # "Continue with Google" needs this
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = (MAX_UPLOAD_MB + 2) * 1024 * 1024
 
@@ -831,7 +832,7 @@ def _start_login(name, remember):
 @app.before_request
 def require_login():
     p = request.path
-    if p in ("/login", "/logout", "/favicon.ico") or p.startswith(("/api/login", "/api/register", "/vr")):
+    if p in ("/login", "/logout", "/favicon.ico") or p.startswith(("/api/login", "/api/register", "/api/google", "/vr")):
         return None
     if login_session.get("user"):
         return None
@@ -844,7 +845,8 @@ def require_login():
 def login_page():
     if login_session.get("user"):
         return redirect("/")
-    return LOGIN_PAGE, 200, {"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache"}
+    return (LOGIN_PAGE.replace("__GOOGLE_CLIENT_ID__", GOOGLE_CLIENT_ID), 200,
+            {"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache"})
 
 
 @app.post("/api/register")
@@ -852,6 +854,8 @@ def api_register():
     d = request.get_json(silent=True) or {}
     name = str(d.get("username", "")).strip().lower()
     pw = str(d.get("password", ""))
+    if name.startswith("google:"):
+        return jsonify(error="That username is not allowed."), 400
     if not 1 <= len(name) <= 40 or any(ord(ch) < 32 for ch in name):
         return jsonify(error="Username must be 1-40 characters."), 400
     if len(pw) < 8:
@@ -886,6 +890,38 @@ def api_login():
         return jsonify(error="Wrong username or password."), 401
     _start_login(name, d.get("remember", True))
     return jsonify(username=name)
+
+
+@app.post("/api/google")
+def api_google():
+    if not GOOGLE_CLIENT_ID:
+        return jsonify(error="Google sign-in is not set up yet."), 503
+    if _too_many_fails():
+        return jsonify(error="Too many tries. Wait 10 minutes and try again."), 429
+    d = request.get_json(silent=True) or {}
+    token = str(d.get("credential", ""))[:4000]
+    if not token:
+        return jsonify(error="No Google token received."), 400
+    try:
+        info = _get_json("https://oauth2.googleapis.com/tokeninfo?id_token=" + urllib.parse.quote(token))
+    except Exception:
+        _login_fails.setdefault(_client_ip(), []).append(time.time())
+        return jsonify(error="Google could not verify this sign-in."), 401
+    good = (info.get("aud") == GOOGLE_CLIENT_ID
+            and info.get("iss") in ("accounts.google.com", "https://accounts.google.com")
+            and str(info.get("email_verified")).lower() == "true" and info.get("email"))
+    if not good:
+        _login_fails.setdefault(_client_ip(), []).append(time.time())
+        return jsonify(error="This Google account could not be verified."), 401
+    name = "google:" + info["email"].strip().lower()
+    try:
+        if not user_get(name):
+            user_add(name, generate_password_hash(secrets.token_urlsafe(32)))
+    except Exception as e:
+        print("google login failed:", e)
+        return jsonify(error="Could not sign in. Try again."), 500
+    _start_login(name, d.get("remember", True))
+    return jsonify(username=info.get("name") or info["email"])
 
 
 @app.get("/logout")
@@ -3363,6 +3399,7 @@ LOGIN_PAGE = r"""<!DOCTYPE html>
   .ok.show circle,.ok.show path{stroke-dashoffset:0}
     .ok h2{margin-top:18px;font-size:24px}.ok p{color:var(--muted);margin-top:8px;font-size:14px}
   </style>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 <body>
 <div class="aurora"></div>
@@ -3409,6 +3446,11 @@ LOGIN_PAGE = r"""<!DOCTYPE html>
         <div class="msg" id="msg"></div>
       </form>
 
+      <div id="gwrap" hidden>
+        <div class="divider">or</div>
+        <div id="gbtn" style="display:flex;justify-content:center"></div>
+      </div>
+
       <p class="switch" id="switch">New here? <a id="toggle">Create an account</a></p>
 
       <div class="ok" id="ok">
@@ -3425,6 +3467,29 @@ const AFTER_LOGIN_URL = "/";       // where to go after login
 
 const card = document.getElementById("card");
 document.getElementById("type").textContent = "Ask anything. Get answers fast.";
+
+/* ===== Google sign-in ===== */
+const GID = "__GOOGLE_CLIENT_ID__";
+async function onGoogle(resp){
+  document.getElementById("msg").textContent = "";
+  try{
+    const r = await fetch("/api/google", {method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({credential: resp.credential, remember: document.getElementById("remember").checked})});
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || "Google sign-in failed.");
+    document.getElementById("okTitle").textContent = "Welcome, " + (j.username || "") + "!";
+    document.getElementById("ok").classList.add("show");
+    setTimeout(() => location.href = AFTER_LOGIN_URL, 1800);
+  } catch(err){ fail(err.message); }
+}
+function initGoogle(){
+  if (!GID || !window.google || !google.accounts) return;
+  google.accounts.id.initialize({client_id: GID, callback: onGoogle});
+  google.accounts.id.renderButton(document.getElementById("gbtn"), {theme:"filled_black", size:"large",
+    shape:"pill", text:"continue_with", logo_alignment:"left", width:300});
+  document.getElementById("gwrap").hidden = false;
+}
+window.addEventListener("load", initGoogle);
 
 /* ===== Form logic ===== */
 const $ = id => document.getElementById(id);
