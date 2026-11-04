@@ -22,6 +22,11 @@ RUN ON RENDER (Web Service, language Python 3)
   Start command : gunicorn deep_oq:app --workers 1 --threads 4 --timeout 300
   Environment   : GROQ_API_KEY (required), ACCESS_KEY (optional password), PYTHON_VERSION 3.12.3
   Optional      : DEEP_OQ_MODEL, DEEP_OQ_SMART_MODEL, DEEP_OQ_DB, MAX_VIDEO_MB, MAX_VIDEO_SECONDS
+
+POSTGRESQL (optional, instead of the SQLite file)
+  pip install "psycopg[binary,pool]"
+  Set DATABASE_URL=postgresql://user:password@host:5432/dbname   (Render: use the Internal Database URL)
+  Tables are created automatically. To copy an old SQLite file once:  python deep_oq.py migrate old.db
 """
 import ast
 import datetime
@@ -46,12 +51,52 @@ from groq import Groq
 
 
 # ==========================================================================
-# KNOWLEDGE DATABASE (SQLite full-text search)
+# DATABASE: a SQLite file by default, PostgreSQL when the DATABASE_URL setting exists
 # ==========================================================================
 
 DB_PATH = os.environ.get("DEEP_OQ_DB", "deep_oq.db")
+DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+USE_PG = DATABASE_URL.startswith(("postgres://", "postgresql://"))
 CHUNK = 900      # characters per chunk
 OVERLAP = 150
+
+PG_SCHEMA = [
+    "CREATE TABLE IF NOT EXISTS docs(id BIGSERIAL PRIMARY KEY, content TEXT NOT NULL, title TEXT, source TEXT, "
+    "tsv tsvector GENERATED ALWAYS AS (to_tsvector('english', content)) STORED)",
+    "CREATE INDEX IF NOT EXISTS docs_tsv_idx ON docs USING GIN(tsv)",
+    "CREATE TABLE IF NOT EXISTS sources(source TEXT PRIMARY KEY, chunks INT NOT NULL DEFAULT 0)",
+    "CREATE TABLE IF NOT EXISTS messages(id BIGSERIAL PRIMARY KEY, session TEXT, role TEXT, content TEXT, "
+    "ts TIMESTAMPTZ DEFAULT now())",
+    "CREATE INDEX IF NOT EXISTS messages_session_idx ON messages(session, id)",
+    "CREATE TABLE IF NOT EXISTS vr_codes(code TEXT PRIMARY KEY, ts DOUBLE PRECISION)",
+    "CREATE TABLE IF NOT EXISTS vr_msgs(id BIGSERIAL PRIMARY KEY, code TEXT, kind TEXT, text TEXT, "
+    "ts DOUBLE PRECISION)",
+]
+
+
+def _pg_open():
+    from psycopg_pool import ConnectionPool  # pip install "psycopg[binary,pool]"
+    opts = dict(min_size=1, max_size=5, kwargs={"autocommit": True}, open=False)
+    try:
+        pool = ConnectionPool(DATABASE_URL, check=ConnectionPool.check_connection, **opts)
+    except TypeError:  # older psycopg_pool without the check option
+        pool = ConnectionPool(DATABASE_URL, **opts)
+    pool.open(wait=True, timeout=30)
+    with pool.connection() as conn:
+        with conn.transaction():
+            conn.execute("SELECT pg_advisory_xact_lock(727274)")  # one worker creates the tables at a time
+            for stmt in PG_SCHEMA:
+                conn.execute(stmt)
+    return pool
+
+
+def _pg(sql, params=(), fetch=None):
+    with PG.connection() as conn:
+        cur = conn.execute(sql, params)
+        if fetch == "one":
+            return cur.fetchone()
+        if fetch == "all":
+            return cur.fetchall()
 
 
 def _kb_conn():
@@ -66,7 +111,12 @@ def _kb_conn():
     return c
 
 
-DB = _kb_conn()
+if USE_PG:
+    PG, DB = _pg_open(), None
+    print("Database: PostgreSQL")
+else:
+    PG, DB = None, _kb_conn()
+    print("Database: SQLite file", DB_PATH)
 
 
 def _split(text):
@@ -79,6 +129,16 @@ def _split(text):
 
 def kb_add_text(text, title="note", source="manual"):
     n = 0
+    if USE_PG:
+        with PG.connection() as conn:
+            with conn.transaction():
+                for ch in _split(text):
+                    conn.execute("INSERT INTO docs(content,title,source) VALUES(%s,%s,%s)", (ch, title, source))
+                    n += 1
+                conn.execute("INSERT INTO sources(source,chunks) VALUES(%s,%s) "
+                             "ON CONFLICT(source) DO UPDATE SET chunks=sources.chunks+EXCLUDED.chunks",
+                             (source, n))
+        return n
     with DB:
         for ch in _split(text):
             DB.execute("INSERT INTO docs(content,title,source) VALUES(?,?,?)",
@@ -94,6 +154,17 @@ def kb_search(query, k=6):
     words = re.findall(r"\w+", query.lower())
     if not words:
         return []
+    if USE_PG:
+        q = " or ".join(words[:20])
+        try:
+            rows = _pg("SELECT content,title,source FROM docs "
+                       "WHERE tsv @@ websearch_to_tsquery('english', %s) "
+                       "ORDER BY ts_rank_cd(tsv, websearch_to_tsquery('english', %s)) DESC LIMIT %s",
+                       (q, q, k), "all")
+        except Exception as e:
+            print("knowledge search failed:", e)
+            return []
+        return [{"content": r[0], "title": r[1], "source": r[2]} for r in rows]
     q = " OR ".join(f'"{w}"' for w in words[:20])
     try:
         rows = DB.execute(
@@ -105,21 +176,56 @@ def kb_search(query, k=6):
 
 
 def kb_save_msg(session, role, content):
+    if USE_PG:
+        _pg("INSERT INTO messages(session,role,content) VALUES(%s,%s,%s)", (session, role, content))
+        return
     with DB:
         DB.execute("INSERT INTO messages(session,role,content) VALUES(?,?,?)",
                    (session, role, content))
 
 
 def kb_load_history(session, n=12):
-    rows = DB.execute("SELECT role,content FROM messages WHERE session=? "
-                      "ORDER BY id DESC LIMIT ?", (session, n)).fetchall()
+    if USE_PG:
+        rows = _pg("SELECT role,content FROM messages WHERE session=%s ORDER BY id DESC LIMIT %s",
+                   (session, n), "all")
+    else:
+        rows = DB.execute("SELECT role,content FROM messages WHERE session=? "
+                          "ORDER BY id DESC LIMIT ?", (session, n)).fetchall()
     return [{"role": r, "content": c} for r, c in reversed(rows)]
 
 
 def kb_stats():
+    if USE_PG:
+        return {"chunks": _pg("SELECT COUNT(*) FROM docs", (), "one")[0],
+                "sources": _pg("SELECT COUNT(*) FROM sources", (), "one")[0]}
     d = DB.execute("SELECT COUNT(*) FROM docs").fetchone()[0]
     s = DB.execute("SELECT COUNT(*) FROM sources").fetchone()[0]
     return {"chunks": d, "sources": s}
+
+
+def migrate_sqlite_to_pg(path=None):
+    """Copy an existing SQLite file into PostgreSQL once:  python deep_oq.py migrate [file.db]"""
+    if not USE_PG:
+        sys.exit("Set the DATABASE_URL setting to your PostgreSQL address first.")
+    path = path or DB_PATH
+    if not os.path.exists(path):
+        sys.exit("No SQLite file found at " + path)
+    if _pg("SELECT COUNT(*) FROM docs", (), "one")[0] > 0:
+        sys.exit("PostgreSQL already has knowledge in it, so nothing was copied (this prevents duplicates).")
+    src = sqlite3.connect(path)
+    docs = src.execute("SELECT content,title,source FROM docs").fetchall()
+    srcs = src.execute("SELECT source,chunks FROM sources").fetchall()
+    msgs = src.execute("SELECT session,role,content,ts FROM messages ORDER BY id").fetchall()
+    with PG.connection() as conn:
+        with conn.transaction():
+            cur = conn.cursor()
+            cur.executemany("INSERT INTO docs(content,title,source) VALUES(%s,%s,%s)", docs)
+            cur.executemany("INSERT INTO sources(source,chunks) VALUES(%s,%s) "
+                            "ON CONFLICT(source) DO UPDATE SET chunks=EXCLUDED.chunks", srcs)
+            cur.executemany("INSERT INTO messages(session,role,content,ts) "
+                            "VALUES(%s,%s,%s,COALESCE(%s::timestamptz, now()))", msgs)
+    print(f"copied {len(docs)} chunks, {len(srcs)} sources, {len(msgs)} messages into PostgreSQL")
+
 
 # ==========================================================================
 # TOOLS: exact calculator, text counter, web search
@@ -2373,16 +2479,58 @@ _vr_lock = threading.Lock()
 _VR_ALPHA = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 _VR_TTL = 6 * 3600  # a link code works for 6 hours
 
-with _vr_lock:
-    DB.execute("CREATE TABLE IF NOT EXISTS vr_codes(code TEXT PRIMARY KEY, ts REAL)")
-    DB.execute("CREATE TABLE IF NOT EXISTS vr_msgs(id INTEGER PRIMARY KEY AUTOINCREMENT, "
-               "code TEXT, kind TEXT, text TEXT, ts REAL)")
-    DB.commit()
+if not USE_PG:  # PostgreSQL creates these tables with the others at start-up
+    with _vr_lock:
+        DB.execute("CREATE TABLE IF NOT EXISTS vr_codes(code TEXT PRIMARY KEY, ts REAL)")
+        DB.execute("CREATE TABLE IF NOT EXISTS vr_msgs(id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                   "code TEXT, kind TEXT, text TEXT, ts REAL)")
+        DB.commit()
 
 
 def _vr_valid(code):
-    row = DB.execute("SELECT ts FROM vr_codes WHERE code=?", (code,)).fetchone()
+    if USE_PG:
+        row = _pg("SELECT ts FROM vr_codes WHERE code=%s", (code,), "one")
+    else:
+        row = DB.execute("SELECT ts FROM vr_codes WHERE code=?", (code,)).fetchone()
     return bool(row) and time.time() - row[0] < _VR_TTL
+
+
+def _vr_create(code):
+    old = time.time() - _VR_TTL
+    if USE_PG:
+        with PG.connection() as conn:
+            with conn.transaction():
+                conn.execute("DELETE FROM vr_msgs WHERE ts<%s", (old,))
+                conn.execute("DELETE FROM vr_codes WHERE ts<%s", (old,))
+                conn.execute("INSERT INTO vr_codes(code,ts) VALUES(%s,%s) "
+                             "ON CONFLICT(code) DO UPDATE SET ts=EXCLUDED.ts", (code, time.time()))
+        return
+    DB.execute("DELETE FROM vr_msgs WHERE ts<?", (old,))
+    DB.execute("DELETE FROM vr_codes WHERE ts<?", (old,))
+    DB.execute("INSERT OR REPLACE INTO vr_codes(code,ts) VALUES(?,?)", (code, time.time()))
+    DB.commit()
+
+
+def _vr_add(code, kind, text):
+    if USE_PG:
+        _pg("INSERT INTO vr_msgs(code,kind,text,ts) VALUES(%s,%s,%s,%s)", (code, kind, text, time.time()))
+        return
+    DB.execute("INSERT INTO vr_msgs(code,kind,text,ts) VALUES(?,?,?,?)", (code, kind, text, time.time()))
+    DB.commit()
+
+
+def _vr_fetch(code, kind, after):
+    if USE_PG:
+        last = _pg("SELECT COALESCE(MAX(id),0) FROM vr_msgs WHERE code=%s", (code,), "one")[0]
+        rows = [] if after < 0 else _pg(
+            "SELECT id,text FROM vr_msgs WHERE code=%s AND kind=%s AND id>%s ORDER BY id LIMIT 20",
+            (code, kind, after), "all")
+        return last, rows
+    last = DB.execute("SELECT COALESCE(MAX(id),0) FROM vr_msgs WHERE code=?", (code,)).fetchone()[0]
+    rows = [] if after < 0 else DB.execute(
+        "SELECT id,text FROM vr_msgs WHERE code=? AND kind=? AND id>? ORDER BY id LIMIT 20",
+        (code, kind, after)).fetchall()
+    return last, rows
 
 
 @app.post("/vr/new")
@@ -2391,12 +2539,8 @@ def vr_new():
     if denied():
         return jsonify(error="locked"), 401
     with _vr_lock:
-        old = time.time() - _VR_TTL
-        DB.execute("DELETE FROM vr_msgs WHERE ts<?", (old,))
-        DB.execute("DELETE FROM vr_codes WHERE ts<?", (old,))
         code = "".join(secrets.choice(_VR_ALPHA) for _ in range(6))
-        DB.execute("INSERT OR REPLACE INTO vr_codes(code,ts) VALUES(?,?)", (code, time.time()))
-        DB.commit()
+        _vr_create(code)
     return jsonify(code=code)
 
 
@@ -2414,8 +2558,7 @@ def vr_send():
     with _vr_lock:
         if not _vr_valid(code):
             return jsonify(error="That link code is not valid or has expired."), 404
-        DB.execute("INSERT INTO vr_msgs(code,kind,text,ts) VALUES(?,?,?,?)", (code, kind, text, time.time()))
-        DB.commit()
+        _vr_add(code, kind, text)
     return jsonify(ok=True)
 
 
@@ -2432,10 +2575,7 @@ def vr_poll():
     with _vr_lock:
         if not _vr_valid(code):
             return jsonify(error="That link code is not valid or has expired."), 404
-        last = DB.execute("SELECT COALESCE(MAX(id),0) FROM vr_msgs WHERE code=?", (code,)).fetchone()[0]
-        rows = [] if after < 0 else DB.execute(
-            "SELECT id,text FROM vr_msgs WHERE code=? AND kind=? AND id>? ORDER BY id LIMIT 20",
-            (code, kind, after)).fetchall()
+        last, rows = _vr_fetch(code, kind, after)
     return jsonify(last=last, msgs=[{"id": r[0], "text": r[1]} for r in rows])
 
 
@@ -2699,5 +2839,7 @@ def ingest(paths):
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "ingest":
         ingest(sys.argv[2:])
+    elif len(sys.argv) > 1 and sys.argv[1] == "migrate":
+        migrate_sqlite_to_pg(sys.argv[2] if len(sys.argv) > 2 else None)
     else:
         app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
