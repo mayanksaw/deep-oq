@@ -646,7 +646,49 @@ for _m in (SMART_MODEL, "qwen/qwen3.8-27b", "qwen/qwen3.6-27b", "openai/gpt-oss-
     if _m not in SMART_CANDIDATES:
         SMART_CANDIDATES.append(_m)
 _smart = {"model": None}
-client = Groq(api_key=os.environ["GROQ_API_KEY"])
+# Several free Groq keys add their limits together. Put them in GROQ_API_KEYS separated by commas.
+_KEYS = [k.strip() for k in (os.environ.get("GROQ_API_KEYS", "") + "," + os.environ["GROQ_API_KEY"]).split(",") if k.strip()]
+_KEYS = list(dict.fromkeys(_KEYS))
+_groqs = [Groq(api_key=k) for k in _KEYS]
+_key_state = {"i": 0}
+_cool = {}  # (key number, model) -> time when it may be used again
+
+
+class _Completions:
+    def create(self, **kw):
+        n = len(_groqs)
+        model = kw.get("model")
+        last = None
+        now = time.time()
+        order = [(_key_state["i"] + k) % n for k in range(n)]
+        ready = [i for i in order if _cool.get((i, model), 0) <= now]
+        for i in (ready or order):  # skip keys that just hit their limit
+            try:
+                r = _groqs[i].chat.completions.create(**kw)
+                _key_state["i"] = i
+                return r
+            except Exception as e:
+                last = e
+                msg = str(e).lower()
+                if n > 1 and any(w in msg for w in ("429", "rate limit", "rate_limit", "quota", "limit reached")):
+                    daily = "per day" in msg or "tpd" in msg or "daily" in msg
+                    _cool[(i, model)] = time.time() + (3600 if daily else 60)
+                    print("key", i + 1, "of", n, "is at its limit for", model, "- trying the next key")
+                    continue
+                raise
+        raise last
+
+
+class _Chat:
+    completions = _Completions()
+
+
+class _RotatingClient:
+    chat = _Chat()
+
+
+client = _RotatingClient()
+print("Groq keys loaded:", len(_groqs))
 ACCESS_KEY = os.environ.get("ACCESS_KEY", "")  # set on Render to lock the site
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "").strip()  # "Continue with Google" needs this
 app = Flask(__name__)
@@ -779,7 +821,7 @@ def plain_math(text):
         part = re.sub(r"\\\[(.+?)\\\]", lambda m: _tex_plain(m.group(1), True).strip(), part, flags=re.S)
         part = re.sub(r"\\\((.+?)\\\)", lambda m: _tex_plain(m.group(1), True).strip(), part, flags=re.S)
         part = re.sub(r"\$([^$\n]{1,300}?)\$",
-                      lambda m: _tex_plain(m.group(1), True).strip() if re.search(r"[\\^_{}=]", m.group(1)) else m.group(0), part)
+                      lambda m: _tex_plain(m.group(1), True).strip() if (re.search(r"[\\^_{}=]", m.group(1)) or re.fullmatch(r"\S{1,20}", m.group(1))) else m.group(0), part)
         part = _tex_plain(part, False)
         part = re.sub(r"(?<![\w/.:])(\d+(?:\.\d+)?)/(\d+(?:\.\d+)?)(?![\w/])", r"\1 divided by \2", part)
         part = re.sub(r"[ \t]{2,}", " ", part)
@@ -788,8 +830,8 @@ def plain_math(text):
     return "".join(out)
 
 
-def deep_oq(session, question):
-    return plain_math(_deep_oq_raw(session, question))
+def deep_oq(session, question, force_exam=False):
+    return plain_math(_deep_oq_raw(session, question, force_exam))
 
 
 HARD_HINTS = ("code", "function", "bug", "prove", "calculate", "solve", "why",
@@ -820,7 +862,7 @@ def _call(model, messages, temperature, max_tokens, effort=None):
     return re.sub(r"<think>.*?(</think>|$)", "", text, flags=re.S).strip()  # hide any visible thinking
 
 
-def chat(messages, temperature=0.3, max_tokens=2048, smart=False, prefer=None):
+def chat(messages, temperature=0.3, max_tokens=4096, smart=False, prefer=None):
     if smart:
         order = SMART_CANDIDATES[:]
         if _smart["model"] in order:  # start with the model that worked last time
@@ -883,6 +925,33 @@ EXAM_SYSTEM = (
 )
 
 
+def _split_final(text):
+    """Returns (final answer line or None, the solution text without that line)."""
+    m = re.search(r"^[ \t*]*FINAL:\s*(.+?)[ \t*]*$", text or "", re.M)
+    body = re.sub(r"\n?^[ \t*]*FINAL:.*$", "", text or "", flags=re.M).strip()
+    return (m.group(1).strip() if m else None), body
+
+
+def _same_answer(a, b):
+    if not a or not b:
+        return False
+    def norm(x):
+        return re.sub(r"[\s*$\\{}]", "", x.lower())
+    def option(x):
+        m = re.match(r"^\s*(?:option\s*)?\(([a-e1-5])\)|^\s*(?:option\s*)?([a-e1-5])\s*[\).:]?\s*$", x.lower())
+        return (m.group(1) or m.group(2)) if m else None
+    oa, ob = option(a), option(b)
+    if oa and ob:
+        return oa == ob
+    na = re.findall(r"-?\d+(?:\.\d+)?", a)
+    nb = re.findall(r"-?\d+(?:\.\d+)?", b)
+    if na and nb:
+        if len(na) != len(nb):
+            return False
+        return all(abs(float(x) - float(y)) <= 1e-3 * max(1.0, abs(float(x))) for x, y in zip(na, nb))
+    return norm(a) == norm(b)
+
+
 def is_exam(text):
     t = text or ""
     if EXAM_STRONG.search(t) or re.search(r"\(\s*a\s*\).*\(\s*b\s*\)", t, re.S | re.I):
@@ -902,14 +971,14 @@ def knowledge_block(question):
     return "KNOWLEDGE:\n" + "\n\n".join(parts)
 
 
-def _deep_oq_raw(session, question):
+def _deep_oq_raw(session, question, force_exam=False):
     force = question.lower().startswith("/deep")  # "/deep your question" = think as hard as possible
     if force:
         question = question[5:].strip() or question
     history = kb_load_history(session, 12)
     know = knowledge_block(question)
     tool_text, used = run_tools(question, lambda m, t, k: chat(m, t, k))
-    exam = is_exam(question)
+    exam = force_exam or is_exam(question)
     today = datetime.date.today().strftime("%A, %d %B %Y")
     sysmsg = (SYSTEM + (EXAM_SYSTEM if exam else "") + f" Today's date is {today}. TOOL RESULTS (calculator, counter, "
               "web search) are exact or current: trust them over your own arithmetic "
@@ -923,21 +992,46 @@ def _deep_oq_raw(session, question):
         return chat(base + [{"role": "user", "content": user
                     + "\n\nAnswer from the TOOL RESULTS. Check their dates: if they conflict or look old, "
                     "say what is most recent and how sure you are. Keep it short."}], 0.2, 2048, smart=True)
-    if exam:  # JEE / NEET / UPSC style: strongest model thinks hard, then a second model checks it
-        draft = chat(base + [{"role": "user", "content": user + "\n\nSolve this like a top exam teacher. "
-                              "Work one step at a time and do the arithmetic carefully."}],
-                     0.2, 4096, smart=True, prefer=EXAM_MODEL)
-        if not is_checkable(question):
-            return draft
-        try:
-            return chat([{"role": "system", "content": sysmsg}, {"role": "user", "content":
-                f"{user}\n\nSOLUTION TO CHECK:\n{draft}\n\nRe-work the key steps yourself. If the final answer "
-                "or any step is wrong, fix it. Output ONLY the final answer for the student, in the same "
-                "format as the solution, with no mention of this check."}],
-                0.1, 4096, smart=True, prefer=EXAM_CHECK_MODEL)
-        except Exception as e:
-            print("exam check failed:", e)
-            return draft
+    if exam:  # JEE / NEET / UPSC style
+        solve_txt = ("\n\nSolve this like a top exam teacher. Work one step at a time and do the arithmetic "
+                     "carefully.")
+        if not is_checkable(question):  # essays and explanations: one strong answer
+            return chat(base + [{"role": "user", "content": user + solve_txt}], 0.2, 6144,
+                        smart=True, prefer=EXAM_MODEL)
+        tag = ("\nEnd with one last line exactly like this: FINAL: <the final answer only, for example the "
+               "option letter and the value>")
+
+        def solve(model):
+            return chat(base + [{"role": "user", "content": user + solve_txt + tag}], 0.2, 6144,
+                        smart=True, prefer=model)
+
+        results = {}
+
+        def run(key, model):
+            try:
+                results[key] = solve(model)
+            except Exception as e:
+                print("exam solver", key, "failed:", e)
+
+        ths = [threading.Thread(target=run, args=(k, m)) for k, m in (("a", EXAM_MODEL), ("b", EXAM_CHECK_MODEL))]
+        for t in ths:
+            t.start()
+        for t in ths:
+            t.join()
+        a, b = results.get("a"), results.get("b")
+        if not (a or b):
+            raise RuntimeError("no model returned an answer")
+        if not (a and b):  # only one solver answered
+            return _split_final(a or b)[1]
+        (fa, ta), (fb, tb) = _split_final(a), _split_final(b)
+        if _same_answer(fa, fb):  # two different models reached the same answer: confident
+            return ta
+        ref = chat([{"role": "system", "content": sysmsg}, {"role": "user", "content":
+            f"{user}\n\nSOLUTION 1:\n{ta}\n\nSOLUTION 2:\n{tb}\n\nThe two solutions end with different "
+            f"answers ({fa or 'none'} and {fb or 'none'}). Find the mistake by re-working the key steps "
+            "yourself, then write the correct, complete solution for the student in the same format. Do not "
+            "mention the two solutions." + tag}], 0.1, 4096, smart=True, prefer=EXAM_MODEL)
+        return _split_final(ref)[1]
 
     if not (force or is_hard(question) or "calc" in used or "count" in used):
         return chat(base + [{"role": "user", "content": user}], 0.5)
@@ -1657,6 +1751,9 @@ a.primary{text-decoration:none;display:inline-block}
           <button class="pitem" type="button" role="menuitem" data-act="ask">
             <svg viewBox="0 0 24 24"><path d="M21 11.5l-8.6 8.6a5 5 0 0 1-7-7l8.6-8.6a3.4 3.4 0 0 1 4.9 4.9l-8.6 8.6a1.7 1.7 0 0 1-2.4-2.4l7.9-7.9"/></svg>
             <span><b>Upload to ask a question</b><small>Image, video, PDF or text file</small></span></button>
+          <button class="pitem" type="button" role="menuitem" data-act="solve">
+            <svg viewBox="0 0 24 24"><path d="M18 5H7l6 7-6 7h11"/></svg>
+            <span><b>Solve a question from a photo</b><small>Maths, science or exam question</small></span></button>
           <button class="pitem" type="button" role="menuitem" data-act="camera">
             <svg viewBox="0 0 24 24"><path d="M4 8h3l1.6-2.4h6.8L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.6"/></svg>
             <span><b>Take a photo</b><small>Use your camera, then ask about it</small></span></button>
@@ -1673,6 +1770,7 @@ a.primary{text-decoration:none;display:inline-block}
         <input type="file" id="fq" hidden accept="image/*,video/*,.pdf,.txt,.md,.csv,.tsv,.json,.xml,.yaml,.yml,.log,.html,.css,.js,.ts,.jsx,.tsx,.py,.java,.c,.cpp,.h,.cs,.go,.rs,.rb,.php,.kt,.swift,.sql,.sh,.bat">
         <input type="file" id="fpe" hidden accept="image/*">
         <input type="file" id="fcam" hidden accept="image/*" capture="environment">
+        <input type="file" id="fsolve" hidden accept="image/*">
         <input type="file" id="fve" hidden accept="video/*,.mkv">
       </div>
       <textarea id="q" rows="1" placeholder="Ask Deep OQ" aria-label="Message" autocomplete="off"></textarea>
@@ -2048,6 +2146,7 @@ $('#newBtn').onclick=()=>{sid=uid();log.innerHTML='';document.body.classList.rem
 const canSend=()=>!busy&&!attBusy&&(!!box.value.trim()||!!att);
 const IMG_RE=/^\s*(?:please\s+)?(?:(?:can|could|will)\s+you\s+)?(?:(?:create|generate|make|draw|paint|design|show)\s+(?:me\s+)?(?:an?\s+|the\s+)?(?:image|picture|photo|pic|illustration|drawing|painting|wallpaper|poster|logo)(?=\s*(?:of|showing|with|about|for|that|where|:|,|\.|$))|draw\s+(?:me\s+)?(?:an?\s+|the\s+)(?!(?:table|flowchart|diagram|chart|graph|line|circle|square|box|button|layout|form|ui|canvas|svg|html|css|code|function|program|class|schema|tree|grid)\b))/i;
 const IMG_FROM_RE=/^\s*(?:please\s+)?(?:can\s+you\s+)?(?:generate|create|draw|design|imagine|visuali[sz]e|render|paint|redesign|redraw)\b|\b(?:make|show|give)\b.{0,30}\b(?:image|picture|photo|pic|render|illustration|mockup|design)\b/i;
+const SOLVE_RE=/\b(solve|solution|answer|ans|explain|find|calculate|compute|evaluate|derive|prove|simplify|question|problem|mcq|option|correct|jee|neet|upsc|maths?|mathematics|physics|chemistry|biology|numerical|step by step|sum|equation|integral|derivative|how many|value)\b/i;
 const TEXT_EXT=/\.(txt|md|csv|tsv|json|xml|ya?ml|log|html?|css|js|ts|jsx|tsx|py|java|c|cpp|h|cs|go|rs|rb|php|kt|swift|sql|sh|bat)$/i;
 const plusBtn=$('#plus'),pmenu=$('#pmenu');
 function menu(open){pmenu.hidden=!open;plusBtn.setAttribute('aria-expanded',open)}
@@ -2057,6 +2156,7 @@ document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!pmenu.hidden){menu
 pmenu.querySelectorAll('.pitem').forEach(b=>b.onclick=()=>{
   menu(false);const a=b.dataset.act;
   if(a==='ask')$('#fq').click();
+  else if(a==='solve')$('#fsolve').click();
   else if(a==='camera')openCamera();
   else if(a==='photo')$('#fpe').click();
   else if(a==='video')$('#fve').click();
@@ -2066,6 +2166,7 @@ $('#fpe').onchange=e=>{const f=e.target.files[0];e.target.value='';if(f){showVie
 $('#fve').onchange=e=>{const f=e.target.files[0];e.target.value='';if(f){showView('video');loadVideo(f)}};
 $('#fq').onchange=e=>{const f=e.target.files[0];e.target.value='';if(f)attach(f)};
 $('#fcam').onchange=e=>{const f=e.target.files[0];e.target.value='';if(f)attach(f)};
+$('#fsolve').onchange=e=>{const f=e.target.files[0];e.target.value='';if(f)attach(f,{solve:true})};
 let camStream=null,camFacing='environment';
 async function openCamera(){
   if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){$('#fcam').click();return}
@@ -2083,7 +2184,7 @@ async function openCamera(){
   async function start(){
     stop();err.hidden=true;shot.disabled=false;
     try{
-      camStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:camFacing,width:{ideal:1920},height:{ideal:1080}},audio:false});
+      camStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:camFacing,width:{ideal:2560},height:{ideal:1440}},audio:false});
       v.srcObject=camStream;
     }catch(e){
       err.hidden=false;shot.disabled=true;
@@ -2120,23 +2221,24 @@ function renderAtts(note){
     el.append(c);
   };
   if(note)chip('',note,null);
-  if(att)chip(att.thumb||'',(att.kind==='video'?'Video: ':att.kind==='doc'?'File: ':'')+att.name,clearAtt);
+  if(att)chip(att.thumb||'',(att.kind==='video'?'Video: ':att.kind==='doc'?'File: ':att.solve?'Question photo: ':'')+att.name,clearAtt);
   if(imgMode)chip('','Create image: describe it below',()=>setImgMode(false));
   el.hidden=!el.children.length;
-  box.placeholder=imgMode?'Describe the image you want':att?'Ask something about this file':'Ask Deep OQ';
+  box.placeholder=imgMode?'Describe the image you want':att&&att.solve?'Add a note (optional), then press send':att?'Ask something about this file':'Ask Deep OQ';
   send.disabled=!canSend();
 }
 function clearAtt(){att=null;renderAtts()}
 function setImgMode(v){imgMode=v;if(v)att=null;renderAtts()}
 
 function readText(f){return new Promise((ok,no)=>{const r=new FileReader();r.onload=()=>ok(String(r.result));r.onerror=()=>no(new Error('That file could not be read.'));r.readAsText(f)})}
-function shrinkImage(f){return new Promise((ok,no)=>{
+function shrinkImage(f,max,boost){return new Promise((ok,no)=>{
   const url=URL.createObjectURL(f),img=new Image();
   img.onload=()=>{
-    const k=Math.min(1,1024/Math.max(img.naturalWidth,img.naturalHeight)),c=document.createElement('canvas');
+    const k=Math.min(1,(max||1024)/Math.max(img.naturalWidth,img.naturalHeight)),c=document.createElement('canvas');
     c.width=Math.round(img.naturalWidth*k);c.height=Math.round(img.naturalHeight*k);
-    c.getContext('2d').drawImage(img,0,0,c.width,c.height);URL.revokeObjectURL(url);
-    ok(c.toDataURL('image/jpeg',.85));
+    const g=c.getContext('2d');if(boost)g.filter='contrast(1.18) brightness(1.04)';
+    g.drawImage(img,0,0,c.width,c.height);URL.revokeObjectURL(url);
+    ok(c.toDataURL('image/jpeg',boost?.92:.85));
   };
   img.onerror=()=>{URL.revokeObjectURL(url);no(new Error('That picture could not be opened. Try a JPG or PNG.'))};
   img.src=url;
@@ -2160,12 +2262,12 @@ function videoGrid(f){return new Promise((ok,no)=>{
     clearTimeout(t);URL.revokeObjectURL(url);ok(c.toDataURL('image/jpeg',.8));
   };
 })}
-async function attach(f){
+async function attach(f,opts){
   imgMode=false;att=null;attBusy=true;renderAtts('Reading '+f.name+'...');
   try{
     const ext=(f.name.split('.').pop()||'').toLowerCase();
     if(f.type.startsWith('image/')){
-      const d=await shrinkImage(f);att={kind:'image',name:f.name,data:d,thumb:d};
+      const d=await shrinkImage(f),doc=await shrinkImage(f,1800,true);att={kind:'image',name:f.name,data:d,doc:doc,thumb:d,solve:!!(opts&&opts.solve)};
     }else if(f.type.startsWith('video/')||ext==='mkv'){
       if(f.size>300*1048576)throw new Error('That video is over 300 MB. Choose a smaller one.');
       const d=await videoGrid(f);att={kind:'video',name:f.name,data:d,thumb:d};
@@ -2242,6 +2344,13 @@ async function askExtra(q,a,mode){
   const bot=addBot();toEnd();
   try{
     if(mode==='from'){await makeFromPhoto(bot,q,a)}
+    else if(mode==='snap'){
+      const w=bot.querySelector('.wait');if(w)w.textContent='Reading your question';
+      const r=await api('/lab',{mod:'snap',text:q,image:a.doc||a.data}),j=await r.json().catch(()=>({}));
+      if(r.status===401)throw new Error('That access key was not accepted. Reload the page and enter it again.');
+      if(!r.ok||j.error)throw new Error(j.error||'The server did not answer.');
+      botDone(bot,j.answer);
+    }
     else if(mode){await makeImage(bot,q)}
     else if(a.kind==='doc'){
       const r=await api('/askfile',{q,name:a.name,text:a.text,session:sid}),j=await r.json().catch(()=>({}));
@@ -2261,7 +2370,13 @@ async function askExtra(q,a,mode){
 function submit(){
   const q=box.value.trim();
   if(busy||attBusy)return;
-  if(att){if(att.kind==='image'&&IMG_FROM_RE.test(q))return askExtra(q,att,'from');return askExtra(q,att,false)}
+  if(att){
+    if(att.kind==='image'){
+      if(IMG_FROM_RE.test(q))return askExtra(q,att,'from');
+      if(att.solve||!q||SOLVE_RE.test(q))return askExtra(q,att,'snap');
+    }
+    return askExtra(q,att,false);
+  }
   if(imgMode){if(!q)return;return askExtra(q,null,true)}
   if(!q)return;
   if(IMG_RE.test(q))return askExtra(q,null,true);
@@ -2768,7 +2883,7 @@ import random
 import urllib.parse
 import urllib.request
 
-VISION_MODELS = [m for m in (os.environ.get("DEEP_OQ_VISION_MODEL"), "qwen/qwen3.8-27b",
+VISION_MODELS = [m for m in (os.environ.get("DEEP_OQ_VISION_MODEL"), "qwen/qwen3.8-27b", "qwen/qwen3.6-27b",
                              "meta-llama/llama-4-scout-17b-16e-instruct") if m]
 LAB_SYS = ("You are Deep OQ, an AI created by Mayank Kumar Saw. Be accurate, practical and concise. "
            "Use short paragraphs and bullet lists. Never use tables, horizontal lines (---) or HTML tags.")
@@ -2804,23 +2919,25 @@ def _json_from(text):
         raise ValueError("The AI did not return a usable result. Please try again.")
 
 
-def _vision(prompt, image):
+def _vision(prompt, image, temperature=0.3):
     if not image.startswith("data:image/"):
         raise ValueError("Choose a photo first.")
     msgs = [{"role": "user", "content": [
         {"type": "text", "text": prompt},
         {"type": "image_url", "image_url": {"url": image}}]}]
+    last = None
     for mdl in VISION_MODELS:  # try the newest model first, then the backups
         try:
-            r = client.chat.completions.create(model=mdl, max_tokens=3000, temperature=0.3, messages=msgs)
+            r = client.chat.completions.create(model=mdl, max_tokens=4096, temperature=temperature, messages=msgs)
         except Exception as e:
-            if any(w in str(e) for w in ("model_not_found", "does not exist", "decommissioned")):
-                print("vision model unavailable:", mdl)
-                continue
-            raise
+            last = e
+            print("vision model failed:", mdl, str(e)[:160])
+            continue
         text = re.sub(r"<think>.*?</think>", "", r.choices[0].message.content or "", flags=re.S).strip()
         if text:
             return text
+    if last is not None and any(w in str(last).lower() for w in ("rate", "429", "limit")):
+        raise ValueError("Deep OQ is busy reading photos right now. Wait a minute and try again.")
     raise ValueError("Photo understanding is not available right now. Please try again later.")
 
 
@@ -2841,6 +2958,99 @@ def _pollinations_url(prompt, seed):
             + "?width=1024&height=1024&nologo=true&seed=" + str(seed))
 
 
+SNAP_READ_PROMPT = (
+    "You are an exact reader of exam papers and textbook pages (JEE, NEET, UPSC, school maths and science). "
+    "Read the WHOLE photo from top to bottom, every question and every sub-part, including small print, "
+    "instructions, given data, tables and passages. Copy them word for word. Start each question on its own "
+    "line with its number written as 'Q1.', 'Q2.' and so on, even if the page numbers them differently; keep "
+    "sub-parts (a) (b) (i) (ii) and all options (A) (B) (C) (D) or (1) (2) (3) (4) on their own lines under "
+    "their question. Write maths in LaTeX inside $...$ (fractions, powers, roots, integrals, subscripts, Greek "
+    "letters, units). Copy every number, sign, unit and decimal point exactly; do not fix or simplify anything. "
+    "If there is a diagram, graph, circuit, table or figure, add a line [Figure: ...] right under its question "
+    "that states every label, value, angle, direction and relationship you can see. Ignore rough work, pen marks "
+    "and a student's own answers. If a word or number cannot be read, write [unclear]. Do NOT solve or explain "
+    "anything. If the photo has no written question, problem or exercise, reply with exactly NO_QUESTION."
+)
+SNAP_REREAD_PROMPT = (
+    "Look at the photo again, slowly. Below is a first reading of the question paper in the photo. Some parts are "
+    "marked [unclear] or may be wrong. Use the picture and the surrounding context (valid options, units, the "
+    "equation's structure, the chapter) to fix them. Output the complete corrected reading in exactly the same "
+    "format (Q1., Q2., LaTeX in $...$, [Figure: ...] lines). Keep [unclear] only for text that truly cannot be "
+    "read. Do NOT solve anything."
+)
+
+
+def _split_questions(text):
+    """Splits a reading into [(heading, text)] using the 'Q1.' markers; shared text above Q1 goes to every part."""
+    parts = re.split(r"(?m)^\s*Q(\d{1,2})\.\s*", text)
+    if len(parts) < 5:  # fewer than two questions
+        return [("", text)]
+    shared = parts[0].strip()
+    out = []
+    for i in range(1, len(parts) - 1, 2):
+        body = parts[i + 1].strip()
+        if len(body) >= 15:
+            out.append(("Question " + parts[i], (shared + "\n\n" if shared else "") + "Q" + parts[i] + ". " + body))
+    return out or [("", text)]
+
+
+def _snap(text, image):
+    seen = _vision(SNAP_READ_PROMPT, image, 0.1).strip()
+    if not seen or seen.upper().startswith("NO_QUESTION"):
+        return {"answer": _vision(text or "Describe this photo in detail. If it contains any written text, numbers, "
+                                  "labels or diagrams, read them exactly and explain what they say.", image),
+                "snap": False}
+    if "[unclear" in seen.lower():  # one more careful look at the parts that were hard to read
+        try:
+            again = _vision(SNAP_REREAD_PROMPT + "\n\nFIRST READING:\n" + seen, image, 0.1).strip()
+            if again and not again.upper().startswith("NO_QUESTION"):
+                seen = again
+        except Exception as e:
+            print("re-read failed:", e)
+    note = ("\nThe student also wrote: " + text) if text else ""
+    questions = _split_questions(seen)
+    extra = ""
+    if len(questions) > 5:
+        extra = ("\n\n*I solved the first 5 questions. Send the rest in another photo.*")
+        questions = questions[:5]
+
+    def solve(q):
+        try:
+            return deep_oq("snap:" + uuid.uuid4().hex,
+                           "Solve this exam question that was read from a photo. Solve exactly what is written. "
+                           "If a part is marked [unclear], say what you assumed.\n\n" + q[1] + note, True)
+        except Exception as e:
+            print("snap solve failed:", e)
+            return "Sorry, I could not solve this one. Please try again."
+
+    answers = [None] * len(questions)
+
+    def work(idx):
+        answers[idx] = solve(questions[idx])
+
+    if len(questions) == 1:
+        work(0)
+    else:
+        ths = []
+        for i in range(len(questions)):
+            t = threading.Thread(target=work, args=(i,))
+            t.start()
+            ths.append(t)
+            if len(ths) % 2 == 0:  # at most two questions at a time (rate limits)
+                for x in ths[-2:]:
+                    x.join()
+        for t in ths:
+            t.join()
+    if len(questions) == 1:
+        solution = answers[0]
+    else:
+        solution = "\n\n".join("**" + q[0] + "**\n\n" + a for q, a in zip(questions, answers))
+    hint = ("\n\n*Some parts were hard to read. If an answer looks wrong, retake the photo closer, flat and "
+            "well lit, or type the question.*") if "[unclear" in seen.lower() else ""
+    return {"answer": "**I read this from your photo:**\n\n" + seen + "\n\n**Solution:**\n\n" + solution + extra + hint,
+            "snap": True}
+
+
 def _lab(d):
     mod = d.get("mod")
     text = str(d.get("text", "")).strip()[:20000]
@@ -2853,7 +3063,7 @@ def _lab(d):
 
     def ask(task, smart=False):
         return chat([{"role": "system", "content": LAB_SYS}, {"role": "user", "content": task}],
-                    0.4, 2048, smart)
+                    0.4, 4096, smart)
 
     # ---- Agriculture + Energy/Environment: real forecast numbers, then AI advice
     if mod in ("agri", "energy"):
@@ -2895,6 +3105,9 @@ def _lab(d):
         return {"answer": ask(facts + "\n\nSummarize the expected solar output, the early warnings and "
                               "sensible grid or home actions. Keep the numbers exactly as given. "
                               + (("Also answer: " + text) if text else ""))}
+
+    if mod == "snap":  # photo of a question paper: read everything, then solve every question
+        return _snap(text, image)
 
     if mod == "vision":
         return {"answer": _vision(text or "Describe this photo in detail and point out anything "
@@ -3703,7 +3916,7 @@ def askfile_route():
                 + kb_load_history(sess, 6)
                 + [{"role": "user", "content": f"FILE NAME: {name}\n----- FILE START -----\n{text}\n"
                     f"----- FILE END -----\n\nQUESTION:\n{q}"}])
-        answer = plain_math(chat(msgs, 0.3, 2048))
+        answer = plain_math(chat(msgs, 0.3, 4096))
         kb_save_msg(sess, "user", f"[attached file: {name}] {q}")
         kb_save_msg(sess, "assistant", answer)
     except Exception as e:
