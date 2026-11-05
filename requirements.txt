@@ -7,3 +7,5 @@ ddgs
 imageio-ffmpeg
 psycopg[binary,pool]
 psycopg2-binary
+sympy>=1.12
+anthropic>=0.40.0
