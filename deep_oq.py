@@ -674,6 +674,124 @@ SYSTEM = (
     "behind Deep OQ."
 )
 
+# ==========================================================================
+# PLAIN MATHS: answers use simple words, never LaTeX ($, \frac, \sqrt ...)
+# ==========================================================================
+SYSTEM += (
+    " Write all maths in plain, simple words and plain text. Never use LaTeX, dollar signs or "
+    "backslash commands (no \\frac, \\sqrt, \\int, $ or $$). Write 'square root of 11', 'x squared', "
+    "'3 divided by 4', 'integral from 0 to 3 of ...' and 'times' instead of symbols such as / or "
+    "\\cdot. Keep every step short and easy to follow."
+)
+
+_TEX_WORDS = {
+    "cdot": "times", "times": "times", "div": "divided by", "pm": "plus or minus", "mp": "minus or plus",
+    "approx": "is about", "neq": "is not equal to", "ne": "is not equal to", "leq": "is less than or equal to",
+    "le": "is less than or equal to", "geq": "is greater than or equal to", "ge": "is greater than or equal to",
+    "infty": "infinity", "to": "goes to", "rightarrow": "goes to", "Rightarrow": "so", "implies": "so",
+    "therefore": "so", "ldots": "...", "dots": "...", "cdots": "...", "in": "in", "mid": "|",
+    "alpha": "alpha", "beta": "beta", "gamma": "gamma", "delta": "delta", "Delta": "Delta",
+    "epsilon": "epsilon", "theta": "theta", "lambda": "lambda", "mu": "mu", "pi": "pi", "sigma": "sigma",
+    "Sigma": "Sigma", "omega": "omega", "Omega": "Omega", "phi": "phi", "psi": "psi", "rho": "rho", "tau": "tau",
+    "degree": "degrees", "circ": "degrees",
+}
+_TEX_KEEP = {"sin", "cos", "tan", "cot", "sec", "csc", "log", "ln", "exp", "max", "min", "det", "lim", "sup", "inf"}
+
+
+def _pm_wrap(x):
+    x = x.strip()
+    return x if re.fullmatch(r"[\w.\-]+", x) else "(" + x + ")"
+
+
+def _pm_unbrace(x):
+    x = x.strip()
+    return x[1:-1].strip() if x.startswith("{") and x.endswith("}") else x
+
+
+def _pm_power(p):
+    p = _pm_unbrace(p)
+    if p == "2":
+        return " squared"
+    if p == "3":
+        return " cubed"
+    if p in ("\\circ", "circ"):
+        return " degrees"
+    return " to the power " + p
+
+
+def _tex_plain(s, in_math=False):
+    """Turns LaTeX into plain words."""
+    for name in ("text", "mathrm", "mathbf", "mathit", "operatorname", "textbf", "boldsymbol", "mathcal"):
+        s = re.sub(r"\\" + name + r"\s*\{([^{}]*)\}", r"\1", s)
+    for _ in range(8):  # innermost fractions first, so nested ones work
+        t = re.sub(r"\\[dt]?frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}",
+                   lambda m: _pm_wrap(m.group(1)) + " divided by " + _pm_wrap(m.group(2)), s)
+        t = re.sub(r"\\sqrt\s*\[([^\]]*)\]\s*\{([^{}]*)\}",
+                   lambda m: (" cube root of " if m.group(1).strip() == "3" else " " + m.group(1).strip() + "-th root of ")
+                   + _pm_wrap(m.group(2)), t)
+        t = re.sub(r"\\sqrt\s*\{([^{}]*)\}", lambda m: " square root of " + _pm_wrap(m.group(1)), t)
+        t = re.sub(r"\\sqrt\s*(\w)", r" square root of \1", t)
+        if t == s:
+            break
+        s = t
+    bound = r"(\{[^{}]*\}|\\?\w+)"
+    s = re.sub(r"\\int\s*_\s*" + bound + r"\s*\^\s*" + bound,
+               lambda m: " integral from " + _pm_unbrace(m.group(1)) + " to " + _pm_unbrace(m.group(2)) + " of ", s)
+    s = re.sub(r"\\sum\s*_\s*" + bound + r"\s*\^\s*" + bound,
+               lambda m: " sum from " + _pm_unbrace(m.group(1)) + " to " + _pm_unbrace(m.group(2)) + " of ", s)
+    s = re.sub(r"\\lim\s*_\s*" + bound, lambda m: " limit as " + _pm_unbrace(m.group(1)) + " of ", s)
+    s = re.sub(r"\\int\b", " integral of ", s)
+    s = re.sub(r"\\(?:left|right|bigl|bigr|Bigl|Bigr|big|Big)\b\s*", "", s)
+    s = re.sub(r"\\[,;:! ]|\\quad|\\qquad", " ", s)
+    s = re.sub(r"\\\\", " ; ", s)
+    # bracket with limits, e.g. [ ... ]_a^b  ->  [ ... ] evaluated from a to b
+    s = re.sub(r"([\]\)|])\s*_\s*" + bound + r"\s*\^\s*" + bound,
+               lambda m: m.group(1) + " evaluated from " + _pm_unbrace(m.group(2)) + " to " + _pm_unbrace(m.group(3)), s)
+    s = re.sub(r"\\vec\s*\{([^{}]*)\}", r"vector \1", s)
+    s = re.sub(r"\\(?:bar|overline)\s*\{([^{}]*)\}", r"\1 bar", s)
+    s = re.sub(r"\\(?:hat|tilde)\s*\{([^{}]*)\}", r"\1", s)
+    s = re.sub(r"\^\s*(\{[^{}]*\}|\\circ|-?\w)", lambda m: _pm_power(m.group(1)), s)
+    s = re.sub(r"\\([A-Za-z]+)",
+               lambda m: " " + _TEX_WORDS[m.group(1)] + " " if m.group(1) in _TEX_WORDS
+               else (m.group(1) if m.group(1) in _TEX_KEEP else m.group(1)), s)
+    s = re.sub(r"\\([^\w\s])", r"\1", s)
+    if in_math:
+        s = re.sub(r"_\s*\{([^{}]*)\}", r"\1", s)
+        s = re.sub(r"_\s*(\w)", r"\1", s)
+        s = re.sub(r"(?<=\w)\s*/\s*(?=\w)|\)\s*/\s*(?=[\w(])", lambda m: " divided by " if "(" not in m.group(0) else ") divided by ", s)
+        s = s.replace("{", "").replace("}", "")
+    return s
+
+
+def plain_math(text):
+    """Removes LaTeX from an answer and writes maths in plain words. Code blocks and links stay untouched."""
+    if not isinstance(text, str) or not text:
+        return text
+    if not re.search(r"\\[A-Za-z(\[]|\$|\^|\d/\d", text):
+        return text  # nothing mathematical, leave it alone
+    parts = re.split(r"(```.*?```|`[^`\n]*`|https?://\S+)", text, flags=re.S)
+    out = []
+    for i, part in enumerate(parts):
+        if i % 2:  # code or link
+            out.append(part)
+            continue
+        part = re.sub(r"\$\$(.+?)\$\$", lambda m: _tex_plain(m.group(1), True).strip(), part, flags=re.S)
+        part = re.sub(r"\\\[(.+?)\\\]", lambda m: _tex_plain(m.group(1), True).strip(), part, flags=re.S)
+        part = re.sub(r"\\\((.+?)\\\)", lambda m: _tex_plain(m.group(1), True).strip(), part, flags=re.S)
+        part = re.sub(r"\$([^$\n]{1,300}?)\$",
+                      lambda m: _tex_plain(m.group(1), True).strip() if re.search(r"[\\^_{}=]", m.group(1)) else m.group(0), part)
+        part = _tex_plain(part, False)
+        part = re.sub(r"(?<![\w/.:])(\d+(?:\.\d+)?)/(\d+(?:\.\d+)?)(?![\w/])", r"\1 divided by \2", part)
+        part = re.sub(r"[ \t]{2,}", " ", part)
+        part = re.sub(r"[ \t]+([,.;:)])", r"\1", part)
+        out.append(part)
+    return "".join(out)
+
+
+def deep_oq(session, question):
+    return plain_math(_deep_oq_raw(session, question))
+
+
 HARD_HINTS = ("code", "function", "bug", "prove", "calculate", "solve", "why",
               "how many", "algorithm", "logic", "step", "compare", "design", "analy",
               "explain", "difference", "strategy", "optimi", "error", "essay", "derive",
@@ -747,7 +865,7 @@ def knowledge_block(question):
     return "KNOWLEDGE:\n" + "\n\n".join(parts)
 
 
-def deep_oq(session, question):
+def _deep_oq_raw(session, question):
     force = question.lower().startswith("/deep")  # "/deep your question" = think as hard as possible
     if force:
         question = question[5:].strip() or question
@@ -2718,7 +2836,10 @@ def lab_route():
     if denied():
         return jsonify(error="locked"), 401
     try:
-        return jsonify(_lab(request.get_json(silent=True) or {}))
+        res = _lab(request.get_json(silent=True) or {})
+        if isinstance(res, dict) and isinstance(res.get('answer'), str):
+            res['answer'] = plain_math(res['answer'])
+        return jsonify(res)
     except ValueError as e:
         return jsonify(error=str(e)), 400
     except Exception as e:
@@ -3413,7 +3534,7 @@ def askfile_route():
                 + kb_load_history(sess, 6)
                 + [{"role": "user", "content": f"FILE NAME: {name}\n----- FILE START -----\n{text}\n"
                     f"----- FILE END -----\n\nQUESTION:\n{q}"}])
-        answer = chat(msgs, 0.3, 2048)
+        answer = plain_math(chat(msgs, 0.3, 2048))
         kb_save_msg(sess, "user", f"[attached file: {name}] {q}")
         kb_save_msg(sess, "assistant", answer)
     except Exception as e:
