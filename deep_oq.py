@@ -46,7 +46,9 @@ import tempfile
 import threading
 import uuid
 
-from flask import Flask, jsonify, redirect, request, send_file, session as login_session
+from flask import Flask, Response, jsonify, redirect, request, send_file, stream_with_context, session as login_session
+import queue
+import base64
 from werkzeug.security import check_password_hash, generate_password_hash
 from groq import Groq
 
@@ -831,8 +833,8 @@ def plain_math(text):
     return "".join(out)
 
 
-def deep_oq(session, question, force_exam=False):
-    return plain_math(_deep_oq_raw(session, question, force_exam))
+def deep_oq(session, question, force_exam=False, emit=None):
+    return plain_math(_deep_oq_raw(session, question, force_exam, emit))
 
 
 HARD_HINTS = ("code", "function", "bug", "prove", "calculate", "solve", "why",
@@ -849,7 +851,7 @@ for _m in (FAST_MODEL, "openai/gpt-oss-120b", "llama-3.3-70b-versatile",
 _working = {"model": None}  # remembers the first model that works on this account
 
 
-def _call(model, messages, temperature, max_tokens, effort=None):
+def _call_kw(model, messages, temperature, max_tokens, effort=None):
     kw = dict(model=model, messages=messages, temperature=temperature)
     if model.startswith("openai/gpt-oss"):
         # reasoning models spend tokens on thinking, so allow a bigger budget
@@ -858,9 +860,41 @@ def _call(model, messages, temperature, max_tokens, effort=None):
     else:
         # thinking models (for example Qwen) spend tokens reasoning first, so give hard questions room
         kw["max_tokens"] = max(max_tokens, 6000) if effort == "high" else max_tokens
+    return kw
+
+
+def _call(model, messages, temperature, max_tokens, effort=None):
+    kw = _call_kw(model, messages, temperature, max_tokens, effort)
     r = client.chat.completions.create(**kw)
     text = r.choices[0].message.content or ""
     return re.sub(r"<think>.*?(</think>|$)", "", text, flags=re.S).strip()  # hide any visible thinking
+
+
+def chat_stream(messages, temperature, max_tokens, on_text):
+    """Like chat(), but calls on_text(answer_so_far) while the model is still writing."""
+    order = FAST_CANDIDATES[:]
+    if _working["model"] in order:
+        order.remove(_working["model"])
+        order.insert(0, _working["model"])
+    for m in order:
+        got = ""
+        try:
+            kw = _call_kw(m, messages, temperature, max_tokens)
+            kw["stream"] = True
+            for ch in client.chat.completions.create(**kw):
+                if not ch.choices:
+                    continue
+                piece = getattr(ch.choices[0].delta, "content", None) or ""
+                if piece:
+                    got += piece
+                    on_text(re.sub(r"<think>.*?(</think>|$)", "", got, flags=re.S))
+            clean = re.sub(r"<think>.*?(</think>|$)", "", got, flags=re.S).strip()
+            if clean:
+                _working["model"] = m
+                return clean
+        except Exception as e:
+            print("stream model", m, "failed:", str(e)[:160])
+    return chat(messages, temperature, max_tokens)  # no streaming model worked: normal path with backups
 
 
 # Backup providers: used only when every Groq model is busy. Each one switches on when its key is set in Render.
@@ -878,10 +912,34 @@ for _name, _keyvar, _url, _modvar, _mod in (
 print("Backup providers:", [x[0] for x in EXTRA_PROVIDERS] or "none")
 
 
-def _extra_chat(messages, temperature, max_tokens):
+def _gemini_parts(parts, temperature=0.2, max_tokens=4096, system=None):
+    """One call to Google Gemini with text and/or picture parts. Returns the text."""
+    import urllib.request as _ur
+    for name, url, key, model in EXTRA_PROVIDERS:
+        if name != "gemini":
+            continue
+        payload = {"contents": [{"role": "user", "parts": parts}],
+                   "generationConfig": {"temperature": temperature, "maxOutputTokens": max(max_tokens, 2048)}}
+        if system:
+            payload["systemInstruction"] = {"parts": [{"text": system}]}
+        req = _ur.Request("https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent",
+                          json.dumps(payload).encode(), {"Content-Type": "application/json", "x-goog-api-key": key})
+        with _ur.urlopen(req, timeout=120) as r:
+            data = json.loads(r.read().decode())
+        return "".join(x.get("text", "") for x in data["candidates"][0]["content"]["parts"]).strip()
+    raise RuntimeError("Gemini is not set up")
+
+
+def _has_gemini():
+    return any(x[0] == "gemini" for x in EXTRA_PROVIDERS)
+
+
+def _extra_chat(messages, temperature, max_tokens, only=None):
     import urllib.request as _ur
     last = None
     for name, url, key, model in EXTRA_PROVIDERS:
+        if only and name != only:
+            continue
         try:
             if name == "gemini":  # Google's own endpoint; the newer AQ. keys need this one
                 system = "\n".join(m["content"] for m in messages if m["role"] == "system" and isinstance(m["content"], str))
@@ -1030,7 +1088,9 @@ def knowledge_block(question):
     return "KNOWLEDGE:\n" + "\n\n".join(parts)
 
 
-def _deep_oq_raw(session, question, force_exam=False):
+def _deep_oq_raw(session, question, force_exam=False, emit=None):
+    emit = emit or (lambda kind, val: None)
+    emit("status", "Thinking")
     force = question.lower().startswith("/deep")  # "/deep your question" = think as hard as possible
     if force:
         question = question[5:].strip() or question
@@ -1038,6 +1098,8 @@ def _deep_oq_raw(session, question, force_exam=False):
     know = knowledge_block(question)
     tool_text, used = run_tools(question, lambda m, t, k: chat(m, t, k))
     exam = force_exam or is_exam(question)
+    if exam:
+        emit("status", "Solving step by step")
     today = datetime.date.today().strftime("%A, %d %B %Y")
     sysmsg = (SYSTEM + (EXAM_SYSTEM if exam else "") + f" Today's date is {today}. TOOL RESULTS (calculator, counter, "
               "web search) are exact or current: trust them over your own arithmetic "
@@ -1086,7 +1148,10 @@ def _deep_oq_raw(session, question, force_exam=False):
         if _same_answer(fa, fb):  # two different models reached the same answer: confident
             return ta
         try:  # a third model breaks the tie: two out of three agreeing wins
-            c = solve(EXAM_THIRD_MODEL)
+            if _has_gemini():
+                c = _gemini_parts([{"text": user + solve_txt + tag}], 0.2, 6144, sysmsg)
+            else:
+                c = solve(EXAM_THIRD_MODEL)
             fc, tc = _split_final(c)
             if _same_answer(fc, fa):
                 return ta
@@ -1102,7 +1167,8 @@ def _deep_oq_raw(session, question, force_exam=False):
         return _split_final(ref)[1]
 
     if not (force or is_hard(question) or "calc" in used or "count" in used):
-        return chat(base + [{"role": "user", "content": user}], 0.5)
+        return chat_stream(base + [{"role": "user", "content": user}], 0.5, 4096, lambda t: emit("text", t))
+    emit("status", "Thinking carefully")
 
     plan = chat(base + [{"role": "user", "content":
         f"{user}\n\nWrite a short numbered plan to answer this correctly. "
@@ -1527,6 +1593,108 @@ def ask():
         return jsonify(error=str(e)[:300]), 500
     return jsonify(answer=answer)
 
+@app.post("/ask_stream")
+def ask_stream():
+    """Same as /ask, but sends the answer piece by piece (server-sent events)."""
+    if denied():
+        return jsonify(error="locked"), 401
+    data = request.get_json(silent=True) or {}
+    q = str(data.get("q") or "").strip()
+    if not q:
+        return jsonify(error="Type a question first."), 400
+    session = (login_session.get("user") or "guest") + ":" + str(data.get("session") or "default")
+    qu = queue.Queue()
+    last = [0.0]
+
+    def emit(kind, val):
+        if kind == "text":
+            now = time.time()
+            if now - last[0] < 0.12:  # about 8 updates a second is plenty
+                return
+            last[0] = now
+            qu.put(("text", plain_math(val)))
+        else:
+            qu.put((kind, val))
+
+    def work():
+        try:
+            answer = plain_math(_deep_oq_raw(session, q, False, emit))
+            kb_save_msg(session, "user", q)
+            kb_save_msg(session, "assistant", answer)
+            qu.put(("done", answer))
+        except Exception as e:
+            print("ask_stream failed:", e)
+            qu.put(("error", str(e)[:300]))
+
+    threading.Thread(target=work, daemon=True).start()
+
+    def gen():
+        while True:
+            try:
+                kind, val = qu.get(timeout=10)
+            except queue.Empty:
+                yield ": keep-alive\n\n"
+                continue
+            yield "data: " + json.dumps({"t": kind, "v": val}) + "\n\n"
+            if kind in ("done", "error"):
+                break
+
+    return Response(stream_with_context(gen()), mimetype="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+# ---- saved chats: every person sees only their own
+def _my_prefix():
+    return (login_session.get("user") or "guest") + ":"
+
+
+@app.get("/api/chats")
+def api_chats():
+    if denied():
+        return jsonify(error="locked"), 401
+    pre = _my_prefix()
+    n = len(pre)
+    if USE_PG:
+        rows = _pg("SELECT session, MAX(ts), (SELECT content FROM oq_messages m2 WHERE m2.session=m.session "
+                   "AND m2.role='user' ORDER BY id LIMIT 1) FROM oq_messages m WHERE left(session,%s)=%s "
+                   "GROUP BY session ORDER BY MAX(ts) DESC LIMIT 60", (n, pre), "all")
+    else:
+        rows = DB.execute("SELECT session, MAX(ts), (SELECT content FROM messages m2 WHERE m2.session=m.session "
+                          "AND m2.role='user' ORDER BY id LIMIT 1) FROM messages m WHERE substr(session,1,?)=? "
+                          "GROUP BY session ORDER BY MAX(ts) DESC LIMIT 60", (n, pre)).fetchall()
+    out = []
+    for sess, ts, first in rows:
+        title = re.sub(r"\s+", " ", re.sub(r"^\[attached file: [^\]]*\]\s*", "", first or "")).strip()[:70]
+        out.append({"sid": sess[n:], "title": title or "New chat", "ts": str(ts)[:16].replace("T", " ")})
+    return jsonify(chats=out)
+
+
+@app.get("/api/chat")
+def api_chat():
+    if denied():
+        return jsonify(error="locked"), 401
+    sess = _my_prefix() + str(request.args.get("sid", ""))
+    if USE_PG:
+        rows = _pg("SELECT role, content FROM oq_messages WHERE session=%s ORDER BY id LIMIT 400", (sess,), "all")
+    else:
+        rows = DB.execute("SELECT role, content FROM messages WHERE session=? ORDER BY id LIMIT 400",
+                          (sess,)).fetchall()
+    return jsonify(messages=[{"role": r, "content": c} for r, c in rows])
+
+
+@app.post("/api/chat/delete")
+def api_chat_delete():
+    if denied():
+        return jsonify(error="locked"), 401
+    sess = _my_prefix() + str((request.get_json(silent=True) or {}).get("sid", ""))
+    if USE_PG:
+        _pg("DELETE FROM oq_messages WHERE session=%s", (sess,))
+    else:
+        with DB:
+            DB.execute("DELETE FROM messages WHERE session=?", (sess,))
+    return jsonify(ok=True)
+
+
 # ==========================================================================
 # THE PAGE (HTML, CSS and JavaScript)
 # ==========================================================================
@@ -1767,6 +1935,28 @@ a.primary{text-decoration:none;display:inline-block}
 .body th{text-align:left;font-weight:600;padding:9px 14px;background:rgba(127,130,170,.2)}
 .body td{padding:9px 14px;vertical-align:top}
 .body tbody tr:nth-child(even) td{background:rgba(127,130,170,.09)}
+.field textarea{min-width:0;width:100%}
+.col,#scroll,.composer{min-width:0;max-width:100%}
+.hero h1,.hero p,.ideas button{overflow-wrap:anywhere}
+.mic,.vlang{flex:none;border:0;background:transparent;color:var(--ink-2);cursor:pointer;font-family:var(--ui)}
+.mic{width:42px;height:42px;border-radius:50%;display:grid;place-items:center}
+.mic svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.mic:hover,.vlang:hover{background:rgba(127,130,170,.18)}
+.mic.rec{background:var(--err);color:#fff;animation:micp 1.2s ease-in-out infinite}
+@keyframes micp{50%{opacity:.65}}
+.vlang{height:30px;min-width:30px;padding:0 6px;border-radius:15px;font-size:12px;font-weight:700;align-self:center}
+.hist{position:fixed;top:0;right:0;bottom:0;width:min(360px,92vw);z-index:9000;background:var(--surface);border-left:1px solid var(--line);box-shadow:-12px 0 40px var(--shade);display:flex;flex-direction:column;font-family:var(--ui)}
+.hist header{display:flex;align-items:center;justify-content:space-between;padding:16px 18px;border-bottom:1px solid var(--line)}
+.hist h2{margin:0;font-size:18px}
+.hlist{overflow-y:auto;padding:8px;display:grid;gap:4px;align-content:start;flex:1}
+.hi{display:flex;align-items:stretch;border-radius:12px}
+.hi:hover{background:rgba(127,130,170,.14)}
+.ht{flex:1;text-align:left;border:0;background:transparent;color:var(--ink);padding:10px 12px;cursor:pointer;font:inherit;font-size:15px;line-height:1.35;min-width:0}
+.ht span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ht small{color:var(--ink-2);font-size:12px}
+.hd{border:0;background:transparent;color:var(--ink-2);cursor:pointer;font-size:20px;padding:0 12px;border-radius:12px}
+.hd:hover{color:var(--err)}
+.hempty{padding:24px 16px;color:var(--ink-2);font-size:15px}
 [hidden]{display:none!important}
 </style>
 </head>
@@ -1784,6 +1974,7 @@ a.primary{text-decoration:none;display:inline-block}
   </nav>
   <div class="tools" id="chatTools">
     <button class="btn" id="kbBtn" type="button" aria-haspopup="dialog">Knowledge <span class="badge" id="count">0</span></button>
+    <button class="btn" id="histBtn" type="button" aria-haspopup="dialog">History</button>
     <button class="btn" id="newBtn" type="button">New chat</button>
   </div>
 </header>
@@ -1842,6 +2033,10 @@ a.primary{text-decoration:none;display:inline-block}
         <input type="file" id="fve" hidden accept="video/*,.mkv">
       </div>
       <textarea id="q" rows="1" placeholder="Ask Deep OQ" aria-label="Message" autocomplete="off"></textarea>
+      <button class="vlang" id="vlang" type="button" aria-label="Voice language" title="Voice language: tap to switch English or Hindi">EN</button>
+      <button class="mic" id="mic" type="button" aria-label="Speak your question" title="Speak your question">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+      </button>
       <button class="send" id="send" type="submit" aria-label="Send" disabled>
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
       </button>
@@ -2093,6 +2288,10 @@ a.primary{text-decoration:none;display:inline-block}
   <button class="primary" id="teach" type="button" disabled>Add to knowledge</button>
   <div class="status" id="kstatus" role="status"></div>
 </aside>
+<aside class="hist" id="hist" role="dialog" aria-label="Chat history" hidden>
+  <header><h2>Your chats</h2><button class="btn" id="closeHist" type="button">Close</button></header>
+  <div class="hlist" id="histList"></div>
+</aside>
 
 <script>
 const $=s=>document.querySelector(s);
@@ -2171,19 +2370,54 @@ async function api(url,body){
   return r;
 }
 
+const ACTS='<div class="acts"><button type="button" class="mini" data-copy="msg">Copy</button> <button type="button" class="mini" data-speak>Listen</button></div>';
+function paint(bot,text){
+  bot.classList.remove('thinking');bot.raw=text;
+  const near=scroller.scrollHeight-scroller.scrollTop-scroller.clientHeight<140;
+  bot.lastChild.innerHTML='<div class="body">'+md(text)+'</div>';
+  if(near)toEnd();
+}
+async function askStream(q,bot){
+  const r=await fetch('/ask_stream',{method:'POST',headers:{'Content-Type':'application/json','X-Access-Key':localStorage.ak||''},body:JSON.stringify({q,session:sid})});
+  if(r.status===401){localStorage.ak='';throw new Error('That access key was not accepted. Reload the page and enter it again.')}
+  if(!r.ok||!r.body)return null;                       /* old server or proxy: use the normal way */
+  const rd=r.body.getReader(),dec=new TextDecoder();let buf='',fin=null,err=null;
+  for(;;){
+    const {done,value}=await rd.read();if(done)break;
+    buf+=dec.decode(value,{stream:true});
+    let i;
+    while((i=buf.indexOf('\n\n'))>-1){
+      const ev=buf.slice(0,i);buf=buf.slice(i+2);
+      if(ev.slice(0,6)!=='data: ')continue;
+      let m;try{m=JSON.parse(ev.slice(6))}catch(e){continue}
+      if(m.t==='status'){const w=bot.querySelector('.wait');if(w)w.textContent=m.v}
+      else if(m.t==='text')paint(bot,m.v);
+      else if(m.t==='done')fin=m.v;
+      else if(m.t==='error')err=m.v;
+    }
+  }
+  if(err)throw new Error(err);
+  if(fin===null)throw new Error('The connection was cut. Please try again.');
+  return fin;
+}
 async function ask(q){
   q=q.trim();if(!q||busy)return;
   busy=true;send.disabled=true;document.body.classList.add('chatting');
   box.value='';box.style.height='auto';
   addUser(q);const bot=addBot();toEnd();
   try{
-    const r=await api('/ask',{q,session:sid});
-    const j=await r.json().catch(()=>({}));
-    if(r.status===401){localStorage.ak='';throw new Error('That access key was not accepted. Reload the page and enter it again.')}
-    if(!r.ok||j.error)throw new Error(j.error||'The server did not answer.');
+    let answer=null;
+    try{answer=await askStream(q,bot)}catch(e){if(bot.raw)throw e;if(!/connection was cut/.test(e.message))throw e}
+    if(answer===null){
+      const r=await api('/ask',{q,session:sid});
+      const j=await r.json().catch(()=>({}));
+      if(r.status===401){localStorage.ak='';throw new Error('That access key was not accepted. Reload the page and enter it again.')}
+      if(!r.ok||j.error)throw new Error(j.error||'The server did not answer.');
+      answer=j.answer;
+    }
     bot.classList.remove('thinking');
-    bot.raw=j.answer;
-    bot.lastChild.innerHTML='<div class="body">'+md(j.answer)+'</div><div class="acts"><button type="button" class="mini" data-copy="msg">Copy</button></div>';
+    bot.raw=answer;
+    bot.lastChild.innerHTML='<div class="body">'+md(answer)+'</div>'+ACTS;
   }catch(e){
     bot.classList.remove('thinking');bot.classList.add('err');
     bot.lastChild.innerHTML='<div class="body"><p>Could not get an answer.</p><p>'+esc(e.message)+'</p></div><div class="acts"><button type="button" class="mini" data-retry>Try again</button></div>';
@@ -2199,6 +2433,8 @@ log.addEventListener('click',e=>{
     navigator.clipboard.writeText(text).then(()=>{c.textContent='Copied';setTimeout(()=>c.textContent='Copy',1400)});
     return;
   }
+  const sp=e.target.closest('[data-speak]');
+  if(sp){speakText(sp.closest('.turn').raw||'',sp);return}
   const r=e.target.closest('[data-retry]');
   if(r){const t=r.closest('.turn');const q=t.q;t.previousElementSibling?.remove();t.remove();ask(q)}
 });
@@ -2209,6 +2445,83 @@ box.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposi
 $('#form').addEventListener('submit',e=>{e.preventDefault();submit()});
 document.querySelectorAll('.ideas button').forEach(b=>b.onclick=()=>ask(b.textContent));
 $('#newBtn').onclick=()=>{sid=uid();log.innerHTML='';document.body.classList.remove('chatting');box.focus()};
+
+/* ================= listen to an answer ================= */
+let speaking=null;
+function speakText(raw,btn){
+  if(!('speechSynthesis' in window)){alert('This browser cannot read answers aloud.');return}
+  const ss=speechSynthesis,was=speaking;
+  document.querySelectorAll('[data-speak]').forEach(b=>b.textContent='Listen');
+  if(ss.speaking||ss.pending){ss.cancel();speaking=null;if(was===btn)return}
+  const t=raw.replace(/```[\s\S]*?```/g,' code block skipped. ').replace(/\[Figure[^\]]*\]/g,'').replace(/[*#`_>|]/g,'').trim().slice(0,4000);
+  if(!t)return;
+  const u=new SpeechSynthesisUtterance(t);
+  u.lang=/[ऀ-ॿ]/.test(t)?'hi-IN':(localStorage.vl||'en-IN');
+  const vs=ss.getVoices(),v=vs.find(x=>x.lang===u.lang)||vs.find(x=>x.lang.slice(0,2)===u.lang.slice(0,2));if(v)u.voice=v;
+  u.onend=u.onerror=()=>{btn.textContent='Listen';if(speaking===btn)speaking=null};
+  speaking=btn;btn.textContent='Stop';ss.speak(u);
+}
+
+/* ================= speak your question ================= */
+(function(){
+  const SR=window.SpeechRecognition||window.webkitSpeechRecognition,mic=$('#mic'),vl=$('#vlang');
+  if(!SR){mic.hidden=true;vl.hidden=true;return}
+  const lab=()=>{vl.textContent=(localStorage.vl||'en-IN')==='hi-IN'?'हि':'EN'};lab();
+  vl.onclick=()=>{localStorage.vl=(localStorage.vl||'en-IN')==='hi-IN'?'en-IN':'hi-IN';lab()};
+  let rec=null,on=false;
+  mic.onclick=()=>{
+    if(on){rec.stop();return}
+    rec=new SR();rec.lang=localStorage.vl||'en-IN';rec.interimResults=true;rec.continuous=false;
+    const base=box.value?box.value.trimEnd()+' ':'';let said='';
+    rec.onstart=()=>{on=true;mic.classList.add('rec');mic.setAttribute('aria-label','Stop listening')};
+    rec.onresult=e=>{let t='';for(let i=0;i<e.results.length;i++)t+=e.results[i][0].transcript;said=t;box.value=base+t;box.dispatchEvent(new Event('input'))};
+    rec.onend=()=>{on=false;mic.classList.remove('rec');mic.setAttribute('aria-label','Speak your question');if(said.trim()&&!busy)submit()};
+    rec.onerror=e=>{on=false;mic.classList.remove('rec');if(e.error==='not-allowed'||e.error==='service-not-allowed')alert('Allow the microphone for this site in your browser settings, then try again.')};
+    try{rec.start()}catch(e){}
+  };
+})();
+
+/* ================= saved chats ================= */
+const hist=$('#hist'),hl=$('#histList');
+function histOpen(o){hist.hidden=!o;if(o)loadHist()}
+async function loadHist(){
+  hl.innerHTML='<p class="hempty">Loading...</p>';
+  try{
+    const r=await fetch('/api/chats',{headers:{'X-Access-Key':localStorage.ak||''}}),j=await r.json();
+    if(!r.ok)throw new Error(j.error||'x');
+    if(!j.chats.length){hl.innerHTML='<p class="hempty">No saved chats yet. Ask something and it will appear here.</p>';return}
+    hl.innerHTML='';
+    j.chats.forEach(c=>{
+      const d=document.createElement('div');d.className='hi';
+      const b=document.createElement('button');b.type='button';b.className='ht';b.dataset.sid=c.sid;
+      const t=document.createElement('span');t.textContent=c.title;const sm=document.createElement('small');sm.textContent=c.ts;
+      b.append(t,sm);
+      const x=document.createElement('button');x.type='button';x.className='hd';x.dataset.del=c.sid;x.setAttribute('aria-label','Delete this chat');x.textContent='×';
+      d.append(b,x);hl.append(d);
+    });
+  }catch(e){hl.innerHTML='<p class="hempty">Could not load your chats. Try again.</p>'}
+}
+hl.addEventListener('click',async e=>{
+  const x=e.target.closest('[data-del]');
+  if(x){
+    if(!confirm('Delete this chat?'))return;
+    await api('/api/chat/delete',{sid:x.dataset.del});
+    if(x.dataset.del===sid){sid=uid();log.innerHTML='';document.body.classList.remove('chatting')}
+    loadHist();return;
+  }
+  const b=e.target.closest('[data-sid]');if(!b||busy)return;
+  try{
+    const r=await fetch('/api/chat?sid='+encodeURIComponent(b.dataset.sid),{headers:{'X-Access-Key':localStorage.ak||''}}),j=await r.json();
+    if(!r.ok)throw new Error(j.error||'x');
+    sid=b.dataset.sid;log.innerHTML='';
+    j.messages.forEach(m=>{if(m.role==='user')addUser(m.content);else{const bot=addBot();botDone(bot,m.content)}});
+    document.body.classList.add('chatting');histOpen(false);toEnd();
+  }catch(err){hl.insertAdjacentHTML('afterbegin','<p class="hempty">Could not open that chat.</p>')}
+});
+$('#histBtn').onclick=()=>histOpen(hist.hidden);
+$('#closeHist').onclick=()=>histOpen(false);
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!hist.hidden)histOpen(false)});
+document.addEventListener('click',e=>{if(!hist.hidden&&!e.target.closest('#hist,#histBtn,[data-del]'))histOpen(false)});
 
 /* ================= plus menu: attach, edit, create image ================= */
 const canSend=()=>!busy&&!attBusy&&(!!box.value.trim()||!!att);
@@ -2348,7 +2661,7 @@ async function attach(f,opts){
       att={kind:'doc',name:f.name,text:j.text};
     }else if(f.type.startsWith('text/')||f.type==='application/json'||TEXT_EXT.test(f.name)){
       const t=await readText(f);if(!t.trim())throw new Error('That file is empty.');
-      att={kind:'doc',name:f.name,text:t.slice(0,24000)};
+      att={kind:'doc',name:f.name,text:t.slice(0,600000)};
     }else throw new Error('That file type is not supported. Use an image, video, PDF, or a text, code, CSV or JSON file.');
     attBusy=false;renderAtts();box.focus();
   }catch(e){
@@ -2370,7 +2683,7 @@ function addUserRich(text,a){
 }
 function botDone(bot,answer){
   bot.classList.remove('thinking');bot.raw=answer;
-  bot.lastChild.innerHTML='<div class="body">'+md(answer)+'</div><div class="acts"><button type="button" class="mini" data-copy="msg">Copy</button></div>';
+  bot.lastChild.innerHTML='<div class="body">'+md(answer)+'</div>'+ACTS;
 }
 function botFail(bot,e){
   bot.classList.remove('thinking');bot.classList.add('err');
@@ -2994,6 +3307,17 @@ def _vision(prompt, image, temperature=0.3):
         {"type": "text", "text": prompt},
         {"type": "image_url", "image_url": {"url": image}}]}]
     last = None
+    if _has_gemini():  # Gemini reads handwriting, tables and diagrams best, so it goes first
+        try:
+            head, b64 = image.split(",", 1)
+            mime = head[5:].split(";")[0] or "image/jpeg"
+            t = _gemini_parts([{"text": prompt}, {"inline_data": {"mime_type": mime, "data": b64}}],
+                              temperature, 4096)
+            if t:
+                return t
+        except Exception as e:
+            last = e
+            print("gemini vision failed:", str(e)[:160])
     for mdl in VISION_MODELS:  # try the newest model first, then the backups
         try:
             r = client.chat.completions.create(model=mdl, max_tokens=4096, temperature=temperature, messages=msgs)
@@ -3965,6 +4289,69 @@ def video_route():
     return _video()
 
 
+_STOP = set("the a an and or of to in is are was were be been for on at by with from as that this it its what which who "
+            "how why when where do does did can could would should will about into than then there their them they "
+            "you your please tell me give explain find show list".split())
+
+
+def _doc_pieces(text, size=1800):
+    """Cuts a long text into pieces of about `size` characters at paragraph or sentence ends."""
+    out, i = [], 0
+    text = text.replace("\r", "")
+    while i < len(text):
+        j = min(i + size, len(text))
+        if j < len(text):
+            k = max(text.rfind("\n", i + size // 2, j), text.rfind(". ", i + size // 2, j))
+            j = k + 1 if k > 0 else j
+        out.append(text[i:j].strip())
+        i = j
+    return [x for x in out if x]
+
+
+def _doc_context(text, q):
+    """Returns the part of a long document that is needed to answer q."""
+    if len(text) <= 14000:
+        return text
+    pieces = _doc_pieces(text)
+    words = [w for w in re.findall(r"[\w\u0900-\u097F]{3,}", q.lower()) if w not in _STOP]
+    if not re.search(r"summar|overview|key points|main points|outline|gist|about (this|the) (file|document|pdf|book)|"
+                     r"what is this", q, re.I) and words:
+        low = [pc.lower() for pc in pieces]
+        n = len(pieces)
+        idf = {w: math.log(1 + n / (1 + sum(1 for pc in low if w in pc))) for w in set(words)}
+        scores = [sum(idf[w] * min(pc.count(w), 5) for w in idf) for pc in low]
+        if max(scores) > 0:
+            best = sorted(sorted(range(n), key=lambda i: -scores[i])[:6] + [0])
+            body, used = [], 0
+            for i in dict.fromkeys(best):
+                if used + len(pieces[i]) > 12500:
+                    break
+                body.append(f"[part {i + 1} of {n}]\n{pieces[i]}")
+                used += len(pieces[i])
+            return ("(This file is long. These are the parts that match the question.)\n\n" + "\n\n".join(body))
+    # a summary of the whole file: shrink each section first, then use those notes
+    size = max(9000, len(text) // 10)
+    sections = [text[i:i + size] for i in range(0, len(text), size)][:12]
+    notes = [None] * len(sections)
+
+    def shrink(i):
+        try:
+            notes[i] = chat([{"role": "system", "content": "You make short, exact study notes."},
+                             {"role": "user", "content": "Write the key facts, numbers, names, formulas and headings "
+                              "of this section in at most 12 short lines:\n\n" + sections[i]}], 0.2, 700)
+        except Exception as e:
+            print("section notes failed:", e)
+            notes[i] = sections[i][:600]
+    for k in range(0, len(sections), 2):
+        ths = [threading.Thread(target=shrink, args=(i,)) for i in range(k, min(k + 2, len(sections)))]
+        for t in ths:
+            t.start()
+        for t in ths:
+            t.join()
+    return ("(This file is long. These are notes of each section, in order.)\n\n"
+            + "\n\n".join(f"[section {i + 1} of {len(sections)}]\n{x}" for i, x in enumerate(notes)))
+
+
 @app.post("/askfile")
 def askfile_route():
     if denied():
@@ -3972,7 +4359,7 @@ def askfile_route():
     d = request.get_json(silent=True) or {}
     q = str(d.get("q", "")).strip()[:2000] or "Summarize this file and list the key points."
     name = re.sub(r"[\r\n]+", " ", str(d.get("name", "file")))[:120]
-    text = str(d.get("text", ""))[:24000]
+    text = str(d.get("text", ""))[:600000]
     if not text.strip():
         return jsonify(error="That file has no readable text."), 400
     sess = (login_session.get("user") or "guest") + ":" + str(d.get("session") or "default")
@@ -3982,7 +4369,7 @@ def askfile_route():
                   "Answer from its content and say so if the answer is not in it. For code files, explain, "
                   "fix or improve the code as asked."}]
                 + kb_load_history(sess, 6)
-                + [{"role": "user", "content": f"FILE NAME: {name}\n----- FILE START -----\n{text}\n"
+                + [{"role": "user", "content": f"FILE NAME: {name}\n----- FILE START -----\n{_doc_context(text, q)}\n"
                     f"----- FILE END -----\n\nQUESTION:\n{q}"}])
         answer = plain_math(chat(msgs, 0.3, 4096))
         kb_save_msg(sess, "user", f"[attached file: {name}] {q}")
@@ -3991,6 +4378,24 @@ def askfile_route():
         print("askfile failed:", e)
         return jsonify(error=str(e)[:300]), 500
     return jsonify(answer=answer)
+
+
+def _ocr_pdf(reader, max_pages=6):
+    out = []
+    for n, pg in enumerate(reader.pages[:max_pages], 1):
+        try:
+            for im in list(pg.images)[:1]:
+                ext = (im.name.rsplit(".", 1)[-1] if "." in im.name else "").lower()
+                mime = {"jpg": "jpeg", "jpeg": "jpeg", "png": "png"}.get(ext)
+                if not mime or len(im.data) > 3_000_000:
+                    continue
+                url = "data:image/" + mime + ";base64," + base64.b64encode(im.data).decode()
+                t = _vision("Copy all the text on this page exactly, in reading order. Write maths in plain text. "
+                            "Do not add anything else.", url, 0.1)
+                out.append(f"[page {n}]\n{t.strip()}")
+        except Exception as e:
+            print("pdf page read failed:", n, str(e)[:120])
+    return "\n\n".join(out)
 
 
 @app.post("/readfile")
@@ -4002,7 +4407,11 @@ def readfile_route():
         return jsonify(error="Choose a file first."), 400
     try:
         from pypdf import PdfReader
-        text = "\n".join((pg.extract_text() or "") for pg in PdfReader(f.stream).pages).strip()
+        raw = f.read()
+        reader = PdfReader(io.BytesIO(raw))
+        text = "\n".join((pg.extract_text() or "") for pg in reader.pages).strip()
+        if len(text) < 40:  # a scanned PDF: read the page pictures with the photo reader
+            text = _ocr_pdf(reader)
     except ImportError:
         return jsonify(error="PDF reading is not installed on the server (pip install pypdf)."), 500
     except Exception as e:
@@ -4010,7 +4419,7 @@ def readfile_route():
         return jsonify(error="Could not read this PDF. It may be damaged or password protected."), 400
     if not text:
         return jsonify(error="This PDF has no readable text. It may be a scanned picture."), 400
-    return jsonify(name=f.filename or "file.pdf", text=text[:30000])
+    return jsonify(name=f.filename or "file.pdf", text=text[:600000])
 
 
 @app.errorhandler(413)
