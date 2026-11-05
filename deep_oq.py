@@ -1330,21 +1330,23 @@ def logout():
     return redirect("/login")
 
 
-LOGOUT_PILL = (
-    '<a href="/logout" title="Log out" style="position:fixed;left:12px;bottom:12px;z-index:99999;'
-    'padding:7px 13px;border-radius:99px;font:600 12px system-ui,sans-serif;color:#cfd3f5;'
-    'background:rgba(20,22,45,.82);border:1px solid rgba(255,255,255,.14);text-decoration:none;'
-    'backdrop-filter:blur(8px)">%s &middot; Log out</a>')
+ACCT_CSS = ("<style>.acct{flex-basis:100%;display:flex;justify-content:flex-end;align-items:center;gap:8px;"
+            "margin-top:-4px}.acct .who{font:500 12.5px var(--ui);color:var(--ink-2);max-width:46vw;overflow:hidden;"
+            "text-overflow:ellipsis;white-space:nowrap}.acct a{font:600 13px var(--ui);text-decoration:none;"
+            "padding:6px 14px;border-radius:99px;border:1px solid var(--line);color:var(--ink);background:transparent}"
+            ".acct a:hover{background:rgba(127,130,170,.18)}.acct a.adm{background:#33e6a1;color:#04122b;"
+            "border-color:#33e6a1}</style>")
 
 
 @app.get("/")
 def index():
-    pill = LOGOUT_PILL % _html.escape(login_session.get("user", ""))
+    who = login_session.get("user", "")
+    who = who[7:] if who.startswith("google:") else who
+    row = '<div class="acct"><span class="who" title="Signed in">' + _html.escape(who) + "</span>"
     if is_admin():
-        pill += ('<a href="/admin" style="position:fixed;left:12px;bottom:48px;z-index:99999;padding:7px 13px;'
-                 'border-radius:99px;font:600 12px system-ui,sans-serif;color:#04122b;background:#33e6a1;'
-                 'text-decoration:none">Admin</a>')
-    html = PAGE.replace("</body>", pill + "</body>", 1)
+        row += '<a class="adm" href="/admin">Admin</a>'
+    row += '<a href="/logout">Log out</a></div>'
+    html = PAGE.replace("</header>", row + "</header>", 1).replace("</head>", ACCT_CSS + "</head>", 1)
     return html, 200, {"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache"}
 
 
