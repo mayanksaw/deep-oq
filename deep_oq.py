@@ -642,7 +642,8 @@ FAST_MODEL = os.environ.get("DEEP_OQ_MODEL", "openai/gpt-oss-120b")
 SMART_MODEL = os.environ.get("DEEP_OQ_SMART_MODEL", "qwen/qwen3.8-27b")
 # Hard questions try these in order (an unavailable model just moves on to the next one).
 SMART_CANDIDATES = []
-for _m in (SMART_MODEL, "qwen/qwen3.8-27b", "qwen/qwen3.6-27b", "openai/gpt-oss-120b"):
+for _m in (SMART_MODEL, "qwen/qwen3.8-27b", "openai/gpt-oss-120b", "minimaxai/minimax-m2.7",
+           "meta-models/muse-spark-open", "qwen/qwen3.6-27b", "llama-3.3-70b-versatile"):
     if _m not in SMART_CANDIDATES:
         SMART_CANDIDATES.append(_m)
 _smart = {"model": None}
@@ -902,6 +903,7 @@ def is_hard(text):
 
 
 EXAM_MODEL = os.environ.get("DEEP_OQ_EXAM_MODEL", "openai/gpt-oss-120b")  # strongest reasoning model on the account
+EXAM_THIRD_MODEL = os.environ.get("DEEP_OQ_THIRD_MODEL", "minimaxai/minimax-m2.7")  # tie-breaker when two models disagree
 EXAM_CHECK_MODEL = os.environ.get("DEEP_OQ_CHECK_MODEL", SMART_MODEL)    # a different model double-checks the answer
 EXAM_STRONG = re.compile(r"\b(jee|neet|upsc|ias|ips|ifs|csat|nda|cds|ssc|gate|cuet|clat|cbse|icse|ncert|olympiad|"
                          r"prelims|mains|gs\s?-?\s?[1-4]|mcq|assertion|which of the following|statement\s*(?:i|1)\b)", re.I)
@@ -1026,6 +1028,15 @@ def _deep_oq_raw(session, question, force_exam=False):
         (fa, ta), (fb, tb) = _split_final(a), _split_final(b)
         if _same_answer(fa, fb):  # two different models reached the same answer: confident
             return ta
+        try:  # a third model breaks the tie: two out of three agreeing wins
+            c = solve(EXAM_THIRD_MODEL)
+            fc, tc = _split_final(c)
+            if _same_answer(fc, fa):
+                return ta
+            if _same_answer(fc, fb):
+                return tb
+        except Exception as e:
+            print("exam third solver failed:", e)
         ref = chat([{"role": "system", "content": sysmsg}, {"role": "user", "content":
             f"{user}\n\nSOLUTION 1:\n{ta}\n\nSOLUTION 2:\n{tb}\n\nThe two solutions end with different "
             f"answers ({fa or 'none'} and {fb or 'none'}). Find the mistake by re-working the key steps "
