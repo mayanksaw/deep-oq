@@ -883,12 +883,28 @@ def _extra_chat(messages, temperature, max_tokens):
     last = None
     for name, url, key, model in EXTRA_PROVIDERS:
         try:
-            body = json.dumps({"model": model, "messages": messages, "temperature": temperature,
-                               "max_tokens": max(max_tokens, 2048)}).encode()
-            req = _ur.Request(url, body, {"Content-Type": "application/json", "Authorization": "Bearer " + key})
-            with _ur.urlopen(req, timeout=120) as r:
-                data = json.loads(r.read().decode())
-            text = data["choices"][0]["message"].get("content") or ""
+            if name == "gemini":  # Google's own endpoint; the newer AQ. keys need this one
+                system = "\n".join(m["content"] for m in messages if m["role"] == "system" and isinstance(m["content"], str))
+                contents = [{"role": "model" if m["role"] == "assistant" else "user",
+                             "parts": [{"text": m["content"] if isinstance(m["content"], str) else str(m["content"])}]}
+                            for m in messages if m["role"] != "system"]
+                payload = {"contents": contents, "generationConfig": {"temperature": temperature,
+                                                                     "maxOutputTokens": max(max_tokens, 2048)}}
+                if system:
+                    payload["systemInstruction"] = {"parts": [{"text": system}]}
+                req = _ur.Request("https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent",
+                                  json.dumps(payload).encode(),
+                                  {"Content-Type": "application/json", "x-goog-api-key": key})
+                with _ur.urlopen(req, timeout=120) as r:
+                    data = json.loads(r.read().decode())
+                text = "".join(p.get("text", "") for p in data["candidates"][0]["content"]["parts"])
+            else:
+                body = json.dumps({"model": model, "messages": messages, "temperature": temperature,
+                                   "max_tokens": max(max_tokens, 2048)}).encode()
+                req = _ur.Request(url, body, {"Content-Type": "application/json", "Authorization": "Bearer " + key})
+                with _ur.urlopen(req, timeout=120) as r:
+                    data = json.loads(r.read().decode())
+                text = data["choices"][0]["message"].get("content") or ""
             text = re.sub(r"<think>.*?(</think>|$)", "", text, flags=re.S).strip()
             if text:
                 print("backup provider answered:", name)
