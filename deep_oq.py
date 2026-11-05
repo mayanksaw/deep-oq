@@ -1330,22 +1330,22 @@ def logout():
     return redirect("/login")
 
 
-ACCT_CSS = ("<style>.acct{flex-basis:100%;display:flex;justify-content:flex-start;align-items:center;gap:8px;"
-            "margin-top:-4px}.acct .who{font:500 12.5px var(--ui);color:var(--ink-2);max-width:46vw;overflow:hidden;"
-            "text-overflow:ellipsis;white-space:nowrap}.acct a{font:600 13px var(--ui);text-decoration:none;"
-            "padding:6px 14px;border-radius:99px;border:1px solid var(--line);color:var(--ink);background:transparent}"
-            ".acct a:hover{background:rgba(127,130,170,.18)}.acct a.adm{background:#33e6a1;color:#04122b;"
-            "border-color:#33e6a1}</style>")
+ACCT_CSS = ("<style>.acct .btns a{font:600 13px var(--ui);text-decoration:none;padding:7px 12px;border-radius:99px;"
+            "border:1px solid var(--line);color:var(--ink);background:transparent}.acct .btns a:hover{background:rgba(127,130,170,.18)}"
+            ".acct .btns a.adm{background:#33e6a1;color:#04122b;border-color:#33e6a1}</style>")
 
 
 @app.get("/")
 def index():
     who = login_session.get("user", "")
     who = who[7:] if who.startswith("google:") else who
-    row = '<div class="acct"><span class="who" title="Signed in">' + _html.escape(who) + "</span>"
+    first = re.sub(r"[^A-Za-z]", "", who.split("@")[0]) or who[:1] or "You"
+    row = ('<div class="acct" data-name="' + _html.escape(first.capitalize()) + '"><div class="av">'
+           + _html.escape(first[:1].upper()) + '</div><div class="who" title="Signed in">' + _html.escape(who)
+           + '</div><div class="btns">')
     if is_admin():
         row += '<a class="adm" href="/admin">Admin</a>'
-    row += '<a href="/logout">Log out</a></div>'
+    row += '<a href="/logout">Log out</a></div></div>'
     html = PAGE.replace("</header>", row + "</header>", 1).replace("</head>", ACCT_CSS + "</head>", 1)
     return html, 200, {"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache"}
 
@@ -1959,12 +1959,76 @@ a.primary{text-decoration:none;display:inline-block}
 .hd{border:0;background:transparent;color:var(--ink-2);cursor:pointer;font-size:20px;padding:0 12px;border-radius:12px}
 .hd:hover{color:var(--err)}
 .hempty{padding:24px 16px;color:var(--ink-2);font-size:15px}
+/* ---- sidebar layout ---- */
+body{grid-template-columns:272px minmax(0,1fr);grid-template-rows:minmax(0,1fr)}
+header.top{grid-column:1;grid-row:1;display:flex;flex-direction:column;align-items:stretch;justify-content:flex-start;flex-wrap:nowrap;
+  gap:4px;padding:14px 12px 12px;height:100dvh;overflow-y:auto;background:var(--surface);border-right:1px solid var(--line);box-sizing:border-box}
+.views{grid-column:2;grid-row:1}
+header.top .brand{order:0;margin:0 0 10px;padding:2px 8px}
+#chatTools,body:not([data-view=chat]) #chatTools{display:contents}
+header.top #newBtn{order:1;justify-content:flex-start;width:100%;border-radius:12px;padding:10px 12px;font-size:15px;font-weight:600;background:var(--ink);color:var(--bg);border-color:var(--ink)}
+header.top #newBtn:hover{opacity:.9;background:var(--ink)}
+.sbsearch{order:2;width:100%;box-sizing:border-box;margin:6px 0 4px;padding:9px 12px;border-radius:12px;border:1px solid var(--line);background:transparent;color:var(--ink);font:500 14px var(--ui);outline:none}
+.sbsearch:focus{border-color:var(--river)}
+header.top .tabs{order:3;flex-direction:column;gap:2px;margin:6px 0;padding:0;border:0;border-radius:0;width:auto}
+header.top .tab{text-align:left;border-radius:10px;padding:7px 12px;flex:none;font-size:15px;display:block}
+header.top a.tab{margin-top:2px}
+header.top #kbBtn{order:4;justify-content:space-between;width:100%;border-radius:10px;border-color:transparent;padding:7px 12px;font-size:15px}
+header.top #kbBtn:hover{background:rgba(127,130,170,.18)}
+header.top #histBtn{display:none}
+.sbhd{order:5;margin:12px 8px 2px;font:600 11.5px var(--ui);letter-spacing:.08em;text-transform:uppercase;color:var(--ink-2)}
+.recents{order:6;flex:1;min-height:48px;overflow-y:auto;display:grid;align-content:start;gap:1px}
+.recents .hi{border-radius:10px}
+.recents .hi.on{background:rgba(127,130,170,.2)}
+.recents .ht{padding:8px 10px;font:500 14.5px var(--ui)}
+.recents .ht small{display:none}
+.recents .hd{opacity:0;padding:0 10px}
+.recents .hi:hover .hd{opacity:1}
+.recents .hempty{padding:8px 10px;font-size:14px}
+header.top .acct{order:7;flex-basis:auto;display:grid;grid-template-columns:36px 1fr;grid-template-rows:auto auto;gap:6px 10px;align-items:center;justify-content:stretch;
+  margin:6px 0 0;padding:10px 6px 0;border-top:1px solid var(--line);flex:none}
+.acct .av{grid-row:1;width:36px;height:36px;border-radius:50%;background:var(--accent);color:var(--accent-ink);display:grid;place-items:center;font:700 16px var(--ui)}
+.acct .who{max-width:none;font:600 13.5px var(--ui);color:var(--ink)}
+.acct .btns{grid-column:1/3;display:flex;gap:8px}
+.acct .btns a{flex:1;text-align:center}
+.hero{display:flex;align-items:center;justify-content:center;gap:14px;text-align:center;padding:0 0 18px}
+.hero p{display:none}
+.hero #heroMark svg{width:42px;height:42px}
+.hero h1{margin:0;font-family:var(--read);font-weight:500;font-size:clamp(28px,4vw,42px);letter-spacing:-.02em}
+body:not(.chatting) #v-chat.on{display:flex;flex-direction:column;justify-content:center;align-items:center;padding-bottom:5vh;overflow-y:auto}
+body:not(.chatting) #v-chat.on #scroll{flex:none;overflow:visible;width:100%}
+body:not(.chatting) #v-chat.on .composer{width:100%;max-width:780px;box-sizing:border-box}
+body:not(.chatting) .field{padding-top:12px;padding-bottom:12px;border-radius:26px}
+.ideas{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;border:0;max-width:780px;margin:6px auto 0;padding:0 16px}
+.ideas li{border:0;flex:none;max-width:100%}
+.ideas button{width:auto;padding:9px 16px;border:1px solid var(--line);border-radius:999px;font:500 14px var(--ui);color:var(--ink-2)}
+.ideas button:hover{padding-left:16px;color:var(--ink);background:rgba(127,130,170,.14)}
+.chatting .ideas{display:none}
+.sbtoggle,.sbshade{display:none}
+@media (max-width:860px){
+  body{grid-template-columns:minmax(0,1fr)}
+  .views{grid-column:1}
+  header.top{position:fixed;left:0;top:0;bottom:0;width:min(300px,86vw);z-index:9500;transform:translateX(-102%);transition:transform .2s;box-shadow:12px 0 40px var(--shade)}
+  body.sbopen header.top{transform:none}
+  .sbshade{display:block;position:fixed;inset:0;z-index:9400;background:var(--shade);opacity:0;pointer-events:none;transition:opacity .2s}
+  body.sbopen .sbshade{opacity:1;pointer-events:auto}
+  .sbtoggle{display:grid;place-items:center;position:fixed;left:10px;top:10px;z-index:9300;width:42px;height:42px;border-radius:12px;border:1px solid var(--line);background:var(--surface);color:var(--ink);cursor:pointer}
+  #scroll .col{padding-top:46px}
+  .hero{flex-direction:column;gap:8px}
+}
 [hidden]{display:none!important}
 </style>
 </head>
 <body>
+<button class="sbtoggle" id="sbToggle" type="button" aria-label="Open menu">
+  <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+</button>
+<div class="sbshade" id="sbShade"></div>
 <header class="top">
   <div class="brand"><span id="brandMark"></span>Deep OQ</div>
+  <input class="sbsearch" id="sbSearch" type="search" placeholder="Search chats" aria-label="Search your chats" autocomplete="off">
+  <div class="sbhd" id="recentsHd">Recents</div>
+  <div class="recents" id="recents" aria-label="Your chats"></div>
   <nav class="tabs" aria-label="Sections">
     <button class="tab" type="button" data-view="chat" aria-current="page">Chat</button>
     <button class="tab" type="button" data-view="code">Code</button>
@@ -1977,7 +2041,7 @@ a.primary{text-decoration:none;display:inline-block}
   <div class="tools" id="chatTools">
     <button class="btn" id="kbBtn" type="button" aria-haspopup="dialog">Knowledge <span class="badge" id="count">0</span></button>
     <button class="btn" id="histBtn" type="button" aria-haspopup="dialog">History</button>
-    <button class="btn" id="newBtn" type="button">New chat</button>
+    <button class="btn" id="newBtn" type="button"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>New chat</button>
   </div>
 </header>
 
@@ -2425,7 +2489,7 @@ async function ask(q){
     bot.lastChild.innerHTML='<div class="body"><p>Could not get an answer.</p><p>'+esc(e.message)+'</p></div><div class="acts"><button type="button" class="mini" data-retry>Try again</button></div>';
     bot.q=q;
   }
-  busy=false;send.disabled=!canSend();toEnd();box.focus();
+  busy=false;send.disabled=!canSend();toEnd();box.focus();loadRecents();
 }
 
 log.addEventListener('click',e=>{
@@ -2446,7 +2510,7 @@ box.addEventListener('input',()=>{box.style.height='auto';box.style.height=Math.
 box.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();submit()}});
 $('#form').addEventListener('submit',e=>{e.preventDefault();submit()});
 document.querySelectorAll('.ideas button').forEach(b=>b.onclick=()=>ask(b.textContent));
-$('#newBtn').onclick=()=>{sid=uid();log.innerHTML='';document.body.classList.remove('chatting');box.focus()};
+$('#newBtn').onclick=()=>{sid=uid();log.innerHTML='';document.body.classList.remove('chatting');showView('chat');sbClose();drawRecents();box.focus()};
 
 /* ================= listen to an answer ================= */
 let speaking=null;
@@ -2484,7 +2548,24 @@ function speakText(raw,btn){
 })();
 
 /* ================= saved chats ================= */
-const hist=$('#hist'),hl=$('#histList');
+const hist=$('#hist'),hl=$('#histList'),rc=$('#recents');
+let rcData=[];
+async function loadRecents(){
+  try{const r=await fetch('/api/chats',{headers:{'X-Access-Key':localStorage.ak||''}}),j=await r.json();if(!r.ok)return;rcData=j.chats;drawRecents()}catch(e){}
+}
+function drawRecents(){
+  const f=($('#sbSearch').value||'').toLowerCase().trim();rc.innerHTML='';
+  const list=rcData.filter(c=>!f||c.title.toLowerCase().includes(f));
+  if(!list.length){rc.innerHTML='<p class="hempty">'+(f?'No chats match.':'Your chats will appear here.')+'</p>';return}
+  list.forEach(c=>{
+    const d=document.createElement('div');d.className='hi'+(c.sid===sid?' on':'');
+    const b=document.createElement('button');b.type='button';b.className='ht';b.dataset.sid=c.sid;b.title=c.title;
+    const t=document.createElement('span');t.textContent=c.title;b.append(t);
+    const x=document.createElement('button');x.type='button';x.className='hd';x.dataset.del=c.sid;x.setAttribute('aria-label','Delete this chat');x.textContent='×';
+    d.append(b,x);rc.append(d);
+  });
+}
+function sbClose(){document.body.classList.remove('sbopen')}
 function histOpen(o){hist.hidden=!o;if(o)loadHist()}
 async function loadHist(){
   hl.innerHTML='<p class="hempty">Loading...</p>';
@@ -2503,13 +2584,13 @@ async function loadHist(){
     });
   }catch(e){hl.innerHTML='<p class="hempty">Could not load your chats. Try again.</p>'}
 }
-hl.addEventListener('click',async e=>{
+async function histClick(e){
   const x=e.target.closest('[data-del]');
   if(x){
     if(!confirm('Delete this chat?'))return;
     await api('/api/chat/delete',{sid:x.dataset.del});
     if(x.dataset.del===sid){sid=uid();log.innerHTML='';document.body.classList.remove('chatting')}
-    loadHist();return;
+    loadHist();loadRecents();return;
   }
   const b=e.target.closest('[data-sid]');if(!b||busy)return;
   try{
@@ -2517,9 +2598,10 @@ hl.addEventListener('click',async e=>{
     if(!r.ok)throw new Error(j.error||'x');
     sid=b.dataset.sid;log.innerHTML='';
     j.messages.forEach(m=>{if(m.role==='user')addUser(m.content);else{const bot=addBot();botDone(bot,m.content)}});
-    document.body.classList.add('chatting');histOpen(false);toEnd();
+    document.body.classList.add('chatting');histOpen(false);showView('chat');sbClose();drawRecents();toEnd();
   }catch(err){hl.insertAdjacentHTML('afterbegin','<p class="hempty">Could not open that chat.</p>')}
-});
+}
+hl.addEventListener('click',histClick);rc.addEventListener('click',histClick);
 $('#histBtn').onclick=()=>histOpen(hist.hidden);
 $('#closeHist').onclick=()=>histOpen(false);
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!hist.hidden)histOpen(false)});
@@ -2748,7 +2830,7 @@ async function askExtra(q,a,mode){
       botDone(bot,(a.kind==='video'?'*I looked at four frames from your video. I cannot hear its sound.*\n\n':'')+j.answer);
     }
   }catch(e){botFail(bot,e)}
-  busy=false;send.disabled=!canSend();toEnd();box.focus();
+  busy=false;send.disabled=!canSend();toEnd();box.focus();loadRecents();
 }
 function submit(){
   const q=box.value.trim();
@@ -2804,7 +2886,19 @@ function showView(v){
   if(location.hash!=='#'+v)history.replaceState(null,'','#'+v);
   if(v==='chat')box.focus();
 }
-document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>showView(t.dataset.view));
+document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{showView(t.dataset.view);sbClose()});
+
+/* ---- sidebar: greeting, search, phone menu ---- */
+(function(){
+  const h=new Date().getHours(),nm=(document.querySelector('.acct')||{dataset:{}}).dataset.name||'';
+  $('.hero h1').textContent=(h<5?'Working late':h<12?'Good morning':h<17?'Good afternoon':'Good evening')+(nm?', '+nm:'');
+  const ul=$('.ideas'),f=$('#form');if(ul&&f)f.after(ul);
+  $('#sbSearch').addEventListener('input',drawRecents);
+  $('#sbToggle').onclick=()=>document.body.classList.add('sbopen');
+  $('#sbShade').onclick=sbClose;
+  $('#kbBtn').addEventListener('click',sbClose);
+  loadRecents();
+})();
 
 /* copy buttons inside the studios (the chat log has its own handler) */
 document.addEventListener('click',e=>{
