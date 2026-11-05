@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Deep OQ</title>
+<style>
+:root{--bg:#0f1034;--side:#141a4a;--panel:#171a52;--ink:#e9ebff;--mute:#8d93c9;--line:#2a3070;--accent:#14c8b0;--accent2:#2f7bff;--send:#8a5a45;--orange:#f59e3b;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--ink);font:13px/1.4 "Inter",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.app{display:flex;height:100%}
+aside{width:180px;flex:none;background:var(--side);padding:14px 8px;display:flex;flex-direction:column;gap:8px;overflow-y:auto}
+.brand{display:flex;align-items:center;gap:8px;font-weight:600;font-size:15px;padding:2px 6px 8px}
+.logo{width:14px;height:14px;border:2px solid #fff;border-radius:50%;position:relative;display:inline-block}
+.logo::after{content:"";position:absolute;top:-3px;right:-2px;width:5px;height:5px;border-radius:50%;background:var(--orange)}
+.new{background:#dcdcf0;color:#1a1d4a;border:0;border-radius:8px;padding:9px 12px;font:inherit;text-align:left;cursor:pointer}
+.search{background:#12164a;border:1px solid var(--line);border-radius:8px;padding:7px 10px;color:var(--ink);font:inherit;font-size:11px}
+nav{display:flex;flex-direction:column;gap:2px;margin-top:4px}
+nav button{background:none;border:0;color:var(--ink);text-align:left;padding:9px 10px;border-radius:8px;font:inherit;cursor:pointer;display:flex;justify-content:space-between;align-items:center}
+nav button:hover{background:rgba(255,255,255,.06)}
+nav button[aria-current]{background:#f2f2ff;color:#14173f}
+nav button.vr{background:linear-gradient(90deg,var(--accent),var(--accent2));font-weight:600}
+.badge{background:#fff;color:#14173f;border-radius:9px;padding:0 6px;font-size:10px}
+.recents{font-size:10px;letter-spacing:.06em;color:var(--mute);padding:14px 10px 4px}
+.recent{padding:6px 10px;font-size:11px;font-family:Georgia,serif;color:#cfd2f3;border-radius:6px;cursor:pointer}
+.user{margin-top:auto;border-top:1px solid var(--line);padding-top:12px;display:flex;align-items:center;gap:8px}
+.av{width:22px;height:22px;border-radius:50%;background:#e8a33a;color:#2a1a00;display:grid;place-items:center;font-weight:700;font-size:11px}
+main{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;gap:22px;min-width:0}
+h1{margin:0;font:400 28px/1.2 Georgia,"Times New Roman",serif;display:flex;align-items:center;gap:12px;text-align:center}
+h1 .logo{width:20px;height:20px;border-width:3px}
+.box{width:min(480px,100%);display:flex;align-items:center;gap:8px;background:#14185a;border:1px solid #2f6f86;box-shadow:0 0 0 2px rgba(20,200,176,.15);border-radius:22px;padding:6px 8px}
+.box:focus-within{border-color:var(--accent)}
+.box input{flex:1;min-width:0;background:none;border:0;outline:0;color:var(--ink);font:inherit;padding:8px 4px}
+.box input::placeholder{color:var(--mute)}
+.plus,.send{width:28px;height:28px;border-radius:50%;border:1px solid var(--line);background:#1b2066;color:var(--ink);cursor:pointer;flex:none}
+.send{background:var(--send);border-color:var(--send)}
+.lang{font-size:9px;color:var(--mute)}
+.hint{width:min(480px,100%);font-size:9px;color:var(--mute);margin-top:-14px}
+.chips{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;max-width:480px}
+.chips button{background:transparent;color:#cfd2f3;border:1px solid var(--line);border-radius:16px;padding:6px 12px;font:inherit;font-size:11px;cursor:pointer}
+.chips button:hover{border-color:var(--accent)}
+button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+@media(max-width:640px){aside{display:none}h1{font-size:22px}}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside>
+    <div class="brand"><span class="logo"></span>Deep OQ</div>
+    <button class="new">+ New chat</button>
+    <input class="search" placeholder="Search chats" aria-label="Search chats">
+    <nav>
+      <button aria-current="page">Chat</button>
+      <button>Code</button>
+      <button>Photo</button>
+      <button>Video</button>
+      <button>Lab</button>
+      <button>News</button>
+      <button class="vr">VR</button>
+      <button>Knowledge <span class="badge">0</span></button>
+    </nav>
+    <div class="recents">RECENTS</div>
+    <div class="recent">first question</div>
+    <div class="user"><span class="av">M</span><span>mayanksaw78</span></div>
+  </aside>
+  <main>
+    <h1><span class="logo"></span><span id="greet">Good evening, Mayanksaw</span></h1>
+    <div class="box">
+      <button class="plus" aria-label="Attach">+</button>
+      <input id="q" placeholder="Ask Deep OQ" aria-label="Ask Deep OQ">
+      <span class="lang">EN</span>
+      <button class="send" aria-label="Send">↑</button>
+    </div>
+    <div class="hint">Shift + Enter for a new line</div>
+    <div class="chips">
+      <button>Write a Python function that merges two sorted lists</button>
+      <button>What is in the news in India today?</button>
+      <button>Calculate 18% GST on ₹2,499</button>
+      <button>Explain how a transformer model works</button>
+    </div>
+  </main>
+</div>
+<script>
+const h=new Date().getHours();
+document.getElementById('greet').textContent=(h<12?'Good morning':h<17?'Good afternoon':'Good evening')+', Mayanksaw';
+document.querySelectorAll('.chips button').forEach(b=>b.onclick=()=>{const q=document.getElementById('q');q.value=b.textContent;q.focus()});
+</script>
+</body>
+</html>
