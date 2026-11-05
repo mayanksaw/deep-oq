@@ -820,12 +820,14 @@ def _call(model, messages, temperature, max_tokens, effort=None):
     return re.sub(r"<think>.*?(</think>|$)", "", text, flags=re.S).strip()  # hide any visible thinking
 
 
-def chat(messages, temperature=0.3, max_tokens=2048, smart=False):
+def chat(messages, temperature=0.3, max_tokens=2048, smart=False, prefer=None):
     if smart:
         order = SMART_CANDIDATES[:]
         if _smart["model"] in order:  # start with the model that worked last time
             order.remove(_smart["model"])
             order.insert(0, _smart["model"])
+        if prefer:  # exam questions: try the strongest reasoning model first
+            order = [prefer] + [m for m in order if m != prefer]
         for m in order:
             try:
                 text = _call(m, messages, temperature, max_tokens, "high")
@@ -857,6 +859,41 @@ def is_hard(text):
     return len(t) > 160 or any(h in t for h in HARD_HINTS)
 
 
+EXAM_MODEL = os.environ.get("DEEP_OQ_EXAM_MODEL", "openai/gpt-oss-120b")  # strongest reasoning model on the account
+EXAM_CHECK_MODEL = os.environ.get("DEEP_OQ_CHECK_MODEL", SMART_MODEL)    # a different model double-checks the answer
+EXAM_STRONG = re.compile(r"\b(jee|neet|upsc|ias|ips|ifs|csat|nda|cds|ssc|gate|cuet|clat|cbse|icse|ncert|olympiad|"
+                         r"prelims|mains|gs\s?-?\s?[1-4]|mcq|assertion|which of the following|statement\s*(?:i|1)\b)", re.I)
+EXAM_SUBJECT = re.compile(r"\b(physics|chemistry|biology|botany|zoology|mathematics|maths|calculus|algebra|trigonometry|"
+                          r"organic|inorganic|thermodynamics|electrostatics|optics|mechanics|kinematics|genetics|"
+                          r"polity|constitution|article\s*\d+|economy|geography|history|ethics|governance|"
+                          r"integral|derivative|matrix|probability|equilibrium|molarity|enthalpy|photosynthesis|"
+                          r"mitosis|meiosis|periodic table|newton|ohm|coulomb)\b", re.I)
+EXAM_SYSTEM = (
+    " EXAM MODE (JEE, NEET, UPSC and similar Indian exams). Read the question carefully and answer exactly "
+    "what is asked. For maths, physics and chemistry numericals: write Given and Find, name the concept or "
+    "formula, solve step by step with units, check that the answer makes sense (size, units, a limiting case), "
+    "then give the final answer in bold. For MCQs: work out the answer first, then check every option, and "
+    "finish with 'Answer: (letter) value'. For NEET biology and chemistry: use NCERT facts and exact terms. "
+    "For UPSC prelims: judge each statement one by one as correct or incorrect with a short reason, then give "
+    "the option. For UPSC mains: write a structured answer with a short introduction, a body in headings or "
+    "bullets that covers different dimensions (political, economic, social, environmental, ethical where they "
+    "fit), real examples, schemes, committees or data you are sure about, a way forward and a short conclusion; "
+    "about 150 words for 10 marks and 250 words for 15 marks unless a word limit is given. Never invent article "
+    "numbers, dates, data, quotes or committee names: if you are not sure, say so. Keep the language simple."
+)
+
+
+def is_exam(text):
+    t = text or ""
+    if EXAM_STRONG.search(t) or re.search(r"\(\s*a\s*\).*\(\s*b\s*\)", t, re.S | re.I):
+        return True
+    return len(t) >= 40 and bool(EXAM_SUBJECT.search(t))
+
+
+def is_checkable(text):
+    return bool(re.search(r"\d|\(\s*a\s*\)|which of the following|statement|calculate|find|value|how many|assertion", text or "", re.I))
+
+
 def knowledge_block(question):
     hits = kb_search(question, k=6)
     if not hits:
@@ -872,8 +909,9 @@ def _deep_oq_raw(session, question):
     history = kb_load_history(session, 12)
     know = knowledge_block(question)
     tool_text, used = run_tools(question, lambda m, t, k: chat(m, t, k))
+    exam = is_exam(question)
     today = datetime.date.today().strftime("%A, %d %B %Y")
-    sysmsg = (SYSTEM + f" Today's date is {today}. TOOL RESULTS (calculator, counter, "
+    sysmsg = (SYSTEM + (EXAM_SYSTEM if exam else "") + f" Today's date is {today}. TOOL RESULTS (calculator, counter, "
               "web search) are exact or current: trust them over your own arithmetic "
               "and memory, and do not mention the tools.")
     base = [{"role": "system", "content": sysmsg}] + history
@@ -881,10 +919,26 @@ def _deep_oq_raw(session, question):
             + ("TOOL RESULTS:\n" + tool_text + "\n\n" if tool_text else "")
             + f"QUESTION:\n{question}")
 
-    if "web" in used and not (force or is_hard(question)):
+    if "web" in used and not (force or exam or is_hard(question)):
         return chat(base + [{"role": "user", "content": user
                     + "\n\nAnswer from the TOOL RESULTS. Check their dates: if they conflict or look old, "
                     "say what is most recent and how sure you are. Keep it short."}], 0.2, 2048, smart=True)
+    if exam:  # JEE / NEET / UPSC style: strongest model thinks hard, then a second model checks it
+        draft = chat(base + [{"role": "user", "content": user + "\n\nSolve this like a top exam teacher. "
+                              "Work one step at a time and do the arithmetic carefully."}],
+                     0.2, 4096, smart=True, prefer=EXAM_MODEL)
+        if not is_checkable(question):
+            return draft
+        try:
+            return chat([{"role": "system", "content": sysmsg}, {"role": "user", "content":
+                f"{user}\n\nSOLUTION TO CHECK:\n{draft}\n\nRe-work the key steps yourself. If the final answer "
+                "or any step is wrong, fix it. Output ONLY the final answer for the student, in the same "
+                "format as the solution, with no mention of this check."}],
+                0.1, 4096, smart=True, prefer=EXAM_CHECK_MODEL)
+        except Exception as e:
+            print("exam check failed:", e)
+            return draft
+
     if not (force or is_hard(question) or "calc" in used or "count" in used):
         return chat(base + [{"role": "user", "content": user}], 0.5)
 
