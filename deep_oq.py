@@ -863,6 +863,42 @@ def _call(model, messages, temperature, max_tokens, effort=None):
     return re.sub(r"<think>.*?(</think>|$)", "", text, flags=re.S).strip()  # hide any visible thinking
 
 
+# Backup providers: used only when every Groq model is busy. Each one switches on when its key is set in Render.
+#   CEREBRAS_API_KEY (free, very fast), GEMINI_API_KEY (free, Google), OPENROUTER_API_KEY (free models)
+EXTRA_PROVIDERS = []
+for _name, _keyvar, _url, _modvar, _mod in (
+        ("cerebras", "CEREBRAS_API_KEY", "https://api.cerebras.ai/v1/chat/completions", "CEREBRAS_MODEL", "gpt-oss-120b"),
+        ("gemini", "GEMINI_API_KEY", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+         "GEMINI_MODEL", "gemini-2.5-flash"),
+        ("openrouter", "OPENROUTER_API_KEY", "https://openrouter.ai/api/v1/chat/completions",
+         "OPENROUTER_MODEL", "openrouter/free")):
+    _k = os.environ.get(_keyvar, "").strip()
+    if _k:
+        EXTRA_PROVIDERS.append((_name, _url, _k.split(",")[0].strip(), os.environ.get(_modvar, _mod)))
+print("Backup providers:", [x[0] for x in EXTRA_PROVIDERS] or "none")
+
+
+def _extra_chat(messages, temperature, max_tokens):
+    import urllib.request as _ur
+    last = None
+    for name, url, key, model in EXTRA_PROVIDERS:
+        try:
+            body = json.dumps({"model": model, "messages": messages, "temperature": temperature,
+                               "max_tokens": max(max_tokens, 2048)}).encode()
+            req = _ur.Request(url, body, {"Content-Type": "application/json", "Authorization": "Bearer " + key})
+            with _ur.urlopen(req, timeout=120) as r:
+                data = json.loads(r.read().decode())
+            text = data["choices"][0]["message"].get("content") or ""
+            text = re.sub(r"<think>.*?(</think>|$)", "", text, flags=re.S).strip()
+            if text:
+                print("backup provider answered:", name)
+                return text
+        except Exception as e:
+            last = e
+            print("backup provider", name, "failed:", str(e)[:160])
+    raise last or RuntimeError("no backup provider")
+
+
 def chat(messages, temperature=0.3, max_tokens=4096, smart=False, prefer=None):
     if smart:
         order = SMART_CANDIDATES[:]
@@ -894,6 +930,11 @@ def chat(messages, temperature=0.3, max_tokens=4096, smart=False, prefer=None):
         except Exception as e:
             last = e
             print(f"model {m} failed:", e)
+    if EXTRA_PROVIDERS:  # every Groq model is busy: use a backup provider
+        try:
+            return _extra_chat(messages, temperature, max_tokens)
+        except Exception as e:
+            last = e
     raise last or RuntimeError("no model returned an answer")
 
 
