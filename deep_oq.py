@@ -1449,6 +1449,16 @@ main{overflow-y:auto;scroll-behavior:smooth}
 .achip button{border:0;background:none;cursor:pointer;font-size:19px;line-height:1;opacity:.7;padding:2px 7px}
 .achip button:hover{opacity:1}
 .genimg{display:block;max-width:min(100%,460px);border-radius:14px;margin:4px 0 10px;background:rgba(127,130,170,.15)}
+.camov{position:fixed;inset:0;z-index:100000;background:rgba(5,8,25,.88);display:grid;place-items:center;padding:16px}
+.cambox{width:min(640px,100%);background:var(--surface);border:1px solid var(--line);border-radius:20px;padding:12px;display:grid;gap:12px}
+.camv{width:100%;max-height:68vh;border-radius:14px;background:#000;object-fit:cover}
+.camerr{font-family:var(--ui);font-size:14px;padding:6px 8px;color:var(--ink)}
+.camerr[hidden]{display:none}
+.camrow{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.camb{border:1px solid var(--line);background:none;color:var(--ink);border-radius:99px;padding:10px 18px;font-family:var(--ui);font-size:14px;cursor:pointer}
+.camb:hover{background:rgba(127,130,170,.18)}
+.camshot{width:62px;height:62px;border-radius:50%;border:4px solid var(--line);background:var(--ink);box-shadow:inset 0 0 0 4px var(--surface);cursor:pointer}
+.camshot:disabled{opacity:.35;cursor:default}
 .ubox{white-space:pre-wrap}
 .ubox img{display:block;max-width:220px;max-height:200px;border-radius:12px;margin-bottom:6px}
 
@@ -1593,6 +1603,9 @@ a.primary{text-decoration:none;display:inline-block}
           <button class="pitem" type="button" role="menuitem" data-act="ask">
             <svg viewBox="0 0 24 24"><path d="M21 11.5l-8.6 8.6a5 5 0 0 1-7-7l8.6-8.6a3.4 3.4 0 0 1 4.9 4.9l-8.6 8.6a1.7 1.7 0 0 1-2.4-2.4l7.9-7.9"/></svg>
             <span><b>Upload to ask a question</b><small>Image, video, PDF or text file</small></span></button>
+          <button class="pitem" type="button" role="menuitem" data-act="camera">
+            <svg viewBox="0 0 24 24"><path d="M4 8h3l1.6-2.4h6.8L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.6"/></svg>
+            <span><b>Take a photo</b><small>Use your camera, then ask about it</small></span></button>
           <button class="pitem" type="button" role="menuitem" data-act="photo">
             <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="1.8"/><path d="m21 16-5-5-8 9"/></svg>
             <span><b>Edit a photo</b><small>Opens the Photo editor</small></span></button>
@@ -1605,6 +1618,7 @@ a.primary{text-decoration:none;display:inline-block}
         </div>
         <input type="file" id="fq" hidden accept="image/*,video/*,.pdf,.txt,.md,.csv,.tsv,.json,.xml,.yaml,.yml,.log,.html,.css,.js,.ts,.jsx,.tsx,.py,.java,.c,.cpp,.h,.cs,.go,.rs,.rb,.php,.kt,.swift,.sql,.sh,.bat">
         <input type="file" id="fpe" hidden accept="image/*">
+        <input type="file" id="fcam" hidden accept="image/*" capture="environment">
         <input type="file" id="fve" hidden accept="video/*,.mkv">
       </div>
       <textarea id="q" rows="1" placeholder="Ask Deep OQ" aria-label="Message" autocomplete="off"></textarea>
@@ -1988,6 +2002,7 @@ document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!pmenu.hidden){menu
 pmenu.querySelectorAll('.pitem').forEach(b=>b.onclick=()=>{
   menu(false);const a=b.dataset.act;
   if(a==='ask')$('#fq').click();
+  else if(a==='camera')openCamera();
   else if(a==='photo')$('#fpe').click();
   else if(a==='video')$('#fve').click();
   else{setImgMode(true);box.focus()}
@@ -1995,6 +2010,46 @@ pmenu.querySelectorAll('.pitem').forEach(b=>b.onclick=()=>{
 $('#fpe').onchange=e=>{const f=e.target.files[0];e.target.value='';if(f){showView('photo');loadPhoto(f)}};
 $('#fve').onchange=e=>{const f=e.target.files[0];e.target.value='';if(f){showView('video');loadVideo(f)}};
 $('#fq').onchange=e=>{const f=e.target.files[0];e.target.value='';if(f)attach(f)};
+$('#fcam').onchange=e=>{const f=e.target.files[0];e.target.value='';if(f)attach(f)};
+let camStream=null,camFacing='environment';
+async function openCamera(){
+  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){$('#fcam').click();return}
+  const ov=document.createElement('div');ov.className='camov';ov.setAttribute('role','dialog');ov.setAttribute('aria-label','Camera');
+  ov.innerHTML='<div class="cambox"><video class="camv" autoplay playsinline muted></video><div class="camerr" hidden></div>'
+    +'<div class="camrow"><button type="button" class="camb" data-c="x">Cancel</button>'
+    +'<button type="button" class="camshot" data-c="shot" aria-label="Take photo"></button>'
+    +'<button type="button" class="camb" data-c="flip">Flip</button></div></div>';
+  document.body.append(ov);
+  const v=ov.querySelector('video'),err=ov.querySelector('.camerr'),shot=ov.querySelector('[data-c=shot]');
+  const stop=()=>{if(camStream)camStream.getTracks().forEach(t=>t.stop());camStream=null};
+  const onKey=e=>{if(e.key==='Escape')close()};
+  const close=()=>{stop();ov.remove();document.removeEventListener('keydown',onKey)};
+  document.addEventListener('keydown',onKey);
+  async function start(){
+    stop();err.hidden=true;shot.disabled=false;
+    try{
+      camStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:camFacing,width:{ideal:1920},height:{ideal:1080}},audio:false});
+      v.srcObject=camStream;
+    }catch(e){
+      err.hidden=false;shot.disabled=true;
+      err.textContent='The camera is not available. Allow camera access for this site in your browser, or choose Upload to pick a picture.';
+    }
+  }
+  ov.addEventListener('click',e=>{
+    const b=e.target.closest('[data-c]');
+    if(!b){if(e.target===ov)close();return}
+    const k=b.dataset.c;
+    if(k==='x')close();
+    else if(k==='flip'){camFacing=camFacing==='user'?'environment':'user';start()}
+    else if(k==='shot'){
+      if(!v.videoWidth)return;
+      const c=document.createElement('canvas');c.width=v.videoWidth;c.height=v.videoHeight;
+      c.getContext('2d').drawImage(v,0,0);
+      c.toBlob(bl=>{if(!bl)return;close();attach(new File([bl],'camera-'+Date.now()+'.jpg',{type:'image/jpeg'}))},'image/jpeg',.92);
+    }
+  });
+  start();
+}
 box.addEventListener('paste',e=>{
   const f=[...(e.clipboardData?.files||[])].find(x=>x.type.startsWith('image/'));
   if(f){e.preventDefault();attach(f)}
