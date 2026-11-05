@@ -1330,7 +1330,7 @@ def logout():
     return redirect("/login")
 
 
-ACCT_CSS = ("<style>.acct{flex-basis:100%;display:flex;justify-content:flex-end;align-items:center;gap:8px;"
+ACCT_CSS = ("<style>.acct{flex-basis:100%;display:flex;justify-content:flex-start;align-items:center;gap:8px;"
             "margin-top:-4px}.acct .who{font:500 12.5px var(--ui);color:var(--ink-2);max-width:46vw;overflow:hidden;"
             "text-overflow:ellipsis;white-space:nowrap}.acct a{font:600 13px var(--ui);text-decoration:none;"
             "padding:6px 14px;border-radius:99px;border:1px solid var(--line);color:var(--ink);background:transparent}"
