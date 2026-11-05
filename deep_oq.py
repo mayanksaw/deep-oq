@@ -1873,10 +1873,7 @@ main{overflow-y:auto;scroll-behavior:smooth}
 .tab{font-family:var(--ui);font-weight:500;font-size:14.5px;padding:7px 16px;border:0;border-radius:999px;background:none;cursor:pointer;transition:background .15s,color .15s}
 .tab:hover{background:var(--surface)}
 .tab[aria-current=page]{background:var(--ink);color:var(--bg)}
-.top{justify-content:flex-end}
-.brand{margin-right:auto}
-.tabs{margin-left:0}
-.tools{margin-left:0}
+.tools{margin-left:auto}
 body:not([data-view=chat]) #chatTools{display:none}
 .views{position:relative;min-height:0}
 .view{display:none;position:absolute;inset:0;min-height:0}
