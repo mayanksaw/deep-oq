@@ -2705,6 +2705,14 @@ def _vision(prompt, image):
     raise ValueError("Photo understanding is not available right now. Please try again later.")
 
 
+POLLINATIONS_KEY = os.environ.get("POLLINATIONS_KEY", "").strip()
+
+
+def _pollinations_url(prompt, seed):
+    return ("https://image.pollinations.ai/prompt/" + urllib.parse.quote(prompt[:700])
+            + "?width=1024&height=1024&nologo=true&seed=" + str(seed))
+
+
 def _lab(d):
     mod = d.get("mod")
     text = str(d.get("text", "")).strip()[:20000]
@@ -2767,10 +2775,18 @@ def _lab(d):
         raise ValueError("Type something first.")
 
     if mod == "image":
-        p = ask("Rewrite this as one vivid, detailed image-generation prompt (max 60 words). "
-                "Output only the prompt:\n" + text)
-        url = ("https://image.pollinations.ai/prompt/" + urllib.parse.quote(p)
-               + "?width=1024&height=1024&nologo=true&seed=" + str(random.randint(1, 10**6)))
+        p = ask("Write one image-generation prompt in English (max 70 words) for this request. Keep the "
+                "subject, people, colours and details exactly as the user asked, and never add things they "
+                "did not ask for. If the user names a style (cartoon, anime, painting, 3D, logo, sketch), "
+                "use that style. Otherwise make it a real, sharp, photorealistic photograph: say the camera "
+                "and lens (for example 85mm f/1.8), natural or cinematic lighting, sharp focus, fine natural "
+                "detail, realistic skin, fur and material textures, true-to-life colours. If the request "
+                "has words to show in the picture, keep those words exactly. Output only the prompt:\n" + text)
+        seed = random.randint(1, 10**6)
+        if POLLINATIONS_KEY:  # own key: the server fetches the picture (no logo, key stays secret)
+            url = "/pimg?seed=" + str(seed) + "&p=" + urllib.parse.quote(p[:700])
+        else:
+            url = _pollinations_url(p, seed)
         return {"image": url, "answer": "Prompt used: " + p}
 
     if mod == "data":
@@ -2829,6 +2845,27 @@ def _lab(d):
         return {"music": {"tempo": tempo, "notes": notes}, "answer": "Title: " + str(j.get("title", "Untitled"))[:80]}
 
     raise ValueError("Pick one of the Lab skills.")
+
+
+@app.get("/pimg")
+def pimg_route():
+    """Fetches a generated picture with the server's own Pollinations key (login required)."""
+    prompt = request.args.get("p", "")[:700]
+    seed = re.sub(r"\D", "", request.args.get("seed", ""))[:9] or "1"
+    if not prompt.strip():
+        return jsonify(error="No prompt."), 400
+    url = _pollinations_url(prompt, seed)
+    for headers in ({"Authorization": "Bearer " + POLLINATIONS_KEY}, {}):  # key first, then plain
+        try:
+            req = urllib.request.Request(url, headers=dict(headers, **{"User-Agent": "DeepOQ/1.0"}))
+            with urllib.request.urlopen(req, timeout=110) as r:
+                ctype = r.headers.get("Content-Type", "")
+                if r.status == 200 and ctype.startswith("image/"):
+                    return r.read(), 200, {"Content-Type": ctype, "Cache-Control": "private, max-age=3600"}
+                print("pimg upstream", r.status, ctype)
+        except Exception as e:
+            print("pimg failed:", "with key" if headers else "without key", e)
+    return jsonify(error="The picture service did not answer."), 502
 
 
 @app.post("/lab")
