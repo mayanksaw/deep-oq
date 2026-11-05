@@ -1993,6 +1993,7 @@ $('#newBtn').onclick=()=>{sid=uid();log.innerHTML='';document.body.classList.rem
 /* ================= plus menu: attach, edit, create image ================= */
 const canSend=()=>!busy&&!attBusy&&(!!box.value.trim()||!!att);
 const IMG_RE=/^\s*(?:please\s+)?(?:(?:can|could|will)\s+you\s+)?(?:(?:create|generate|make|draw|paint|design|show)\s+(?:me\s+)?(?:an?\s+|the\s+)?(?:image|picture|photo|pic|illustration|drawing|painting|wallpaper|poster|logo)(?=\s*(?:of|showing|with|about|for|that|where|:|,|\.|$))|draw\s+(?:me\s+)?(?:an?\s+|the\s+)(?!(?:table|flowchart|diagram|chart|graph|line|circle|square|box|button|layout|form|ui|canvas|svg|html|css|code|function|program|class|schema|tree|grid)\b))/i;
+const IMG_FROM_RE=/^\s*(?:please\s+)?(?:can\s+you\s+)?(?:generate|create|draw|design|imagine|visuali[sz]e|render|paint|redesign|redraw)\b|\b(?:make|show|give)\b.{0,30}\b(?:image|picture|photo|pic|render|illustration|mockup|design)\b/i;
 const TEXT_EXT=/\.(txt|md|csv|tsv|json|xml|ya?ml|log|html?|css|js|ts|jsx|tsx|py|java|c|cpp|h|cs|go|rs|rb|php|kt|swift|sql|sh|bat)$/i;
 const plusBtn=$('#plus'),pmenu=$('#pmenu');
 function menu(open){pmenu.hidden=!open;plusBtn.setAttribute('aria-expanded',open)}
@@ -2158,7 +2159,7 @@ function loadPic(url){return new Promise((ok,no)=>{
   im.onerror=()=>{clearTimeout(t);no(new Error('The picture service did not answer. Try again in a moment.'))};
   im.src=url;
 })}
-async function makeImage(bot,prompt){
+async function makeImage(bot,prompt,note){
   const w=bot.querySelector('.wait');if(w)w.textContent='Creating your image';
   const r=await api('/lab',{mod:'image',text:prompt}),j=await r.json().catch(()=>({}));
   if(r.status===401)throw new Error('That access key was not accepted. Reload the page and enter it again.');
@@ -2167,8 +2168,16 @@ async function makeImage(bot,prompt){
   bot.classList.remove('thinking');
   bot.lastChild.innerHTML='<div class="body"><div id="gi"></div><p class="muted"></p></div><div class="acts"><a class="mini" target="_blank" rel="noopener" style="text-decoration:none">Open full size</a></div>';
   bot.lastChild.querySelector('#gi').replaceWith(im);
-  bot.lastChild.querySelector('.muted').textContent=j.answer||'';
+  bot.lastChild.querySelector('.muted').textContent=(j.answer||'')+(note?'\n'+note:'');
   bot.lastChild.querySelector('a').href=j.image;
+}
+async function makeFromPhoto(bot,q,a){
+  const w=bot.querySelector('.wait');if(w)w.textContent='Looking at your photo';
+  const r=await api('/lab',{mod:'vision',text:'Describe this photo for an artist who must recreate the scene: the place, every important object, their colours and where they are. Plain words, max 90 words. Output only the description.',image:a.data}),j=await r.json().catch(()=>({}));
+  if(r.status===401)throw new Error('That access key was not accepted. Reload the page and enter it again.');
+  if(!r.ok||j.error)throw new Error(j.error||'Could not look at the photo.');
+  await makeImage(bot,"Scene from the user's photo: "+String(j.answer||'').trim()+"\n\nWhat the user wants: "+q+"\n\nCreate the picture the user wants, based on that scene.",
+    'This is a new picture made from a description of your photo, not an exact edit of it.');
 }
 async function askExtra(q,a,mode){
   if(busy)return;
@@ -2178,7 +2187,8 @@ async function askExtra(q,a,mode){
   if(a||mode){att=null;imgMode=false;renderAtts()}
   const bot=addBot();toEnd();
   try{
-    if(mode){await makeImage(bot,q)}
+    if(mode==='from'){await makeFromPhoto(bot,q,a)}
+    else if(mode){await makeImage(bot,q)}
     else if(a.kind==='doc'){
       const r=await api('/askfile',{q,name:a.name,text:a.text,session:sid}),j=await r.json().catch(()=>({}));
       if(r.status===401)throw new Error('That access key was not accepted. Reload the page and enter it again.');
@@ -2197,7 +2207,7 @@ async function askExtra(q,a,mode){
 function submit(){
   const q=box.value.trim();
   if(busy||attBusy)return;
-  if(att)return askExtra(q,att,false);
+  if(att){if(att.kind==='image'&&IMG_FROM_RE.test(q))return askExtra(q,att,'from');return askExtra(q,att,false)}
   if(imgMode){if(!q)return;return askExtra(q,null,true)}
   if(!q)return;
   if(IMG_RE.test(q))return askExtra(q,null,true);
