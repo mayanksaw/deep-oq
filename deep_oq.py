@@ -2708,6 +2708,15 @@ def _vision(prompt, image):
 POLLINATIONS_KEY = os.environ.get("POLLINATIONS_KEY", "").strip()
 
 
+POLLINATIONS_MODEL = os.environ.get("POLLINATIONS_MODEL", "flux").strip() or "flux"
+
+
+def _pollinations_gen_url(prompt, seed):
+    """The keyed endpoint (no logo, no per-IP limit). The key goes in a header, never in the URL."""
+    return ("https://gen.pollinations.ai/image/" + urllib.parse.quote(prompt[:700], safe="")
+            + "?model=" + urllib.parse.quote(POLLINATIONS_MODEL) + "&width=1024&height=1024&nologo=true&seed=" + str(seed))
+
+
 def _pollinations_url(prompt, seed):
     return ("https://image.pollinations.ai/prompt/" + urllib.parse.quote(prompt[:700])
             + "?width=1024&height=1024&nologo=true&seed=" + str(seed))
@@ -2854,17 +2863,21 @@ def pimg_route():
     seed = re.sub(r"\D", "", request.args.get("seed", ""))[:9] or "1"
     if not prompt.strip():
         return jsonify(error="No prompt."), 400
-    url = _pollinations_url(prompt, seed)
-    for headers in ({"Authorization": "Bearer " + POLLINATIONS_KEY}, {}):  # key first, then plain
+    tries = [(_pollinations_gen_url(prompt, seed), {"Authorization": "Bearer " + POLLINATIONS_KEY}, "keyed"),
+             (_pollinations_url(prompt, seed), {}, "free")]  # keyed first, then the free service
+    for url, headers, label in tries:
         try:
             req = urllib.request.Request(url, headers=dict(headers, **{"User-Agent": "DeepOQ/1.0"}))
             with urllib.request.urlopen(req, timeout=110) as r:
                 ctype = r.headers.get("Content-Type", "")
                 if r.status == 200 and ctype.startswith("image/"):
+                    print("pimg ok:", label)
                     return r.read(), 200, {"Content-Type": ctype, "Cache-Control": "private, max-age=3600"}
-                print("pimg upstream", r.status, ctype)
+                print("pimg", label, "gave", r.status, ctype)
+        except urllib.error.HTTPError as e:
+            print("pimg", label, "failed:", e.code, e.read()[:200])
         except Exception as e:
-            print("pimg failed:", "with key" if headers else "without key", e)
+            print("pimg", label, "failed:", e)
     return jsonify(error="The picture service did not answer."), 502
 
 
