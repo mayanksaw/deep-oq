@@ -659,6 +659,15 @@ _cool = {}  # (key number, model) -> time when it may be used again
 
 class _Completions:
     def create(self, **kw):
+        return _rotate(lambda g: g.chat.completions, kw)
+
+
+class _Transcriptions:
+    def create(self, **kw):
+        return _rotate(lambda g: g.audio.transcriptions, kw)
+
+
+def _rotate(part, kw):
         n = len(_groqs)
         model = kw.get("model")
         last = None
@@ -667,7 +676,7 @@ class _Completions:
         ready = [i for i in order if _cool.get((i, model), 0) <= now]
         for i in (ready or order):  # skip keys that just hit their limit
             try:
-                r = _groqs[i].chat.completions.create(**kw)
+                r = part(_groqs[i]).create(**kw)
                 _key_state["i"] = i
                 return r
             except Exception as e:
@@ -686,8 +695,13 @@ class _Chat:
     completions = _Completions()
 
 
+class _Audio:
+    transcriptions = _Transcriptions()
+
+
 class _RotatingClient:
     chat = _Chat()
+    audio = _Audio()
 
 
 client = _RotatingClient()
@@ -1595,6 +1609,40 @@ def ask():
         return jsonify(error=str(e)[:300]), 500
     return jsonify(answer=answer)
 
+WHISPER_MODELS = [m for m in (os.environ.get("DEEP_OQ_WHISPER_MODEL"), "whisper-large-v3-turbo",
+                              "whisper-large-v3") if m]
+
+
+@app.post("/api/transcribe")
+def api_transcribe():
+    """Turns a voice recording into text (works in every browser that can record)."""
+    if denied():
+        return jsonify(error="locked"), 401
+    f = request.files.get("audio")
+    if not f:
+        return jsonify(error="No recording was received."), 400
+    raw = f.read()
+    if len(raw) < 1000:
+        return jsonify(text="")
+    lang = str(request.form.get("lang", "")).lower()[:2]
+    last = None
+    for model in WHISPER_MODELS:
+        kw = dict(file=(f.filename or "voice.webm", raw), model=model, temperature=0)
+        if lang in ("en", "hi"):
+            kw["language"] = lang
+        try:
+            r = client.audio.transcriptions.create(**kw)
+            text = getattr(r, "text", None)
+            if text is None and isinstance(r, str):
+                text = r
+            return jsonify(text=(text or "").strip())
+        except Exception as e:
+            last = e
+            print("transcribe", model, "failed:", str(e)[:160])
+    print("transcribe failed:", last)
+    return jsonify(error="Could not turn your voice into text right now. Try again in a minute."), 502
+
+
 @app.post("/ask_stream")
 def ask_stream():
     """Same as /ask, but sends the answer piece by piece (server-sent events)."""
@@ -1666,7 +1714,10 @@ def api_chats():
                           "GROUP BY session ORDER BY MAX(ts) DESC LIMIT 60", (n, pre)).fetchall()
     out = []
     for sess, ts, first in rows:
-        title = re.sub(r"\s+", " ", re.sub(r"^\[attached file: [^\]]*\]\s*", "", first or "")).strip()[:70]
+        title = first or ""
+        for _ in range(3):  # hide hidden hints such as "[VR guide mode: ...]" or "[attached file: ...]"
+            title = re.sub(r"^\s*\[[^\]]*\]\s*", "", title)
+        title = re.sub(r"\s+", " ", title).strip()[:70]
         out.append({"sid": sess[n:], "title": title or "New chat", "ts": str(ts)[:16].replace("T", " ")})
     return jsonify(chats=out)
 
@@ -2004,6 +2055,30 @@ body:not(.chatting) .field{padding-top:12px;padding-bottom:12px;border-radius:26
 .ideas button{width:auto;padding:9px 16px;border:1px solid var(--line);border-radius:999px;font:500 14px var(--ui);color:var(--ink-2)}
 .ideas button:hover{padding-left:16px;color:var(--ink);background:rgba(127,130,170,.14)}
 .chatting .ideas{display:none}
+/* ---- compact sidebar, lower start screen, menu that always fits ---- */
+header.top{gap:2px;padding:12px 10px 10px}
+header.top .brand{margin:0 0 6px}
+header.top #newBtn{padding:8px 12px;font-size:14px}
+.sbsearch{margin:4px 0 2px;padding:7px 12px;font-size:13.5px}
+header.top .tabs{display:grid;grid-template-columns:1fr 1fr;gap:2px;margin:4px 0}
+header.top .tab{padding:6px 10px;font-size:14px}
+header.top a.tab{margin-top:0}
+header.top #kbBtn{padding:6px 10px;font-size:14px}
+.sbhd{margin:8px 8px 2px}
+.recents{min-height:110px;overflow-x:hidden}
+.recents .hi{min-width:0}
+.recents .ht{padding:7px 10px;font-size:14px;min-width:0;overflow:hidden}
+.recents .ht span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+header.top .acct{margin-top:4px;padding-top:8px}
+.acct .av{width:30px;height:30px;font-size:14px}
+.acct .who{font-size:13px}
+.acct .btns a{padding:5px 10px;font-size:13px}
+body:not(.chatting) #v-chat.on{padding-top:12vh;padding-bottom:0}
+.pmenu{max-height:min(66vh,430px);overflow-y:auto}
+.pitem{padding:7px 10px}
+.pitem b{font-size:14.5px}
+.pitem small{font-size:12px}
+@media (max-height:820px){.pitem small{display:none}.pitem{padding:8px 10px}}
 .sbtoggle,.sbshade{display:none}
 @media (max-width:860px){
   body{grid-template-columns:minmax(0,1fr)}
@@ -2530,21 +2605,40 @@ function speakText(raw,btn){
 
 /* ================= speak your question ================= */
 (function(){
-  const SR=window.SpeechRecognition||window.webkitSpeechRecognition,mic=$('#mic'),vl=$('#vlang');
-  if(!SR){mic.hidden=true;vl.hidden=true;return}
+  const mic=$('#mic'),vl=$('#vlang');
+  if(!navigator.mediaDevices||!window.MediaRecorder){mic.hidden=true;vl.hidden=true;return}
   const lab=()=>{vl.textContent=(localStorage.vl||'en-IN')==='hi-IN'?'हि':'EN'};lab();
   vl.onclick=()=>{localStorage.vl=(localStorage.vl||'en-IN')==='hi-IN'?'en-IN':'hi-IN';lab()};
-  let rec=null,on=false;
-  mic.onclick=()=>{
-    if(on){rec.stop();return}
-    rec=new SR();rec.lang=localStorage.vl||'en-IN';rec.interimResults=true;rec.continuous=false;
-    const base=box.value?box.value.trimEnd()+' ':'';let said='';
-    rec.onstart=()=>{on=true;mic.classList.add('rec');mic.setAttribute('aria-label','Stop listening')};
-    rec.onresult=e=>{let t='';for(let i=0;i<e.results.length;i++)t+=e.results[i][0].transcript;said=t;box.value=base+t;box.dispatchEvent(new Event('input'))};
-    rec.onend=()=>{on=false;mic.classList.remove('rec');mic.setAttribute('aria-label','Speak your question');if(said.trim()&&!busy)submit()};
-    rec.onerror=e=>{on=false;mic.classList.remove('rec');if(e.error==='not-allowed'||e.error==='service-not-allowed')alert('Allow the microphone for this site in your browser settings, then try again.')};
-    try{rec.start()}catch(e){}
-  };
+  let rec=null,chunks=[],stream=null,timer=null,prev='';
+  const stopTracks=()=>{if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}};
+  async function start(){
+    try{stream=await navigator.mediaDevices.getUserMedia({audio:true})}
+    catch(e){alert('Allow the microphone for this site (click the lock icon next to the web address), then try again.');return}
+    const mt=['audio/webm;codecs=opus','audio/webm','audio/mp4','audio/ogg'].find(t=>MediaRecorder.isTypeSupported(t))||'';
+    rec=new MediaRecorder(stream,mt?{mimeType:mt}:{});chunks=[];prev=box.placeholder;
+    rec.ondataavailable=e=>{if(e.data.size)chunks.push(e.data)};
+    rec.onstop=async()=>{
+      clearTimeout(timer);mic.classList.remove('rec');stopTracks();
+      const type=rec.mimeType||mt||'audio/webm',blob=new Blob(chunks,{type});
+      if(blob.size<1500){box.placeholder=prev;return}
+      box.placeholder='Writing what you said...';mic.disabled=true;
+      try{
+        const fd=new FormData();
+        fd.append('audio',blob,'voice.'+(type.includes('mp4')?'mp4':type.includes('ogg')?'ogg':'webm'));
+        fd.append('lang',(localStorage.vl||'en-IN').slice(0,2));
+        const r=await fetch('/api/transcribe',{method:'POST',headers:{'X-Access-Key':localStorage.ak||''},body:fd});
+        const j=await r.json().catch(()=>({}));
+        if(!r.ok||j.error)throw new Error(j.error||'Could not understand the recording.');
+        const t=(j.text||'').trim();
+        if(!t)alert('I could not hear anything. Speak closer to the microphone and try again.');
+        else{box.value=(box.value?box.value.trimEnd()+' ':'')+t;box.dispatchEvent(new Event('input'));if(!busy)submit()}
+      }catch(e){alert(e.message)}
+      mic.disabled=false;box.placeholder=prev;
+    };
+    rec.start();mic.classList.add('rec');box.placeholder='Listening... tap the mic again when you finish';
+    timer=setTimeout(()=>{if(rec&&rec.state==='recording')rec.stop()},60000);
+  }
+  mic.onclick=()=>{if(rec&&rec.state==='recording')rec.stop();else start()};
 })();
 
 /* ================= saved chats ================= */
