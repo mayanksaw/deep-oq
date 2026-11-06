@@ -198,7 +198,7 @@ def kb_load_history(session, n=12):
     else:
         rows = DB.execute("SELECT role,content FROM messages WHERE session=? "
                           "ORDER BY id DESC LIMIT ?", (session, n)).fetchall()
-    return [{"role": r, "content": c} for r, c in reversed(rows)]
+    return [{"role": r, "content": (c or "")[:7000]} for r, c in reversed(rows)]
 
 
 def kb_stats():
@@ -737,6 +737,9 @@ SYSTEM = (
 # MATHS WITH SYMBOLS: answers use + - × ÷ = ≠ ≈ ≤ ≥ % √ ² ³ ° π θ ... never LaTeX, never maths words
 # ==========================================================================
 SYSTEM += (
+    " The conversation above is the chat so far. When the user's message refers to something earlier (it, this, "
+    "that, the question, the answer, 'solve it', 'explain more'), use the earlier messages to find what they mean "
+    "and answer that; never ask what they mean when the earlier messages already show it."
     " Write all maths with real mathematical symbols in plain text. Never use LaTeX, dollar signs or backslash "
     "commands (no \\frac, \\sqrt, \\int, $ or $$). Never write maths as words: not 'squared', 'cubed', 'to the "
     "power', 'square root of', 'theta', 'pi', 'degrees', 'percent', 'divided by', 'times', 'plus' or 'minus'. "
@@ -761,6 +764,15 @@ _TEX_SYM = {
     "phi": "φ", "varphi": "φ", "psi": "ψ", "rho": "ρ", "tau": "τ", "eta": "η", "kappa": "κ", "nu": "ν",
     "xi": "ξ", "zeta": "ζ", "chi": "χ", "Gamma": "Γ", "Theta": "Θ", "Lambda": "Λ", "Pi": "Π",
     "Phi": "Φ", "Psi": "Ψ", "hbar": "ħ", "ell": "ℓ", "quad": " ", "qquad": " ",
+    "Longrightarrow": " ⇒ ", "longrightarrow": " → ", "Longleftarrow": " ⇐ ", "longleftarrow": " ← ",
+    "Longleftrightarrow": " ⇔ ", "longleftrightarrow": " ↔ ", "mapsto": " ↦ ", "geqslant": "≥", "leqslant": "≤",
+    "lt": "<", "gt": ">", "ast": "*", "star": "*", "bullet": "•", "lbrace": "{", "rbrace": "}", "vert": "|",
+    "Vert": "‖", "lfloor": "⌊", "rfloor": "⌋", "lceil": "⌈", "rceil": "⌉", "langle": "⟨", "rangle": "⟩",
+    "setminus": "∖", "oplus": "⊕", "otimes": "⊗", "odot": "⊙", "land": "∧", "lor": "∨", "neg": "¬",
+    "vdots": "⋮", "ddots": "⋱", "aleph": "ℵ", "Re": "ℜ", "Im": "ℑ", "ohm": "Ω", "micro": "μ",
+    "angstrom": "Å", "colon": ":", "nmid": "∤", "ncong": "≇", "supset": "⊃", "supseteq": "⊇", "ni": "∋",
+    "dagger": "†", "varnothing": "∅", "triangle": "△", "square": "□", "checkmark": "✓", "top": "⊤",
+    "uparrow": "↑", "downarrow": "↓", "nearrow": "↗", "searrow": "↘", "Delta": "Δ", "mathbb": "",
 }
 _TEX_KEEP = {"sin", "cos", "tan", "cot", "sec", "csc", "log", "ln", "exp", "max", "min", "det", "lim", "sup",
              "inf", "arcsin", "arccos", "arctan", "sinh", "cosh", "tanh", "gcd", "mod"}
@@ -782,7 +794,7 @@ def _sub(x):
 
 def _pm_wrap(x):
     x = x.strip()
-    return x if re.fullmatch(r"[\w.²³°^⁰-⁹]+(?:\([^()]*\))?", x) else "(" + x + ")"
+    return x if re.fullmatch(r"[√∛∜]?[\w.²³°^⁰-⁹]+(?:\([^()]*\))?", x) else "(" + x + ")"
 
 
 def _pm_unbrace(x):
@@ -798,21 +810,87 @@ def _limits(sign, lo, hi):
     return sign + "(" + lo + " → " + hi + ") "
 
 
+_BB = {"R": "ℝ", "N": "ℕ", "Z": "ℤ", "Q": "ℚ", "C": "ℂ"}
+_SAME = ("text", "textbf", "textit", "mathrm", "mathbf", "mathit", "mathcal", "mathsf", "boldsymbol", "operatorname",
+         "underline", "tilde", "widetilde", "cancel", "phantom", "mbox", "bm")
+_CMD1 = {"vec": lambda a: a + "⃗", "overrightarrow": lambda a: a + "⃗", "bar": lambda a: a + "̄",
+         "overline": lambda a: a + "̄", "hat": lambda a: a + "̂", "widehat": lambda a: a + "̂",
+         "boxed": lambda a: "**" + a + "**", "mathbb": lambda a: _BB.get(a.strip(), a)}
+
+
+def _grab(s, j):
+    """Reads one argument that starts at s[j]: a {balanced group}, a \\command or one character."""
+    while j < len(s) and s[j] in " \t":
+        j += 1
+    if j >= len(s):
+        return None
+    if s[j] == "{":
+        depth = 0
+        for k in range(j, len(s)):
+            if s[k] == "{":
+                depth += 1
+            elif s[k] == "}":
+                depth -= 1
+                if depth == 0:
+                    return s[j + 1:k], k + 1
+        return None
+    if s[j] == "\\":
+        m = re.match(r"\\[A-Za-z]+|\\.", s[j:])
+        return m.group(), j + len(m.group())
+    return s[j], j + 1
+
+
+def _apply_cmds(s):
+    """Handles commands that take arguments (fractions, roots, vectors ...) even when the braces are nested."""
+    out, i, n = [], 0, len(s)
+    while i < n:
+        if s[i] != "\\":
+            out.append(s[i])
+            i += 1
+            continue
+        m = re.match(r"\\([A-Za-z]+)", s[i:])
+        if not m:
+            out.append(s[i])
+            i += 1
+            continue
+        name, j = m.group(1), i + m.end()
+        if name in ("frac", "dfrac", "tfrac", "cfrac", "binom", "dbinom"):
+            a = _grab(s, j)
+            b = _grab(s, a[1]) if a else None
+            if a and b:
+                x, y = _tex_plain(a[0], True).strip(), _tex_plain(b[0], True).strip()
+                out.append("C(" + x + ", " + y + ")" if "binom" in name else _pm_wrap(x) + " ÷ " + _pm_wrap(y))
+                i = b[1]
+                continue
+        elif name == "sqrt":
+            mo = re.match(r"\s*\[([^\]]*)\]", s[j:])
+            opt, k = (mo.group(1).strip(), j + mo.end()) if mo else (None, j)
+            a = _grab(s, k)
+            if a:
+                body = _pm_wrap(_tex_plain(a[0], True).strip())
+                out.append(("∛" if opt == "3" else "∜" if opt == "4" else
+                            (_sup(_tex_plain(opt, True)) + "√" if opt else "√")) + body)
+                i = a[1]
+                continue
+        elif name in _CMD1 or name in _SAME:
+            a = _grab(s, j)
+            if a:
+                inner = _tex_plain(a[0], True).strip()
+                out.append(_CMD1[name](inner) if name in _CMD1 else inner)
+                i = a[1]
+                continue
+        out.append(s[i:j])
+        i = j
+    return "".join(out)
+
+
 def _tex_plain(s, in_math=False):
     """Turns LaTeX into plain text with mathematical symbols."""
-    for name in ("text", "mathrm", "mathbf", "mathit", "operatorname", "textbf", "boldsymbol", "mathcal"):
-        s = re.sub(r"\\" + name + r"\s*\{([^{}]*)\}", r"\1", s)
-    for _ in range(8):  # innermost fractions first, so nested ones work
-        t = re.sub(r"\\[dt]?frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}",
-                   lambda m: _pm_wrap(m.group(1)) + " ÷ " + _pm_wrap(m.group(2)), s)
-        t = re.sub(r"\\sqrt\s*\[([^\]]*)\]\s*\{([^{}]*)\}",
-                   lambda m: ("∛" if m.group(1).strip() == "3" else ("∜" if m.group(1).strip() == "4" else
-                              _sup(m.group(1)) + "√")) + _pm_wrap(m.group(2)), t)
-        t = re.sub(r"\\sqrt\s*\{([^{}]*)\}", lambda m: "√" + _pm_wrap(m.group(1)), t)
-        t = re.sub(r"\\sqrt\s*(\w)", r"√\1", t)
-        if t == s:
-            break
-        s = t
+    s = re.sub(r"\\(?:displaystyle|textstyle|scriptstyle|limits|nolimits)\b\s*", "", s)
+    if "\\begin{" in s:  # aligned / cases / matrix blocks: one row per line
+        s = re.sub(r"\\begin\{[A-Za-z*]+\}(?:\{[^{}]*\})?|\\end\{[A-Za-z*]+\}", "", s)
+        s = s.replace("\\\\", "\n").replace("&", " ")
+    s = _apply_cmds(s)
     bound = r"(\{[^{}]*\}|\\?\w+)"
     s = re.sub(r"\\int\s*_\s*" + bound + r"\s*\^\s*" + bound, lambda m: " " + _limits("∫", m.group(1), m.group(2)), s)
     s = re.sub(r"\\sum\s*_\s*" + bound + r"\s*\^\s*" + bound, lambda m: " " + _limits("Σ", m.group(1), m.group(2)), s)
@@ -834,7 +912,8 @@ def _tex_plain(s, in_math=False):
     s = re.sub(r"\^\s*\{?\s*\\circ\s*\}?", "°", s)
     s = re.sub(r"\^\s*(\{[^{}]*\}|-?\w)", lambda m: _sup(_pm_unbrace(m.group(1))), s)
     s = re.sub(r"\\([A-Za-z]+)",
-               lambda m: _TEX_SYM[m.group(1)] if m.group(1) in _TEX_SYM else m.group(1), s)
+               lambda m: _TEX_SYM[m.group(1)] if m.group(1) in _TEX_SYM
+               else (m.group(1) if m.group(1) in _TEX_KEEP else ""), s)
     s = re.sub(r"\\([^\w\s])", r"\1", s)
     s = re.sub(r"\b(sin|cos|tan|cot|sec|csc|log|ln)(?=[θαβγδφωλμπσΔ])", r"\1 ", s)
     if in_math:
@@ -843,6 +922,8 @@ def _tex_plain(s, in_math=False):
         s = re.sub(r"(?<=\w)\s*/\s*(?=\w)|\)\s*/\s*(?=[\w(])",
                    lambda m: " ÷ " if "(" not in m.group(0) else ") ÷ ", s)
         s = s.replace("{", "").replace("}", "")
+        s = re.sub(r"[ \t]*(=|≤|≥|≠|≈|<|>|⇒|⇔)[ \t]*", r" \1 ", s)  # easy to read: spaces around = < > ⇒
+        s = re.sub(r"[ \t]*\n[ \t]*", "\n", s)
     return s
 
 
@@ -1114,8 +1195,29 @@ EXAM_SUBJECT = re.compile(r"\b(physics|chemistry|biology|botany|zoology|mathemat
                           r"polity|constitution|article\s*\d+|economy|geography|history|ethics|governance|"
                           r"integral|derivative|matrix|probability|equilibrium|molarity|enthalpy|photosynthesis|"
                           r"mitosis|meiosis|periodic table|newton|ohm|coulomb)\b", re.I)
+MATH_STRONG = re.compile(r"\b(prove|show that|proof|solve|integrate|differentiate|derivative|factori[sz]e|simplify|"
+                         r"inequality|quadratic|polynomial|integers?|primes?|sequence|roots? of|equations?|"
+                         r"triangle|probability|determinant|limit|olympiad|find all|maximum|minimum|"
+                         r"permutation|combination|logarithm|trigonometric|vectors?|complex numbers?)\b", re.I)
+
+
+def is_math(text):
+    t = text or ""
+    if re.search(r"\\frac|\$[^$]+\$", t):
+        return True
+    if re.search(r"\b(prove|show that|olympiad|find all)\b", t, re.I):
+        return True
+    return bool(MATH_STRONG.search(t)) and bool(re.search(r"\d|[=+^²³√]|\b[a-z]\s*[=<>]", t)) and len(t) >= 12
+
+
 EXAM_SYSTEM = (
-    " In every step write the maths only with symbols (= + - × ÷ ² √ ° π θ ≤ ≥ ≈ ∴ ⇒ →), never with words like "
+    " For every maths problem or proof write the FULL solution with proper explanation, in this order: "
+    "1) Understanding: what is given and what must be found. 2) Idea: the method or theorem and why it fits. "
+    "3) Solution: numbered steps; each step says in one short sentence WHY it is done, then shows the working "
+    "line by line with no skipped algebra and never 'it is easy to see'. 4) Check: verify by putting the answer "
+    "back, by a second method or by a special case. 5) Answer: the final result in bold. For a proof state each "
+    "claim, justify it with a definition or theorem, handle every case, and end with ∎. "
+    "In every step write the maths only with symbols (= + - × ÷ ² √ ° π θ ≤ ≥ ≈ ∴ ⇒ →), never with words like "
     "equals, plus, minus, times, squared, root, degrees or therefore."
     " EXAM MODE (JEE, NEET, UPSC and similar Indian exams). Read the question carefully and answer exactly "
     "what is asked. For maths, physics and chemistry numericals: write Given and Find, name the concept or "
@@ -1166,6 +1268,8 @@ def is_exam(text):
 
 
 def is_checkable(text):
+    if re.search(r"\b(prove|show that|proof|derive|explain|discuss|essay)\b", text or "", re.I):
+        return False  # a proof or an explanation has no single final answer to compare
     return bool(re.search(r"\d|\(\s*a\s*\)|which of the following|statement|calculate|find|value|how many|assertion", text or "", re.I))
 
 
@@ -1186,7 +1290,7 @@ def _deep_oq_raw(session, question, force_exam=False, emit=None):
     history = kb_load_history(session, 12)
     know = knowledge_block(question)
     tool_text, used = run_tools(question, lambda m, t, k: chat(m, t, k))
-    exam = force_exam or is_exam(question)
+    exam = force_exam or is_exam(question) or is_math(question)
     if exam:
         emit("status", "Solving step by step")
     today = datetime.date.today().strftime("%A, %d %B %Y")
@@ -1203,8 +1307,8 @@ def _deep_oq_raw(session, question, force_exam=False, emit=None):
                     + "\n\nAnswer from the TOOL RESULTS. Check their dates: if they conflict or look old, "
                     "say what is most recent and how sure you are. Keep it short."}], 0.2, 2048, smart=True)
     if exam:  # JEE / NEET / UPSC style
-        solve_txt = ("\n\nSolve this like a top exam teacher. Work one step at a time and do the arithmetic "
-                     "carefully.")
+        solve_txt = ("\n\nSolve this like a top teacher. Work one step at a time, explain why each step is done, "
+                     "do the arithmetic carefully and check the result.")
         if not is_checkable(question):  # essays and explanations: one strong answer
             return chat(base + [{"role": "user", "content": user + solve_txt}], 0.2, 6144,
                         smart=True, prefer=EXAM_MODEL)
@@ -2981,7 +3085,7 @@ async function askExtra(q,a,mode){
     if(mode==='from'){await makeFromPhoto(bot,q,a)}
     else if(mode==='snap'){
       const w=bot.querySelector('.wait');if(w)w.textContent='Reading your question';
-      const r=await api('/lab',{mod:'snap',text:q,image:a.doc||a.data}),j=await r.json().catch(()=>({}));
+      const r=await api('/lab',{mod:'snap',text:q,image:a.doc||a.data,session:sid}),j=await r.json().catch(()=>({}));
       if(r.status===401)throw new Error('That access key was not accepted. Reload the page and enter it again.');
       if(!r.ok||j.error)throw new Error(j.error||'The server did not answer.');
       botDone(bot,j.answer);
@@ -2994,7 +3098,7 @@ async function askExtra(q,a,mode){
       botDone(bot,j.answer);
     }else{
       const lead=a.kind==='video'?'These four pictures are frames taken in order (left to right, top to bottom) from one video. ':'';
-      const r=await api('/lab',{mod:'vision',text:lead+(q||'Describe this '+(a.kind==='video'?'video':'photo')+' in detail.'),image:a.data}),j=await r.json().catch(()=>({}));
+      const r=await api('/lab',{mod:'vision',text:lead+(q||'Describe this '+(a.kind==='video'?'video':'photo')+' in detail.'),image:a.data,session:sid,label:q||(a.kind==='video'?'Explain this video':'Describe this photo')}),j=await r.json().catch(()=>({}));
       if(r.status===401)throw new Error('That access key was not accepted. Reload the page and enter it again.');
       if(!r.ok||j.error)throw new Error(j.error||'The server did not answer.');
       botDone(bot,(a.kind==='video'?'*I looked at four frames from your video. I cannot hear its sound.*\n\n':'')+j.answer);
@@ -3876,9 +3980,16 @@ def lab_route():
     if denied():
         return jsonify(error="locked"), 401
     try:
-        res = _lab(request.get_json(silent=True) or {})
+        body = request.get_json(silent=True) or {}
+        res = _lab(body)
         if isinstance(res, dict) and isinstance(res.get('answer'), str):
             res['answer'] = plain_math(res['answer'])
+            if body.get("session") and body.get("mod") in ("snap", "vision"):
+                # remember the photo question and its answer, so a follow-up like "what is the answer" works
+                sess = (login_session.get("user") or "guest") + ":" + str(body.get("session"))
+                label = str(body.get("label") or body.get("text") or "")[:300].strip()
+                kb_save_msg(sess, "user", "[photo] " + (label or "Solve the question in my photo"))
+                kb_save_msg(sess, "assistant", res['answer'])
         return jsonify(res)
     except ValueError as e:
         return jsonify(error=str(e)), 400
