@@ -1909,7 +1909,13 @@ def index():
     who = login_session.get("user", "")
     who = who[7:] if who.startswith("google:") else who
     first = re.sub(r"[^A-Za-z]", "", who.split("@")[0]) or who[:1] or "You"
-    row = ('<div class="acct" data-name="' + _html.escape(first.capitalize()) + '"><div class="av">'
+    local = who.split("@")[0]
+    parts = [w for w in re.split(r"[^A-Za-z]+", local) if w]
+    pretty = " ".join(w.capitalize() for w in parts) or first.capitalize()
+    for pair in os.environ.get("DEEP_OQ_NAMES", "mayanksaw70@gmail.com=Mayank Saw;mayanksaw78@gmail.com=Mayank Saw").split(";"):
+        if "=" in pair and pair.split("=", 1)[0].strip().lower() == who.lower():
+            pretty = pair.split("=", 1)[1].strip()
+    row = ('<div class="acct" data-name="' + _html.escape(pretty) + '"><div class="av">'
            + _html.escape(first[:1].upper()) + '</div><div class="who" title="Signed in">' + _html.escape(who)
            + '</div><div class="btns">')
     if is_admin():
