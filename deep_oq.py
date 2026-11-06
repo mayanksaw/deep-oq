@@ -395,11 +395,283 @@ def ffmpeg_path():
         return None
 
 
+
+# ---------------------------------------------------------------- debugging system
+# Facts first (parser, undefined names, brackets), then a strong model finds the cause, the fix must pass the
+# same checks, and a second model reviews it. Deep OQ never runs the user's code on the server.
+DEBUG_SYSTEM = (
+    "You are Deep OQ, a senior engineer who debugs code until it is fully solved. Work like this: read the error "
+    "message and the AUTOMATIC CHECKS (they are facts), trace the code line by line to the real root cause (not "
+    "just the symptom), then also look for the other bugs that would fail next (edge cases: empty input, None/null, "
+    "off-by-one, wrong types, missing imports, wrong variable names, async/await mistakes, resource leaks). Never "
+    "guess: if something cannot be known from the code, say what is missing and what to print or run to find out. "
+    "Reply in exactly this format and nothing else:\n"
+    "## Cause\n(1 to 3 plain sentences with exact line numbers)\n"
+    "## Fixed code\n(the COMPLETE corrected file in ONE fenced code block with the language name; keep everything "
+    "that already works; no placeholders, no '...')\n"
+    "## What was wrong\n(short bullets, one per bug: line, what, why)\n"
+    "## How to test\n(a tiny test or one command that proves it works)\n"
+    "No tables, no horizontal lines, no HTML tags."
+)
+_FENCE = {"py": "Python", "python": "Python", "js": "JavaScript", "javascript": "JavaScript", "node": "JavaScript",
+          "ts": "TypeScript", "typescript": "TypeScript", "java": "Java", "cpp": "C++", "c++": "C++", "c": "C",
+          "cs": "C#", "csharp": "C#", "go": "Go", "golang": "Go", "rust": "Rust", "rs": "Rust", "php": "PHP",
+          "kotlin": "Kotlin", "kt": "Kotlin", "swift": "Swift", "sql": "SQL", "html": "HTML/CSS", "css": "HTML/CSS",
+          "bash": "Bash", "sh": "Bash", "shell": "Bash", "dart": "Dart"}
+_EXT = {".py": "Python", ".js": "JavaScript", ".jsx": "JavaScript", ".mjs": "JavaScript", ".ts": "TypeScript",
+        ".tsx": "TypeScript", ".java": "Java", ".cpp": "C++", ".cc": "C++", ".c": "C", ".h": "C", ".cs": "C#",
+        ".go": "Go", ".rs": "Rust", ".php": "PHP", ".kt": "Kotlin", ".swift": "Swift", ".sql": "SQL",
+        ".html": "HTML/CSS", ".css": "HTML/CSS", ".sh": "Bash", ".dart": "Dart"}
+_DEBUG_WORDS = re.compile(r"\b(error|bug|bugs|fix|debug|not working|doesn'?t work|does not work|won'?t|issue|problem|"
+                          r"exception|traceback|crash(?:es|ed)?|wrong|fail(?:s|ed|ing)?|undefined|syntax|"
+                          r"unexpected|cannot|can'?t|stuck|why)\b", re.I)
+
+
+def _guess_lang(code):
+    if re.search(r"^\s*(def |import |from \w+ import |class \w+.*:|print\()", code, re.M):
+        return "Python"
+    if re.search(r"\b(const|let|var|function|=>|console\.log|require\()", code):
+        return "JavaScript"
+    if re.search(r"#include|std::|cout\s*<<", code):
+        return "C++"
+    if re.search(r"public\s+(static\s+)?(class|void)|System\.out", code):
+        return "Java"
+    if re.search(r"^\s*(SELECT|INSERT|UPDATE|CREATE)\b", code, re.I | re.M):
+        return "SQL"
+    return "Python"
+
+
+def _debug_request(text):
+    """If a chat message holds code plus a problem, returns (language, code, problem); otherwise None."""
+    blocks = list(re.finditer(r"```([^\n`]*)\n(.*?)```", text or "", re.S))
+    if not blocks:
+        return None
+    best = max(blocks, key=lambda m: len(m.group(2)))
+    code = best.group(2).strip("\n")
+    if code.count("\n") < 2:
+        return None
+    rest = (text[:best.start()] + "\n" + text[best.end():]).strip()
+    if not (_DEBUG_WORDS.search(rest) or re.search(r"Traceback \(most recent call last\)|Error:|Exception", rest)):
+        return None
+    lang = _FENCE.get(best.group(1).strip().lower()) or _guess_lang(code)
+    return lang, code, rest[:3000]
+
+
+def _bracket_facts(lang, code):
+    """Finds an unclosed or mismatched ( [ { , ignoring strings and comments (a heuristic, so it says 'possible')."""
+    if lang in ("HTML/CSS", "SQL"):
+        return []
+    pairs, stack = {")": "(", "]": "[", "}": "{"}, []
+    i, n, line, instr = 0, len(code), 1, None
+    hash_c = lang in ("Python", "Bash")
+    while i < n:
+        c = code[i]
+        if c == "\n":
+            line += 1
+        if instr:
+            if instr in ('"""', "'''"):
+                if code.startswith(instr, i):
+                    instr, i = None, i + 3
+                    continue
+            elif c == "\\":
+                i += 2
+                continue
+            elif c == instr or (c == "\n" and instr in "'\""):
+                instr = None
+        elif hash_c and c == "#":
+            while i < n and code[i] != "\n":
+                i += 1
+            continue
+        elif not hash_c and code.startswith("//", i):
+            while i < n and code[i] != "\n":
+                i += 1
+            continue
+        elif not hash_c and code.startswith("/*", i):
+            j = code.find("*/", i + 2)
+            line += code.count("\n", i, (j if j > 0 else n))
+            i = (j + 2) if j > 0 else n
+            continue
+        elif lang == "Python" and (code.startswith('"""', i) or code.startswith("'''", i)):
+            instr, i = code[i:i + 3], i + 3
+            continue
+        elif c in "'\"" or (c == "`" and lang in ("JavaScript", "TypeScript", "Go")):
+            instr = c
+        elif c in "([{":
+            stack.append((c, line))
+        elif c in ")]}":
+            if not stack:
+                return [f"Possible extra closing '{c}' at line {line} (nothing was opened)."]
+            o, ol = stack.pop()
+            if o != pairs[c]:
+                return [f"Possible mismatch: '{o}' opened at line {ol} but closed with '{c}' at line {line}."]
+        i += 1
+    if stack:
+        o, ol = stack[-1]
+        return [f"Possible unclosed '{o}' opened at line {ol}."]
+    return []
+
+
+def _python_name_facts(tree):
+    """Names that are used but never defined anywhere in the file (module-wide, so few false alarms)."""
+    import builtins
+    defined = set(dir(builtins)) | {"__file__", "__name__", "__doc__", "__builtins__", "self", "cls"}
+    for nd in ast.walk(tree):
+        if isinstance(nd, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            defined.add(nd.name)
+        elif isinstance(nd, ast.Name) and isinstance(nd.ctx, (ast.Store, ast.Del)):
+            defined.add(nd.id)
+        elif isinstance(nd, ast.arg):
+            defined.add(nd.arg)
+        elif isinstance(nd, (ast.Import, ast.ImportFrom)):
+            for a in nd.names:
+                defined.add((a.asname or a.name).split(".")[0])
+                if a.name == "*":
+                    return []  # star import: cannot know
+        elif isinstance(nd, ast.ExceptHandler) and nd.name:
+            defined.add(nd.name)
+        elif isinstance(nd, (ast.Global, ast.Nonlocal)):
+            defined.update(nd.names)
+    out, seen = [], set()
+    for nd in ast.walk(tree):
+        if isinstance(nd, ast.Name) and isinstance(nd.ctx, ast.Load) and nd.id not in defined and nd.id not in seen:
+            seen.add(nd.id)
+            out.append(f"Python names check: '{nd.id}' is used at line {nd.lineno} but is never defined or imported.")
+    return out[:8]
+
+
+def _static_facts(lang, code):
+    """Returns (facts, blocking). 'blocking' facts are real syntax errors that a fix must not have."""
+    facts, blocking = [], []
+    if lang == "Python":
+        try:
+            tree = ast.parse(code)
+            facts += _python_name_facts(tree)
+        except SyntaxError as e:
+            msg = f"Python parser: SyntaxError '{e.msg}' at line {e.lineno}, column {e.offset}: {(e.text or '').strip()}"
+            facts.append(msg)
+            blocking.append(msg)
+        except Exception as e:
+            facts.append(f"Python parser could not read the file: {e}")
+        if "\t" in code and re.search(r"^ +\S", code, re.M):
+            facts.append("Indentation mixes tabs and spaces.")
+    elif lang in ("JavaScript",) and shutil.which("node"):
+        try:
+            with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as f:
+                f.write(code)
+            r = subprocess.run(["node", "--check", f.name], capture_output=True, text=True, timeout=15)
+            os.unlink(f.name)
+            if r.returncode != 0:
+                msg = "node --check (syntax only): " + (r.stderr or "").strip().splitlines()[0][:300]
+                facts.append(msg)
+                blocking.append(msg)
+        except Exception:
+            pass
+    facts += _bracket_facts(lang, code)
+    return facts, blocking
+
+
+def _focus(code, problem, radius=6):
+    """Code around every line number named in the error message."""
+    lines = code.splitlines()
+    nums = sorted({int(x) for x in re.findall(r"(?:line|:)\s*(\d{1,5})\b", problem or "") if 0 < int(x) <= len(lines)})[:4]
+    if not nums:
+        return ""
+    out = []
+    for ln in nums:
+        a, b = max(1, ln - radius), min(len(lines), ln + radius)
+        out.append("\n".join(f"{i:>4}{'>' if i == ln else '|'} {lines[i - 1]}" for i in range(a, b + 1)))
+    return "LINES NAMED IN THE ERROR:\n" + "\n...\n".join(out) + "\n"
+
+
+def _last_code(answer):
+    blocks = re.findall(r"```[^\n`]*\n(.*?)```", answer or "", re.S)
+    return max(blocks, key=len).strip("\n") if blocks else ""
+
+
+def debug_solve(lang, code, problem="", emit=None):
+    emit = emit or (lambda k, v: None)
+    code = (code or "").replace("\r", "").strip("\n")
+    problem = (problem or "").strip()
+    facts, _ = _static_facts(lang, code)
+    lines = code.splitlines()
+    note = ""
+    shown = code
+    if len(code) > 14000:  # keep inside the free token limit: the start plus the parts around the error
+        keep = set(range(1, 81))
+        for x in re.findall(r"(?:line|:)\s*(\d{1,5})\b", problem):
+            keep.update(range(max(1, int(x) - 120), min(len(lines), int(x) + 120) + 1))
+        for i, l in enumerate(lines, 1):
+            if re.search(r"Error|Exception|raise|TODO|FIXME", l):
+                keep.update(range(max(1, i - 15), min(len(lines), i + 15) + 1))
+        shown = "\n".join(l for i, l in enumerate(lines, 1) if i in keep)[:14000]
+        note = "This file is long, so only the start and the parts around the error are shown below.\n"
+    numbered = "\n".join(f"{i:>4}| {l}" for i, l in enumerate(shown.splitlines(), 1)) if not note else \
+        "\n".join(f"{i:>4}| {l}" for i, l in enumerate(lines, 1) if i in keep)[:14000]
+    ctx = (f"LANGUAGE: {lang}\n{note}PROBLEM / ERROR MESSAGE FROM THE USER:\n"
+           f"{problem or '(none given: find every bug you can prove from the code)'}\n\n"
+           "AUTOMATIC CHECKS (facts found without running the code):\n"
+           + ("\n".join("- " + f for f in facts) if facts else "- nothing wrong found by the automatic checks")
+           + "\n\n" + _focus(code, problem) + "\nCODE (line numbers added):\n" + numbered)
+    msgs = [{"role": "system", "content": DEBUG_SYSTEM}, {"role": "user", "content": ctx}]
+    emit("status", "Finding the cause")
+    answer = chat(msgs, 0.1, 6144, smart=True, prefer=EXAM_MODEL)
+    checked = []
+    for _ in range(2):  # the fix has to pass the same automatic checks
+        fixed = _last_code(answer)
+        if not fixed:
+            break
+        f2, blocking = _static_facts(lang, fixed)
+        if not blocking:
+            if lang == "Python":
+                checked.append("the fixed code passes the Python syntax check")
+            elif lang == "JavaScript" and shutil.which("node"):
+                checked.append("the fixed code passes the JavaScript syntax check")
+            break
+        emit("status", "Fixing a mistake in my fix")
+        answer = chat(msgs + [{"role": "assistant", "content": answer},
+                              {"role": "user", "content": "Your corrected code still fails these automatic checks:\n"
+                               + "\n".join("- " + b for b in blocking) + "\nFix it and give the complete corrected "
+                               "code again in exactly the same format."}], 0.1, 6144, smart=True, prefer=EXAM_MODEL)
+    fixed = _last_code(answer)
+    if fixed:  # a second, different model reviews the fix
+        emit("status", "A second model is checking the fix")
+        review_prompt = (f"{ctx}\n\nPROPOSED SOLUTION:\n{answer}\n\nReview it strictly. Does the fixed code really "
+                         "solve the problem and the other bugs, with no new bug? Reply with the first line exactly "
+                         "'VERDICT: OK' if yes. Otherwise reply with the first line 'VERDICT: FIX', then what is "
+                         "still wrong (with line numbers), then the COMPLETE corrected code in one fenced block.")
+        try:
+            if _has_gemini():
+                review = _gemini_parts([{"text": review_prompt}], 0.1, 6144, DEBUG_SYSTEM)
+            else:
+                review = chat([{"role": "system", "content": "You are a strict code reviewer."},
+                               {"role": "user", "content": review_prompt}], 0.1, 6144, smart=True,
+                              prefer=EXAM_CHECK_MODEL)
+            if re.search(r"VERDICT:\s*OK", review[:200], re.I):
+                checked.append("a second model reviewed the fix and agreed")
+            elif re.search(r"VERDICT:\s*FIX", review[:200], re.I):
+                emit("status", "Merging the second model's findings")
+                answer2 = chat(msgs + [{"role": "assistant", "content": answer}, {"role": "user", "content":
+                               "A reviewer says the fix is not complete:\n" + review[:3500] + "\n\nCheck each point "
+                               "yourself against the code. If the reviewer is right, give the improved final answer "
+                               "in exactly the same format; if the reviewer is wrong, repeat your answer."}],
+                               0.1, 6144, smart=True, prefer=EXAM_MODEL)
+                f3 = _last_code(answer2)
+                if f3 and not _static_facts(lang, f3)[1]:
+                    answer = answer2
+                    checked.append("a second model found more to fix and it was added")
+        except Exception as e:
+            print("debug review failed:", str(e)[:160])
+    footer = ("\n\n*Checked: " + "; ".join(checked) + ". Deep OQ does not run your code, so run the test above to "
+              "confirm.*") if checked else "\n\n*Deep OQ does not run your code, so run the test above to confirm.*"
+    return answer.strip() + footer
+
+
 # ---------------------------------------------------------------- code
 CODE_RULES = {
     "write": ("Write {lang} code for the task below. Give complete, working code in ONE "
               "fenced code block (no placeholders, include imports and a small usage "
               "example), then at most 5 short lines explaining how it works."),
+    "debug": "(handled by the debugging system)",
     "fix": ("Find and fix the bugs in this {lang} code. Give the full corrected code in ONE "
             "fenced code block, then a short bullet list of what was wrong and why."),
     "explain": ("Explain this {lang} code for a learner: what it does overall, then the key "
@@ -428,6 +700,12 @@ def _code():
         return jsonify(error="Describe what the code should do."), 400
     if mode != "write" and not code:
         return jsonify(error="Paste the code first."), 400
+    if mode == "debug":
+        try:
+            return jsonify(answer=debug_solve(lang, code[:40000], task))
+        except Exception as e:
+            print("debug failed:", e)
+            return jsonify(error=str(e)[:300]), 500
     prompt = CODE_RULES[mode].format(lang=lang, target=target)
     if task:
         prompt += "\n\nTASK / NOTES:\n" + task
@@ -1287,6 +1565,10 @@ def _deep_oq_raw(session, question, force_exam=False, emit=None):
     force = question.lower().startswith("/deep")  # "/deep your question" = think as hard as possible
     if force:
         question = question[5:].strip() or question
+    dbg = _debug_request(question)
+    if dbg:  # code plus a problem: use the full debugging system
+        emit("status", "Debugging")
+        return debug_solve(dbg[0], dbg[1], dbg[2], emit)
     history = kb_load_history(session, 12)
     know = knowledge_block(question)
     tool_text, used = run_tools(question, lambda m, t, k: chat(m, t, k))
@@ -2375,6 +2657,7 @@ body:not(.chatting) #v-chat.on{padding-top:12vh;padding-bottom:0}
       <div class="panel">
         <div class="seg" id="cmodes" role="group" aria-label="What to do">
           <button type="button" data-m="write" aria-pressed="true">Write</button>
+          <button type="button" data-m="debug" aria-pressed="false">Debug</button>
           <button type="button" data-m="fix" aria-pressed="false">Fix</button>
           <button type="button" data-m="explain" aria-pressed="false">Explain</button>
           <button type="button" data-m="convert" aria-pressed="false">Convert</button>
@@ -3185,6 +3468,7 @@ document.addEventListener('click',e=>{
 /* ================= code ================= */
 const MODES={
   write:{btn:'Write code',task:'What should the code do?',ph:'A function that checks if a number is prime',code:'Starting code (optional)'},
+  debug:{btn:'Debug code',task:'Paste the error message, or say what goes wrong',ph:'Paste the full error here, with the line numbers',code:'Your code'},
   fix:{btn:'Fix code',task:'What goes wrong? (optional)',ph:'It crashes when the list is empty',code:'Your code'},
   explain:{btn:'Explain code',task:'What do you want to know? (optional)',ph:'Why is there a second loop?',code:'Your code'},
   convert:{btn:'Convert code',task:'Notes (optional)',ph:'Use only the standard library',code:'Your code'},
@@ -3205,7 +3489,7 @@ $('#crun').onclick=async()=>{
   if(cmode==='write'&&!body.task.trim()){out.innerHTML='<p class="note">Describe what the code should do.</p>';$('#ctask').focus();return}
   if(cmode!=='write'&&!body.code.trim()){out.innerHTML='<p class="note">Paste the code first.</p>';$('#ccode').focus();return}
   btn.disabled=true;$('#crunbar').hidden=true;$('#cframe').hidden=true;$('#cconsole').hidden=true;
-  out.innerHTML='<p class="muted">Working on it. Harder jobs can take up to a minute.</p>';
+  out.innerHTML='<p class="muted">'+(cmode==='debug'?'Debugging: checking the code, finding the cause, fixing it and asking a second model to check. This can take up to two minutes.':'Working on it. Harder jobs can take up to a minute.')+'</p>';
   try{
     const r=await api('/code',body);
     const j=await r.json().catch(()=>({}));
@@ -4740,6 +5024,15 @@ def askfile_route():
     if not text.strip():
         return jsonify(error="That file has no readable text."), 400
     sess = (login_session.get("user") or "guest") + ":" + str(d.get("session") or "default")
+    ext = os.path.splitext(name.lower())[1]
+    if ext in _EXT and _DEBUG_WORDS.search(q) and len(text) < 60000:  # a code file with a problem: debug it
+        try:
+            answer = plain_math(debug_solve(_EXT[ext], text, q))
+            kb_save_msg(sess, "user", f"[attached file: {name}] {q}")
+            kb_save_msg(sess, "assistant", answer)
+            return jsonify(answer=answer)
+        except Exception as e:
+            print("askfile debug failed:", e)
     try:
         today = datetime.date.today().strftime("%A, %d %B %Y")
         msgs = ([{"role": "system", "content": SYSTEM + f" Today's date is {today}. The user attached a file. "
