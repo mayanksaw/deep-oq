@@ -588,10 +588,87 @@ def _last_code(answer):
     return max(blocks, key=len).strip("\n") if blocks else ""
 
 
-def debug_solve(lang, code, problem="", emit=None):
+MULTI_NOTE = (" Several files are given, each starting with '=== FILE: name ==='. For EVERY file you change, write a "
+              "line 'FILE: <name>' immediately before its fenced block and give that whole file; do not repeat files "
+              "you did not change. Also look for bugs between files (wrong imports, names that do not exist in the "
+              "other file, mismatched function arguments).")
+
+
+def _split_files(answer):
+    """[(name, code)] from 'FILE: name' + fenced block pairs; falls back to the biggest block."""
+    got = re.findall(r"^\s*(?:\*\*)?FILE:\s*`?([^\n`*]+?)`?(?:\*\*)?\s*\n```[^\n`]*\n(.*?)```", answer or "", re.S | re.M)
+    if got:
+        return [(n.strip(), c.strip("\n")) for n, c in got]
+    one = _last_code(answer)
+    return [("", one)] if one else []
+
+
+def _cross_file_facts(items):
+    """Python: 'from other import name' where other.py is given but has no such name."""
+    facts, trees = [], {}
+    for name, text in items:
+        if name.lower().endswith(".py"):
+            try:
+                trees[os.path.splitext(os.path.basename(name))[0]] = ast.parse(text)
+            except SyntaxError:
+                pass
+    for name, tree in trees.items():
+        for nd in ast.walk(tree):
+            if isinstance(nd, ast.ImportFrom) and nd.module and nd.level == 0:
+                mod = nd.module.split(".")[-1]
+                if mod in trees and mod != name:
+                    top = set()
+                    for t in trees[mod].body:
+                        if isinstance(t, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                            top.add(t.name)
+                        elif isinstance(t, ast.Assign):
+                            top.update(x.id for x in t.targets if isinstance(x, ast.Name))
+                        elif isinstance(t, (ast.Import, ast.ImportFrom)):
+                            top.update((a.asname or a.name).split(".")[0] for a in t.names)
+                    for a in nd.names:
+                        if a.name != "*" and a.name not in top:
+                            facts.append(f"{name}.py line {nd.lineno}: 'from {nd.module} import {a.name}' but "
+                                         f"{mod}.py defines no '{a.name}'.")
+    return facts[:8]
+
+
+def _multi_ctx(items, lang, problem):
+    """Facts and numbered text for several files, inside a character budget (files named in the error go first)."""
+    facts = []
+    for name, text in items:
+        f, _ = _static_facts(_EXT.get(os.path.splitext(name.lower())[1], lang), text)
+        facts += [f"{name}: {x}" for x in f]
+    facts += _cross_file_facts(items)
+    order = sorted(items, key=lambda it: 0 if os.path.basename(it[0]) in problem else 1)
+    parts, used = [], 0
+    for name, text in order:
+        lines = text.splitlines()
+        if used + len(text) > 14000:
+            lines = lines[:60]
+            tail = f"\n(file is long: only its first {len(lines)} lines are shown)"
+        else:
+            tail = ""
+        body = "\n".join(f"{i:>4}| {l}" for i, l in enumerate(lines, 1)) + tail
+        parts.append(f"=== FILE: {name} ===\n{body}")
+        used += len(body)
+    return facts, "\n\n".join(parts)
+
+
+def debug_solve(lang, code, problem="", emit=None, files=None):
     emit = emit or (lambda k, v: None)
     code = (code or "").replace("\r", "").strip("\n")
     problem = (problem or "").strip()
+    if files:  # a project with several files
+        items = [(n, t.replace("\r", "")) for n, t in files]
+        if code:
+            items.insert(0, ("main" + next((e for e, l in _EXT.items() if l == lang), ".txt"), code))
+        facts, numbered = _multi_ctx(items, lang, problem)
+        ctx = (f"LANGUAGE: {lang}\nPROBLEM / ERROR MESSAGE FROM THE USER:\n"
+               f"{problem or '(none given: find every bug you can prove from the code)'}\n\n"
+               "AUTOMATIC CHECKS (facts found without running the code):\n"
+               + ("\n".join("- " + f for f in facts) if facts else "- nothing wrong found by the automatic checks")
+               + "\n\n" + numbered)
+        return _debug_run(lang, ctx, DEBUG_SYSTEM + MULTI_NOTE, emit, multi=True)
     facts, _ = _static_facts(lang, code)
     lines = code.splitlines()
     note = ""
@@ -612,15 +689,28 @@ def debug_solve(lang, code, problem="", emit=None):
            "AUTOMATIC CHECKS (facts found without running the code):\n"
            + ("\n".join("- " + f for f in facts) if facts else "- nothing wrong found by the automatic checks")
            + "\n\n" + _focus(code, problem) + "\nCODE (line numbers added):\n" + numbered)
-    msgs = [{"role": "system", "content": DEBUG_SYSTEM}, {"role": "user", "content": ctx}]
+    return _debug_run(lang, ctx, DEBUG_SYSTEM, emit)
+
+
+def _debug_run(lang, ctx, system, emit, multi=False):
+    msgs = [{"role": "system", "content": system}, {"role": "user", "content": ctx}]
     emit("status", "Finding the cause")
     answer = chat(msgs, 0.1, 6144, smart=True, prefer=EXAM_MODEL)
     checked = []
+
+    def blocking_of(ans):
+        out = []
+        for nm, cd in (_split_files(ans) if multi else [("", _last_code(ans))]):
+            if cd:
+                out += [f"{nm}: {b}" if nm else b for b in
+                        _static_facts(_EXT.get(os.path.splitext(nm.lower())[1], lang), cd)[1]]
+        return out
+
     for _ in range(2):  # the fix has to pass the same automatic checks
         fixed = _last_code(answer)
         if not fixed:
             break
-        f2, blocking = _static_facts(lang, fixed)
+        blocking = blocking_of(answer)
         if not blocking:
             if lang == "Python":
                 checked.append("the fixed code passes the Python syntax check")
@@ -656,7 +746,7 @@ def debug_solve(lang, code, problem="", emit=None):
                                "in exactly the same format; if the reviewer is wrong, repeat your answer."}],
                                0.1, 6144, smart=True, prefer=EXAM_MODEL)
                 f3 = _last_code(answer2)
-                if f3 and not _static_facts(lang, f3)[1]:
+                if f3 and not blocking_of(answer2):
                     answer = answer2
                     checked.append("a second model found more to fix and it was added")
         except Exception as e:
@@ -698,11 +788,15 @@ def _code():
         return jsonify(error="Pick a mode and language from the lists."), 400
     if mode == "write" and not task:
         return jsonify(error="Describe what the code should do."), 400
-    if mode != "write" and not code:
+    files = []
+    for f in (d.get("files") or [])[:12]:
+        if isinstance(f, dict) and str(f.get("text", "")).strip():
+            files.append((re.sub(r"[^\w .\-/]", "_", str(f.get("name", "file")))[:80], str(f["text"])[:30000]))
+    if mode != "write" and not code and not files:
         return jsonify(error="Paste the code first."), 400
     if mode == "debug":
         try:
-            return jsonify(answer=debug_solve(lang, code[:40000], task))
+            return jsonify(answer=debug_solve(lang, code[:40000], task, None, files or None))
         except Exception as e:
             print("debug failed:", e)
             return jsonify(error=str(e)[:300]), 500
@@ -2472,6 +2566,10 @@ a.primary{text-decoration:none;display:inline-block}
 .hd{border:0;background:transparent;color:var(--ink-2);cursor:pointer;font-size:20px;padding:0 12px;border-radius:12px}
 .hd:hover{color:var(--err)}
 .hempty{padding:24px 16px;color:var(--ink-2);font-size:15px}
+.chip{display:inline-flex;align-items:center;gap:6px;margin:4px 6px 0 0;padding:4px 10px;border:1px solid var(--line);border-radius:99px;font-size:13px}
+.chip button{border:0;background:transparent;color:var(--ink-2);cursor:pointer;font-size:16px;line-height:1;padding:0}
+.chk{display:flex;gap:8px;align-items:flex-start;font-size:14px;color:var(--ink-2);margin:6px 0}
+.chk input{margin-top:3px}
 /* ---- sidebar layout ---- */
 body{grid-template-columns:272px minmax(0,1fr);grid-template-rows:minmax(0,1fr)}
 header.top{grid-column:1;grid-row:1;display:flex;flex-direction:column;align-items:stretch;justify-content:flex-start;flex-wrap:nowrap;
@@ -2671,6 +2769,14 @@ body:not(.chatting) #v-chat.on{padding-top:12vh;padding-bottom:0}
           <textarea class="in" id="ctask" rows="3" placeholder="A function that checks if a number is prime"></textarea></label>
         <label class="lab"><span id="ccodeL">Starting code (optional)</span>
           <textarea class="in mono" id="ccode" rows="10" spellcheck="false" autocapitalize="off"></textarea></label>
+        <div id="cdbgx" hidden>
+          <label class="lab">More files (optional): for a project with several files
+            <input class="in" type="file" id="cfiles" multiple></label>
+          <div id="cfilelist"></div>
+          <label class="lab">Tests (optional)
+            <textarea class="in mono" id="ctests" rows="4" spellcheck="false" autocapitalize="off"></textarea></label>
+          <label class="chk"><input type="checkbox" id="cloop" checked> Run the code and fix it again until it works (up to 4 rounds, runs in your browser)</label>
+        </div>
         <div><button class="primary" id="crun" type="button">Write code</button></div>
       </div>
       <div class="panel">
@@ -3480,10 +3586,12 @@ function setMode(m){
   document.querySelectorAll('#cmodes button').forEach(b=>b.setAttribute('aria-pressed',b.dataset.m===m));
   $('#crun').textContent=c.btn;$('#ctaskL').textContent=c.task;$('#ctask').placeholder=c.ph;$('#ccodeL').textContent=c.code;
   $('#ctgtWrap').hidden=m!=='convert';
+  $('#cdbgx').hidden=m!=='debug';
 }
 document.querySelectorAll('#cmodes button').forEach(b=>b.onclick=()=>setMode(b.dataset.m));
 
 $('#crun').onclick=async()=>{
+  if(cmode==='debug')return debugFlow();
   const out=$('#cout'),btn=$('#crun');
   const body={mode:cmode,lang:$('#clang').value,target:$('#ctgt').value,task:$('#ctask').value,code:$('#ccode').value};
   if(cmode==='write'&&!body.task.trim()){out.innerHTML='<p class="note">Describe what the code should do.</p>';$('#ctask').focus();return}
@@ -3505,6 +3613,196 @@ $('#crun').onclick=async()=>{
   }
   btn.disabled=false;
 };
+/* ================= debug: several files, tests, run and fix again ================= */
+let cfiles=[],remoteLangs=[];
+const EXT_OF={Python:'py',JavaScript:'js',TypeScript:'ts',Java:'java','C++':'cpp',C:'c','C#':'cs',Go:'go',Rust:'rs',PHP:'php',Kotlin:'kt',Swift:'swift',Bash:'sh',Dart:'dart','HTML/CSS':'html',SQL:'sql'};
+fetch('/api/runinfo').then(r=>r.json()).then(j=>{remoteLangs=j.langs||[]}).catch(()=>{});
+const TEST_HINT={
+  Python:"assert add(2, 3) == 5\n# or one test per line for a program that reads input:\n# 3 | 5 => 8   (inputs separated by |, then => the expected output)",
+  JavaScript:"console.assert(add(2, 3) === 5, 'add');"
+};
+function setTestHint(){$('#ctests').placeholder=TEST_HINT[$('#clang').value]||"One test per line: 3 | 5 => 8   (inputs separated by |, then => the expected output)"}
+$('#clang').addEventListener('change',setTestHint);setTestHint();
+function drawFiles(){
+  $('#cfilelist').innerHTML=cfiles.map((f,i)=>'<span class="chip">'+esc(f.name)+' <button type="button" data-rm="'+i+'" aria-label="Remove '+esc(f.name)+'">×</button></span>').join(' ');
+}
+$('#cfiles').onchange=async e=>{
+  for(const f of [...e.target.files]){
+    if(cfiles.length>=12||f.size>200000)continue;
+    cfiles=cfiles.filter(x=>x.name!==f.name);cfiles.push({name:f.name,text:await f.text()});
+  }
+  e.target.value='';drawFiles();
+};
+$('#cfilelist').onclick=e=>{const b=e.target.closest('[data-rm]');if(b){cfiles.splice(+b.dataset.rm,1);drawFiles()}};
+
+function getProject(){
+  const lang=$('#clang').value,code=$('#ccode').value,list=[];
+  if(code.trim())list.push({name:lang==='Java'?'Main.java':'main.'+(EXT_OF[lang]||'txt'),text:code});
+  return list.concat(cfiles.map(f=>({name:f.name,text:f.text})));
+}
+function parseCases(t){
+  const lines=t.split('\n').map(l=>l.trim()).filter(l=>l&&!l.startsWith('#')&&!l.startsWith('//'));
+  if(!lines.length||!lines.every(l=>l.includes('=>')))return null;
+  return lines.map(l=>{const i=l.lastIndexOf('=>');return {stdin:l.slice(0,i).split('|').map(x=>x.trim()).join('\n'),expect:l.slice(i+2).trim()}});
+}
+const PYW='('+function(){
+  importScripts('https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js');
+  let py;
+  onmessage=async e=>{
+    const {files,main,tests,cases}=e.data;let cur=[];
+    try{
+      if(!py)py=await loadPyodide();
+      py.setStdout({batched:s=>cur.push(s)});py.setStderr({batched:s=>cur.push(s)});
+      for(const f of files){
+        const parts=f.name.split('/');let dir='';
+        for(let i=0;i<parts.length-1;i++){dir+=(dir?'/':'')+parts[i];try{py.FS.mkdir(dir)}catch(_){}}
+        py.FS.writeFile(f.name,f.text);
+      }
+      await py.runPythonAsync("import sys\nsys.path.insert(0,'.')");
+      const runMain=async stdin=>{
+        const lines=(stdin||'').split('\n');let i=0;
+        py.setStdin({stdin:()=>i<lines.length?lines[i++]:null});
+        cur=[];
+        try{await py.runPythonAsync("import runpy\nrunpy.run_path("+JSON.stringify(main)+", run_name='__main__')")}
+        catch(err){cur.push(String(err.message||err))}
+        return cur.join('\n');
+      };
+      if(cases){
+        let ok=true;const log=[];
+        for(const c of cases){
+          const got=(await runMain(c.stdin)).trim();
+          const pass=got===c.expect;if(!pass)ok=false;
+          log.push((pass?'PASS':'FAIL')+'  input: '+c.stdin.replace(/\n/g,' | ')+'  expected: '+c.expect+'  got: '+got.slice(0,400));
+        }
+        postMessage({ok,out:log.join('\n')});
+      }else if(tests){
+        cur=[];let ok=true;
+        try{await py.runPythonAsync(tests);cur.push('All tests ran without an error.')}
+        catch(err){ok=false;cur.push(String(err.message||err))}
+        postMessage({ok,out:cur.join('\n')});
+      }else{
+        const o=await runMain('');
+        postMessage({ok:!/Traceback|Error/.test(o),out:o||'(no output)'});
+      }
+    }catch(err){postMessage({ok:false,out:'The Python runner failed: '+String(err.message||err)})}
+  };
+}.toString()+')()';
+function runPython(files,tests,cases){
+  return new Promise(res=>{
+    const py=files.filter(f=>/\.py$/i.test(f.name)),main=(py.find(f=>/^(main|app|run|index)\.py$/i.test(f.name))||py[0]||{}).name;
+    if(!main&&!tests)return res({ok:false,out:'No Python file to run.'});
+    const w=new Worker(URL.createObjectURL(new Blob([PYW],{type:'text/javascript'})));
+    const t=setTimeout(()=>{w.terminate();res({ok:false,out:'Timed out after 45 seconds (an infinite loop, or Python was too slow to load).'})},45000);
+    w.onmessage=e=>{clearTimeout(t);w.terminate();res(e.data)};
+    w.onerror=e=>{clearTimeout(t);w.terminate();res({ok:false,out:'The Python runner could not start. Check your internet connection. '+(e.message||'')})};
+    w.postMessage({files,main,tests,cases});
+  });
+}
+function runJS(files,tests){
+  return new Promise(res=>{
+    const fr=document.createElement('iframe');fr.setAttribute('sandbox','allow-scripts');fr.hidden=true;document.body.append(fr);
+    const out=[];let done=false;
+    const fin=ok=>{if(done)return;done=true;clearTimeout(t);removeEventListener('message',h);fr.remove();res({ok,out:out.join('\n')||'(no output)'})};
+    const h=e=>{
+      if(e.source!==fr.contentWindow||!e.data)return;
+      if(typeof e.data.oq==='string')out.push(e.data.oq);
+      if(e.data.err)out.push(e.data.err);
+      if(e.data.done)fin(!e.data.err&&!e.data.failed);
+    };
+    addEventListener('message',h);
+    const t=setTimeout(()=>{out.push('Timed out after 8 seconds (maybe an infinite loop).');fin(false)},8000);
+    const user=files.map(f=>f.text).join('\n;\n')+(tests?'\n;\n'+tests:'');
+    fr.srcdoc='<script>var F=false,s=function(m){parent.postMessage({oq:m},"*")};'
+      +'console.log=console.info=console.warn=function(){s([].map.call(arguments,function(x){try{return typeof x==="object"?JSON.stringify(x):String(x)}catch(e){return String(x)}}).join(" "))};'
+      +'console.error=function(){s("Error: "+[].join.call(arguments," "))};'
+      +'console.assert=function(c){if(!c){F=true;s("Assertion failed: "+[].slice.call(arguments,1).join(" "))}};'
+      +'window.onerror=function(m,src,l){parent.postMessage({err:"Uncaught: "+m+" (line "+l+")",done:true},"*")};<\/script>'
+      +'<script>'+user.replace(/<\/script/gi,'<\\/script')+'<\/script>'
+      +'<script>setTimeout(function(){parent.postMessage({done:true,failed:F},"*")},400)<\/script>';
+  });
+}
+async function runRemote(lang,files,cases){
+  const one=async stdin=>{
+    const r=await api('/api/run',{lang,files,stdin}),j=await r.json().catch(()=>({}));
+    if(!r.ok)throw new Error(j.error||'The compiler service did not answer.');
+    return j;
+  };
+  try{
+    if(cases){
+      let ok=true;const log=[];
+      for(const c of cases){
+        const j=await one(c.stdin),got=(j.out||'').trim(),pass=!j.compile_failed&&got===c.expect;if(!pass)ok=false;
+        log.push((pass?'PASS':'FAIL')+'  input: '+c.stdin.replace(/\n/g,' | ')+'  expected: '+c.expect+'  got: '+got.slice(0,400));
+      }
+      return {ok,out:log.join('\n')};
+    }
+    const j=await one('');
+    return {ok:!j.compile_failed&&(j.code===0||j.code==null),out:j.out||'(no output)'};
+  }catch(e){return {ok:false,out:'Could not run it: '+e.message,unrunnable:true}}
+}
+async function runProject(lang,files,tests){
+  const cases=tests?parseCases(tests):null,script=cases?'':tests;
+  if(lang==='Python')return runPython(files,script,cases);
+  if(lang==='JavaScript'&&!cases)return runJS(files,script);
+  if(remoteLangs.includes(lang))return runRemote(lang,files,cases);
+  return {ok:false,out:'Deep OQ cannot run '+lang+' here.',unrunnable:true};
+}
+function applyAnswer(answer,files){
+  const re=/^\s*(?:\*\*)?FILE:\s*`?([^\n`*]+?)`?(?:\*\*)?\s*\n```[^\n`]*\n([\s\S]*?)```/gm,next=files.map(f=>({...f}));let m,hit=false;
+  while((m=re.exec(answer))){
+    const n=m[1].trim(),f=next.find(x=>x.name===n||x.name.split('/').pop()===n.split('/').pop());
+    if(f){f.text=m[2].replace(/\n$/,'');hit=true}else{next.push({name:n,text:m[2].replace(/\n$/,'')});hit=true}
+  }
+  if(!hit){
+    const bl=[...answer.matchAll(/```[^\n`]*\n([\s\S]*?)```/g)].map(x=>x[1]).sort((a,b)=>b.length-a.length)[0];
+    if(bl&&next.length)next[0].text=bl.replace(/\n$/,'');
+  }
+  return next;
+}
+async function debugFlow(){
+  const out=$('#cout'),btn=$('#crun'),lang=$('#clang').value,tests=$('#ctests').value.trim(),task=$('#ctask').value.trim();
+  let files=getProject();
+  if(!files.length){out.innerHTML='<p class="note">Paste the code, or add files, first.</p>';$('#ccode').focus();return}
+  btn.disabled=true;$('#crunbar').hidden=true;$('#cframe').hidden=true;$('#cconsole').hidden=true;
+  const log=[],canRun=lang==='Python'||(lang==='JavaScript')||remoteLangs.includes(lang);
+  const loop=$('#cloop').checked&&canRun;
+  const show=(msg)=>{out.innerHTML='<p class="muted">'+esc(msg)+'</p>'+(log.length?'<ul class="muted">'+log.map(l=>'<li>'+esc(l)+'</li>').join('')+'</ul>':'')};
+  let problem=task,answer='',passed=null,rounds=0;
+  try{
+    if(loop){
+      show(lang==='Python'?'Running your code first (the first time Python loads, this takes a few seconds)...':'Running your code first...');
+      const r0=await runProject(lang,files,tests);
+      if(r0.unrunnable){log.push(r0.out)}
+      else if(r0.ok&&tests){log.push('Your code already passes the tests. Nothing to fix.');out.innerHTML='<div class="body"><p>Your code already passes the tests.</p><pre class="consoleout">'+esc(r0.out)+'</pre></div>';btn.disabled=false;return}
+      else{
+        log.push(r0.ok?'It ran without crashing.':'It failed when run.');
+        problem=(task?task+'\n\n':'')+(r0.ok?'The code ran without crashing, but check it carefully.':'I RAN THE CODE AND IT FAILED. Output:')+'\n'+r0.out.slice(0,2500)+(tests?'\n\nTests used:\n'+tests:'');
+      }
+    }
+    const max=loop?4:1;
+    for(let r=1;r<=max;r++){
+      rounds=r;show(r===1?'Debugging: finding the cause, fixing it and asking a second model to check. This can take up to two minutes.':'Round '+r+': the fix failed when run, fixing again...');
+      const body=files.length===1?{mode:'debug',lang,task:problem,code:files[0].text}:{mode:'debug',lang,task:problem,files};
+      const resp=await api('/code',body),j=await resp.json().catch(()=>({}));
+      if(!resp.ok||j.error)throw new Error(j.error||'The server did not answer.');
+      answer=j.answer;files=applyAnswer(answer,files);
+      if(!loop)break;
+      show('Round '+r+': running the fixed code...');
+      const res=await runProject(lang,files,tests);
+      if(res.unrunnable){log.push(res.out);break}
+      log.push('Round '+r+': '+(res.ok?'the fixed code ran and passed.':'the fixed code still failed.'));
+      if(res.ok){passed=true;break}
+      passed=false;
+      problem=(task?task+'\n\n':'')+'I RAN YOUR CORRECTED CODE AND IT STILL FAILED. Output:\n'+res.out.slice(0,2500)+(tests?'\n\nTests used:\n'+tests:'')+'\n\nThe code I ran was your last fixed version, which is now what I am sending you.';
+    }
+    const head=loop&&passed===true?'**Fixed and checked by running it'+(tests?' against your tests':'')+' (round '+rounds+').**\n\n':loop&&passed===false?'**Still failing after '+rounds+' rounds.** This is the best fix so far. Check the last output above, send me that error, and I will go on.\n\n':'';
+    out.innerHTML=(log.length?'<ul class="muted">'+log.map(l=>'<li>'+esc(l)+'</li>').join('')+'</ul>':'')+'<div class="body">'+md(head+answer)+'</div>';
+    const m=answer.match(/```[^\n]*\n([\s\S]*?)```/);lastCode=m?m[1]:'';lastLang=lang;
+    if(lastCode&&(lang==='HTML/CSS'||lang==='JavaScript')){$('#cpreview').textContent=lang==='HTML/CSS'?'Preview':'Run';$('#crunbar').hidden=false}
+  }catch(e){out.innerHTML='<p class="note">Could not finish. '+esc(e.message)+'</p>'}
+  btn.disabled=false;
+}
+
 $('#cpreview').onclick=()=>{
   const fr=$('#cframe'),con=$('#cconsole');
   fr.hidden=false;con.textContent='';con.hidden=lastLang!=='JavaScript';
@@ -4934,6 +5232,47 @@ def edit_ai():
             if isinstance(j.get(k), bool):
                 out[k] = j[k]
     return jsonify(edits=out, explain=str(j.get("explain", ""))[:240])
+
+
+PISTON_URL = os.environ.get("PISTON_URL", "").rstrip("/")
+PISTON_LANG = {"Python": "python", "JavaScript": "javascript", "TypeScript": "typescript", "Java": "java",
+               "C++": "c++", "C": "c", "C#": "csharp", "Go": "go", "Rust": "rust", "PHP": "php",
+               "Kotlin": "kotlin", "Swift": "swift", "Bash": "bash", "Dart": "dart"}
+
+
+@app.get("/api/runinfo")
+def api_runinfo():
+    return jsonify(remote=bool(PISTON_URL), langs=sorted(PISTON_LANG) if PISTON_URL else [])
+
+
+@app.post("/api/run")
+def api_run():
+    """Runs code on a separate compiler service (PISTON_URL). Code is never executed on this server."""
+    if denied():
+        return jsonify(error="locked"), 401
+    if not PISTON_URL:
+        return jsonify(error="No compiler service is set up for this language."), 501
+    d = request.get_json(silent=True) or {}
+    lang = PISTON_LANG.get(str(d.get("lang", "")))
+    files = [{"name": re.sub(r"[^\w .\-/]", "_", str(f.get("name", "main")))[:80], "content": str(f.get("text", ""))[:60000]}
+             for f in (d.get("files") or [])[:12] if isinstance(f, dict)]
+    if not lang or not files:
+        return jsonify(error="Pick a language and give some code."), 400
+    import urllib.request as _ur
+    body = json.dumps({"language": lang, "version": "*", "files": files, "stdin": str(d.get("stdin", ""))[:5000],
+                       "compile_timeout": 15000, "run_timeout": 10000}).encode()
+    headers = {"Content-Type": "application/json"}
+    if os.environ.get("PISTON_KEY"):
+        headers["Authorization"] = os.environ["PISTON_KEY"]
+    try:
+        with _ur.urlopen(_ur.Request(PISTON_URL + "/api/v2/execute", body, headers), timeout=45) as r:
+            res = json.loads(r.read().decode())
+    except Exception as e:
+        print("run failed:", str(e)[:200])
+        return jsonify(error="The compiler service did not answer."), 502
+    comp, run = res.get("compile") or {}, res.get("run") or {}
+    out = ((comp.get("output") or "") if comp.get("code") not in (0, None) else "") + (run.get("output") or "")
+    return jsonify(out=out[:6000], code=run.get("code"), compile_failed=comp.get("code") not in (0, None))
 
 
 @app.post("/code")
