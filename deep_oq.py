@@ -734,32 +734,55 @@ SYSTEM = (
 )
 
 # ==========================================================================
-# PLAIN MATHS: answers use simple words, never LaTeX ($, \frac, \sqrt ...)
+# MATHS WITH SYMBOLS: answers use + - × ÷ = ≠ ≈ ≤ ≥ % √ ² ³ ° π θ ... never LaTeX, never maths words
 # ==========================================================================
 SYSTEM += (
-    " Write all maths in plain, simple words and plain text. Never use LaTeX, dollar signs or "
-    "backslash commands (no \\frac, \\sqrt, \\int, $ or $$). Write 'square root of 11', 'x squared', "
-    "'3 divided by 4', 'integral from 0 to 3 of ...' and 'times' instead of symbols such as / or "
-    "\\cdot. Keep every step short and easy to follow."
+    " Write all maths with real mathematical symbols in plain text. Never use LaTeX, dollar signs or backslash "
+    "commands (no \\frac, \\sqrt, \\int, $ or $$). Never write maths as words: not 'squared', 'cubed', 'to the "
+    "power', 'square root of', 'theta', 'pi', 'degrees', 'percent', 'divided by', 'times', 'plus' or 'minus'. "
+    "Use + - × ÷ = ≠ ≈ ≤ ≥ % √ ² ³ ° π θ α β λ μ Δ ∞ ∫ Σ → ⇒ and write powers with ² ³ or ^. Examples: "
+    "x² + 5x - 6 = 0, √(b² - 4ac), (b² - k) ÷ a, 30°, sin θ = 0.5, 25%, ∫₀³ x² dx. Keep every step short and "
+    "easy to follow."
 )
 
-_TEX_WORDS = {
-    "cdot": "times", "times": "times", "div": "divided by", "pm": "plus or minus", "mp": "minus or plus",
-    "approx": "is about", "neq": "is not equal to", "ne": "is not equal to", "leq": "is less than or equal to",
-    "le": "is less than or equal to", "geq": "is greater than or equal to", "ge": "is greater than or equal to",
-    "infty": "infinity", "to": "goes to", "rightarrow": "goes to", "Rightarrow": "so", "implies": "so",
-    "therefore": "so", "ldots": "...", "dots": "...", "cdots": "...", "in": "in", "mid": "|",
-    "alpha": "alpha", "beta": "beta", "gamma": "gamma", "delta": "delta", "Delta": "Delta",
-    "epsilon": "epsilon", "theta": "theta", "lambda": "lambda", "mu": "mu", "pi": "pi", "sigma": "sigma",
-    "Sigma": "Sigma", "omega": "omega", "Omega": "Omega", "phi": "phi", "psi": "psi", "rho": "rho", "tau": "tau",
-    "degree": "degrees", "circ": "degrees",
+_SUP = dict(zip("0123456789+-=()abcdefghijklmnoprstuvwxyz", "⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁼⁽⁾ᵃᵇᶜᵈᵉᶠᵍʰⁱʲᵏˡᵐⁿᵒᵖʳˢᵗᵘᵛʷˣʸᶻ"))
+_SUB = dict(zip("0123456789+-=()aehijklmnoprstuvx", "₀₁₂₃₄₅₆₇₈₉₊₋₌₍₎ₐₑₕᵢⱼₖₗₘₙₒₚᵣₛₜᵤᵥₓ"))
+_TEX_SYM = {
+    "cdot": "×", "times": "×", "div": "÷", "pm": "±", "mp": "∓", "approx": "≈", "neq": "≠", "ne": "≠",
+    "leq": "≤", "le": "≤", "geq": "≥", "ge": "≥", "ll": "≪", "gg": "≫", "infty": "∞", "to": " → ",
+    "rightarrow": " → ", "leftarrow": " ← ", "Rightarrow": " ⇒ ", "implies": " ⇒ ", "Leftarrow": " ⇐ ",
+    "leftrightarrow": " ↔ ", "Leftrightarrow": " ⇔ ", "iff": " ⇔ ", "therefore": "∴", "because": "∵",
+    "ldots": "…", "dots": "…", "cdots": "…", "in": "∈", "notin": "∉", "subset": "⊂", "subseteq": "⊆",
+    "cup": "∪", "cap": "∩", "emptyset": "∅", "forall": "∀", "exists": "∃", "partial": "∂", "nabla": "∇",
+    "angle": "∠", "perp": "⊥", "parallel": "∥", "propto": "∝", "sim": "∼", "equiv": "≡", "cong": "≅",
+    "degree": "°", "circ": "°", "prime": "′", "mid": "|", "alpha": "α", "beta": "β", "gamma": "γ",
+    "delta": "δ", "Delta": "Δ", "epsilon": "ε", "varepsilon": "ε", "theta": "θ", "vartheta": "θ",
+    "lambda": "λ", "mu": "μ", "pi": "π", "sigma": "σ", "Sigma": "Σ", "omega": "ω", "Omega": "Ω",
+    "phi": "φ", "varphi": "φ", "psi": "ψ", "rho": "ρ", "tau": "τ", "eta": "η", "kappa": "κ", "nu": "ν",
+    "xi": "ξ", "zeta": "ζ", "chi": "χ", "Gamma": "Γ", "Theta": "Θ", "Lambda": "Λ", "Pi": "Π",
+    "Phi": "Φ", "Psi": "Ψ", "hbar": "ħ", "ell": "ℓ", "quad": " ", "qquad": " ",
 }
-_TEX_KEEP = {"sin", "cos", "tan", "cot", "sec", "csc", "log", "ln", "exp", "max", "min", "det", "lim", "sup", "inf"}
+_TEX_KEEP = {"sin", "cos", "tan", "cot", "sec", "csc", "log", "ln", "exp", "max", "min", "det", "lim", "sup",
+             "inf", "arcsin", "arccos", "arctan", "sinh", "cosh", "tanh", "gcd", "mod"}
+
+
+def _sup(x):
+    x = x.strip()
+    if x and all(c in _SUP for c in x):
+        return "".join(_SUP[c] for c in x)
+    return "^" + (x if re.fullmatch(r"[\w.]+", x) else "(" + x + ")")
+
+
+def _sub(x):
+    x = x.strip()
+    if x and all(c in _SUB for c in x):
+        return "".join(_SUB[c] for c in x)
+    return "_" + (x if re.fullmatch(r"[\w.]+", x) else "(" + x + ")")
 
 
 def _pm_wrap(x):
     x = x.strip()
-    return x if re.fullmatch(r"[\w.\-]+", x) else "(" + x + ")"
+    return x if re.fullmatch(r"[\w.²³°^⁰-⁹]+(?:\([^()]*\))?", x) else "(" + x + ")"
 
 
 def _pm_unbrace(x):
@@ -767,67 +790,116 @@ def _pm_unbrace(x):
     return x[1:-1].strip() if x.startswith("{") and x.endswith("}") else x
 
 
-def _pm_power(p):
-    p = _pm_unbrace(p)
-    if p == "2":
-        return " squared"
-    if p == "3":
-        return " cubed"
-    if p in ("\\circ", "circ"):
-        return " degrees"
-    return " to the power " + p
+def _limits(sign, lo, hi):
+    """∫ or Σ with lower and upper limit, as small raised/lowered symbols when possible."""
+    lo, hi = _tex_plain(_pm_unbrace(lo), True).strip(), _tex_plain(_pm_unbrace(hi), True).strip()
+    if all(c in _SUB for c in lo) and all(c in _SUP for c in hi):
+        return sign + _sub(lo) + _sup(hi) + " "
+    return sign + "(" + lo + " → " + hi + ") "
 
 
 def _tex_plain(s, in_math=False):
-    """Turns LaTeX into plain words."""
+    """Turns LaTeX into plain text with mathematical symbols."""
     for name in ("text", "mathrm", "mathbf", "mathit", "operatorname", "textbf", "boldsymbol", "mathcal"):
         s = re.sub(r"\\" + name + r"\s*\{([^{}]*)\}", r"\1", s)
     for _ in range(8):  # innermost fractions first, so nested ones work
         t = re.sub(r"\\[dt]?frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}",
-                   lambda m: _pm_wrap(m.group(1)) + " divided by " + _pm_wrap(m.group(2)), s)
+                   lambda m: _pm_wrap(m.group(1)) + " ÷ " + _pm_wrap(m.group(2)), s)
         t = re.sub(r"\\sqrt\s*\[([^\]]*)\]\s*\{([^{}]*)\}",
-                   lambda m: (" cube root of " if m.group(1).strip() == "3" else " " + m.group(1).strip() + "-th root of ")
-                   + _pm_wrap(m.group(2)), t)
-        t = re.sub(r"\\sqrt\s*\{([^{}]*)\}", lambda m: " square root of " + _pm_wrap(m.group(1)), t)
-        t = re.sub(r"\\sqrt\s*(\w)", r" square root of \1", t)
+                   lambda m: ("∛" if m.group(1).strip() == "3" else ("∜" if m.group(1).strip() == "4" else
+                              _sup(m.group(1)) + "√")) + _pm_wrap(m.group(2)), t)
+        t = re.sub(r"\\sqrt\s*\{([^{}]*)\}", lambda m: "√" + _pm_wrap(m.group(1)), t)
+        t = re.sub(r"\\sqrt\s*(\w)", r"√\1", t)
         if t == s:
             break
         s = t
     bound = r"(\{[^{}]*\}|\\?\w+)"
-    s = re.sub(r"\\int\s*_\s*" + bound + r"\s*\^\s*" + bound,
-               lambda m: " integral from " + _pm_unbrace(m.group(1)) + " to " + _pm_unbrace(m.group(2)) + " of ", s)
-    s = re.sub(r"\\sum\s*_\s*" + bound + r"\s*\^\s*" + bound,
-               lambda m: " sum from " + _pm_unbrace(m.group(1)) + " to " + _pm_unbrace(m.group(2)) + " of ", s)
-    s = re.sub(r"\\lim\s*_\s*" + bound, lambda m: " limit as " + _pm_unbrace(m.group(1)) + " of ", s)
-    s = re.sub(r"\\int\b", " integral of ", s)
+    s = re.sub(r"\\int\s*_\s*" + bound + r"\s*\^\s*" + bound, lambda m: " " + _limits("∫", m.group(1), m.group(2)), s)
+    s = re.sub(r"\\sum\s*_\s*" + bound + r"\s*\^\s*" + bound, lambda m: " " + _limits("Σ", m.group(1), m.group(2)), s)
+    s = re.sub(r"\\lim\s*_\s*" + bound, lambda m: " lim(" + _tex_plain(_pm_unbrace(m.group(1)), True) + ") ", s)
+    s = re.sub(r"\\int\b", " ∫ ", s)
+    s = re.sub(r"\\sum\b", " Σ ", s)
     s = re.sub(r"\\(?:left|right|bigl|bigr|Bigl|Bigr|big|Big)\b\s*", "", s)
-    s = re.sub(r"\\[,;:! ]|\\quad|\\qquad", " ", s)
+    s = re.sub(r"\\[,;:! ]", " ", s)
     s = re.sub(r"\\\\", " ; ", s)
-    # bracket with limits, e.g. [ ... ]_a^b  ->  [ ... ] evaluated from a to b
-    s = re.sub(r"([\]\)|])\s*_\s*" + bound + r"\s*\^\s*" + bound,
-               lambda m: m.group(1) + " evaluated from " + _pm_unbrace(m.group(2)) + " to " + _pm_unbrace(m.group(3)), s)
-    s = re.sub(r"\\vec\s*\{([^{}]*)\}", r"vector \1", s)
-    s = re.sub(r"\\(?:bar|overline)\s*\{([^{}]*)\}", r"\1 bar", s)
-    s = re.sub(r"\\(?:hat|tilde)\s*\{([^{}]*)\}", r"\1", s)
-    s = re.sub(r"\^\s*(\{[^{}]*\}|\\circ|-?\w)", lambda m: _pm_power(m.group(1)), s)
+    s = re.sub(r"([\]\)|])\s*_\s*" + bound + r"\s*\^\s*" + bound,  # [ ... ] from a to b
+               lambda m: m.group(1) + (_sub(_pm_unbrace(m.group(2))) + _sup(_pm_unbrace(m.group(3)))
+                                       if all(c in _SUB for c in _pm_unbrace(m.group(2)))
+                                       and all(c in _SUP for c in _pm_unbrace(m.group(3)))
+                                       else "|(" + _pm_unbrace(m.group(2)) + " → " + _pm_unbrace(m.group(3)) + ")"), s)
+    s = re.sub(r"\\vec\s*\{([^{}]*)\}", "\\1⃗", s)
+    s = re.sub(r"\\(?:bar|overline)\s*\{([^{}]*)\}", "\\1̄", s)
+    s = re.sub(r"\\hat\s*\{([^{}]*)\}", "\\1̂", s)
+    s = re.sub(r"\\tilde\s*\{([^{}]*)\}", r"\1", s)
+    s = re.sub(r"\^\s*\{?\s*\\circ\s*\}?", "°", s)
+    s = re.sub(r"\^\s*(\{[^{}]*\}|-?\w)", lambda m: _sup(_pm_unbrace(m.group(1))), s)
     s = re.sub(r"\\([A-Za-z]+)",
-               lambda m: " " + _TEX_WORDS[m.group(1)] + " " if m.group(1) in _TEX_WORDS
-               else (m.group(1) if m.group(1) in _TEX_KEEP else m.group(1)), s)
+               lambda m: _TEX_SYM[m.group(1)] if m.group(1) in _TEX_SYM else m.group(1), s)
     s = re.sub(r"\\([^\w\s])", r"\1", s)
+    s = re.sub(r"\b(sin|cos|tan|cot|sec|csc|log|ln)(?=[θαβγδφωλμπσΔ])", r"\1 ", s)
     if in_math:
-        s = re.sub(r"_\s*\{([^{}]*)\}", r"\1", s)
-        s = re.sub(r"_\s*(\w)", r"\1", s)
-        s = re.sub(r"(?<=\w)\s*/\s*(?=\w)|\)\s*/\s*(?=[\w(])", lambda m: " divided by " if "(" not in m.group(0) else ") divided by ", s)
+        s = re.sub(r"_\s*\{([^{}]*)\}", lambda m: _sub(m.group(1)), s)
+        s = re.sub(r"_\s*(\w)", lambda m: _sub(m.group(1)), s)
+        s = re.sub(r"(?<=\w)\s*/\s*(?=\w)|\)\s*/\s*(?=[\w(])",
+                   lambda m: " ÷ " if "(" not in m.group(0) else ") ÷ ", s)
         s = s.replace("{", "").replace("}", "")
     return s
 
 
+_GREEK_WORDS = {"theta": "θ", "alpha": "α", "beta": "β", "gamma": "γ", "delta": "δ", "lambda": "λ",
+                "omega": "ω", "sigma": "σ", "phi": "φ", "mu": "μ"}
+_OPERAND_L = r"(?:(?<=\d)|(?<=\))|(?<=[²³°])|(?<=\b[a-z]))"
+_OPERAND_R = r"(?=[\d(√]|[a-z]\b)"
+
+
+def _words_to_symbols(text):
+    """Turns maths written in words (x squared, 30 degrees, 5 times 6 ...) into symbols, line by line."""
+    out = []
+    for line in text.split("\n"):
+        if not re.search(r"[\d=<>+²³]|squared|cubed|degree|percent|root of|to the power|equal|greater|less than|multiplied|plus or|[Tt]herefore", line):
+            out.append(line)
+            continue
+        line = re.sub(r"(?<=[\w)\]])\s+squared\b", "²", line)
+        line = re.sub(r"(?<=[\w)\]])\s+cubed\b", "³", line)
+        line = re.sub(r"(\w+|\([^()]*\))\s+to the power(?: of)?\s+(-?\w+)",
+                      lambda m: m.group(1) + _sup(m.group(2)), line)
+        line = re.sub(r"\bcube root of\s+(\d+(?:\.\d+)?|[A-Za-z]\w*|\([^()]*\))", r"∛\1", line)
+        line = re.sub(r"\bsquare root of\s+(\d+(?:\.\d+)?|[A-Za-z]\w*|\([^()]*\))", r"√\1", line, flags=re.I)
+        line = re.sub(r"(\d)\s*degrees?\b(?!\s+of\b)", r"\1°", line)
+        line = re.sub(r"(\d)\s*percent\b", r"\1%", line)
+        line = re.sub(r"\b(?:is )?greater than or equal to\b", "≥", line)
+        line = re.sub(r"\b(?:is )?less than or equal to\b", "≤", line)
+        line = re.sub(r"\b(?:is )?not equal to\b", "≠", line)
+        line = re.sub(r"\bplus or minus\b", "±", line)
+        line = re.sub(r"\b(?:is |are )?(?:equal to|equals)\s+(?=[-\d(√]|[a-z]\b)", "= ", line)
+        line = re.sub(r"\b(?:is |are )?greater than\s+(?=[-\d(√]|[a-z]\b)", "> ", line)
+        line = re.sub(r"\b(?:is |are )?less than\s+(?=[-\d(√]|[a-z]\b)", "< ", line)
+        line = re.sub(r"\bmultiplied by\b", "×", line)
+        line = re.sub(r"\b[Tt]herefore,?\s+", "∴ ", line)
+        if "=" in line:
+            line = re.sub(r"\b(?:approximately|about|around)\s+(?=\d)", "≈ ", line)
+        line = re.sub(_OPERAND_L + r"\s+divided by\s+(?=[\w(√])", " ÷ ", line)
+        line = re.sub(_OPERAND_L + r"\s+times\s+" + _OPERAND_R, " × ", line)
+        line = re.sub(_OPERAND_L + r"\s+plus\s+" + _OPERAND_R, " + ", line)
+        line = re.sub(_OPERAND_L + r"\s+minus\s+" + _OPERAND_R, " - ", line)
+        line = re.sub(r"\bintegral from (\S+) to (\S+) of\b", lambda m: _limits("∫", m.group(1), m.group(2)).strip(), line)
+        line = re.sub(r"\bintegral of\b", "∫", line)
+        if re.search(r"[=<>≤≥≈+×÷²³\d]", line):
+            after = r"(?=\s*(?:[=<>≤≥≈≠+\-×÷²³°),]|\d|$))"
+            before = r"(?:(?<=[=+\-×÷(]\s)|(?<=[=+\-×÷(])|(?<=\bsin )|(?<=\bcos )|(?<=\btan )|(?<=\bcot )|(?<=\bsec )|(?<=\bangle ))"
+            for w, g in _GREEK_WORDS.items():
+                line = re.sub(r"\b" + w + r"\b(?:" + after[3:-1] + r")", g, line) if False else re.sub(
+                    "(?:" + before + r"\b" + w + r"\b|\b" + w + r"\b" + after + ")", g, line)
+            line = re.sub(r"(?:" + before + r"\bpi\b|\bpi\b" + after + r"|\bpi\b(?=\s+[a-z](?![A-Za-z])))", "π", line)
+            line = re.sub(r"\binfinity\b", "∞", line)
+        out.append(line)
+    return "\n".join(out)
+
+
 def plain_math(text):
-    """Removes LaTeX from an answer and writes maths in plain words. Code blocks and links stay untouched."""
+    """Removes LaTeX from an answer and writes maths with symbols. Code blocks and links stay untouched."""
     if not isinstance(text, str) or not text:
         return text
-    if not re.search(r"\\[A-Za-z(\[]|\$|\^|\d/\d", text):
-        return text  # nothing mathematical, leave it alone
     parts = re.split(r"(```.*?```|`[^`\n]*`|https?://\S+)", text, flags=re.S)
     out = []
     for i, part in enumerate(parts):
@@ -838,9 +910,10 @@ def plain_math(text):
         part = re.sub(r"\\\[(.+?)\\\]", lambda m: _tex_plain(m.group(1), True).strip(), part, flags=re.S)
         part = re.sub(r"\\\((.+?)\\\)", lambda m: _tex_plain(m.group(1), True).strip(), part, flags=re.S)
         part = re.sub(r"\$([^$\n]{1,300}?)\$",
-                      lambda m: _tex_plain(m.group(1), True).strip() if (re.search(r"[\\^_{}=]", m.group(1)) or re.fullmatch(r"\S{1,20}", m.group(1))) else m.group(0), part)
+                      lambda m: _tex_plain(m.group(1), True).strip() if (not m.group(1)[0].isspace() and not m.group(1)[-1].isspace() and (re.search(r"[\\^_{}=<>+*/-]", m.group(1)) or re.fullmatch(r"\S{1,20}", m.group(1)))) else m.group(0), part)
         part = _tex_plain(part, False)
-        part = re.sub(r"(?<![\w/.:])(\d+(?:\.\d+)?)/(\d+(?:\.\d+)?)(?![\w/])", r"\1 divided by \2", part)
+        part = re.sub(r"(?<![\w/.:])(\d+(?:\.\d+)?)/(\d+(?:\.\d+)?)(?![\w/])", r"\1 ÷ \2", part)
+        part = _words_to_symbols(part)
         part = re.sub(r"[ \t]{2,}", " ", part)
         part = re.sub(r"[ \t]+([,.;:)])", r"\1", part)
         out.append(part)
@@ -1042,6 +1115,8 @@ EXAM_SUBJECT = re.compile(r"\b(physics|chemistry|biology|botany|zoology|mathemat
                           r"integral|derivative|matrix|probability|equilibrium|molarity|enthalpy|photosynthesis|"
                           r"mitosis|meiosis|periodic table|newton|ohm|coulomb)\b", re.I)
 EXAM_SYSTEM = (
+    " In every step write the maths only with symbols (= + - × ÷ ² √ ° π θ ≤ ≥ ≈ ∴ ⇒ →), never with words like "
+    "equals, plus, minus, times, squared, root, degrees or therefore."
     " EXAM MODE (JEE, NEET, UPSC and similar Indian exams). Read the question carefully and answer exactly "
     "what is asked. For maths, physics and chemistry numericals: write Given and Find, name the concept or "
     "formula, solve step by step with units, check that the answer makes sense (size, units, a limiting case), "
@@ -1609,8 +1684,9 @@ def ask():
         return jsonify(error=str(e)[:300]), 500
     return jsonify(answer=answer)
 
-WHISPER_MODELS = [m for m in (os.environ.get("DEEP_OQ_WHISPER_MODEL"), "whisper-large-v3-turbo",
-                              "whisper-large-v3") if m]
+WHISPER_MODELS = list(dict.fromkeys(  # your own list first (comma separated is fine), then the defaults
+    [m.strip() for m in os.environ.get("DEEP_OQ_WHISPER_MODEL", "").replace(";", ",").replace(" ", ",").split(",")
+     if m.strip()] + ["whisper-large-v3-turbo", "whisper-large-v3"]))
 
 
 @app.post("/api/transcribe")
