@@ -320,20 +320,183 @@ def web_search(query, n=5):
     return res or _backup_search(query, n)
 
 
+_Q_NOISE = re.compile(r"\b(current|currently|present|presently|right now|at present|as of now|now|today|latest|new|who is the|who is|"
+                      r"tell me|please|name of|what is the name of)\b", re.I)
+
+
+def _clean_query(q):
+    """'current education minister of India' -> 'education minister of India 2026'. Words like 'current'
+    pull in pages about electricity and banking, so they are removed."""
+    c = re.sub(r"\s+", " ", _Q_NOISE.sub(" ", q)).strip(" ?.,")
+    c = c or q
+    if _ROLE.search(q) and not re.search(r"20\d\d", c):
+        c += " " + str(datetime.date.today().year)
+    return c[:100]
+
+
+def _relevant(hits, q):
+    kws = {w for w in re.findall(r"[a-z]{4,}", q.lower())} - {"with", "that", "this", "from", "what", "which", "about", "india", "indian"}
+    if not kws:
+        return hits
+    need = min(2, len(kws))
+    return [h for h in hits if sum(1 for w in kws if w in (h["title"] + " " + h["body"]).lower()) >= need]
+
+
+def wiki_lookup(q, n=2):
+    """Top Wikipedia articles for a question. Their first paragraph usually names the person who holds an office now."""
+    out = []
+    try:
+        j = _get_json("https://en.wikipedia.org/w/api.php?action=query&format=json&prop=extracts&exintro=1&explaintext=1&exchars=900"
+                      "&generator=search&gsrlimit=%d&gsrsearch=%s" % (n, urllib.parse.quote(q)))
+        for pg in sorted(j.get("query", {}).get("pages", {}).values(), key=lambda x: x.get("index", 9)):
+            if pg.get("extract"):
+                out.append({"title": "Wikipedia: " + pg.get("title", ""), "body": pg["extract"][:900], "url": ""})
+    except Exception as e:
+        print("wikipedia lookup failed:", e)
+    return out
+
+
+# ---------- read any web page the person pastes (safe: public sites only) ----------
+import http.client
+import ipaddress
+import socket
+import ssl
+from html.parser import HTMLParser
+
+_URL_RE = re.compile(r"https?://[^\s<>\"')\]]+", re.I)
+
+
+def _public_ip(host):
+    """Resolve host and return one public IP, or raise. Blocks localhost, private networks and cloud metadata."""
+    infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    ips = [ipaddress.ip_address(i[4][0]) for i in infos]
+    if not ips or any(not ip.is_global for ip in ips):
+        raise ValueError("That address is not a public website.")
+    return str(ips[0])
+
+
+class _Pin(http.client.HTTPConnection):
+    def __init__(self, host, ip, port=None, timeout=12):
+        super().__init__(host, port, timeout=timeout)
+        self._ip = ip
+
+    def connect(self):
+        self.sock = socket.create_connection((self._ip, self.port), self.timeout)
+
+
+class _PinS(http.client.HTTPSConnection):
+    def __init__(self, host, ip, port=None, timeout=12):
+        super().__init__(host, port, timeout=timeout, context=ssl.create_default_context())
+        self._ip = ip
+
+    def connect(self):
+        sock = socket.create_connection((self._ip, self.port), self.timeout)
+        self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
+
+
+class _Text(HTMLParser):
+    SKIP = {"script", "style", "noscript", "svg", "head", "nav", "footer", "form", "iframe"}
+    BLOCK = {"p", "div", "br", "li", "h1", "h2", "h3", "h4", "tr", "section", "article", "blockquote"}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts, self.skip, self.title, self._in_title = [], 0, "", False
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "title":
+            self._in_title = True
+        if tag in self.SKIP:
+            self.skip += 1
+        if tag in self.BLOCK:
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag):
+        if tag == "title":
+            self._in_title = False
+        if tag in self.SKIP and self.skip:
+            self.skip -= 1
+        if tag in self.BLOCK:
+            self.parts.append("\n")
+
+    def handle_data(self, d):
+        if self._in_title:
+            self.title += d
+        elif not self.skip and d.strip():
+            self.parts.append(d.strip() + " ")
+
+
+def read_url(url, max_chars=12000):
+    """Download one public web page and return (title, plain text). Follows up to 4 redirects, re-checking each hop."""
+    for _ in range(5):
+        u = urllib.parse.urlsplit(url)
+        if u.scheme not in ("http", "https") or not u.hostname:
+            raise ValueError("Only http and https links work.")
+        ip = _public_ip(u.hostname)
+        conn = (_PinS if u.scheme == "https" else _Pin)(u.hostname, ip, u.port, 12)
+        try:
+            path = (u.path or "/") + ("?" + u.query if u.query else "")
+            conn.request("GET", path, headers={"Host": u.netloc, "User-Agent": "Mozilla/5.0 (Deep OQ page reader)",
+                                               "Accept": "text/html,text/plain;q=0.9,*/*;q=0.5", "Accept-Encoding": "identity"})
+            r = conn.getresponse()
+            if r.status in (301, 302, 303, 307, 308) and r.getheader("Location"):
+                url = urllib.parse.urljoin(url, r.getheader("Location"))
+                continue
+            if r.status >= 400:
+                raise ValueError("The site answered with error %d." % r.status)
+            ctype = (r.getheader("Content-Type") or "").lower()
+            if ctype and not any(t in ctype for t in ("text/", "html", "xml", "json")):
+                raise ValueError("That link is not a web page (%s)." % ctype.split(";")[0])
+            raw = r.read(1_500_000)
+            m = re.search(r"charset=([\w-]+)", ctype)
+            txt = raw.decode(m.group(1) if m else "utf-8", "replace")
+        finally:
+            conn.close()
+        if "html" in ctype or "<html" in txt[:2000].lower():
+            ps = _Text()
+            ps.feed(txt)
+            body = re.sub(r"\n\s*\n+", "\n", "".join(ps.parts)).strip()
+            return ps.title.strip(), body[:max_chars]
+        return "", txt.strip()[:max_chars]
+    raise ValueError("Too many redirects.")
+
+
+def pages_context(question):
+    """If the question holds web links, read them (max 2) and return text for the AI."""
+    out = []
+    for url in list(dict.fromkeys(_URL_RE.findall(question)))[:2]:
+        url = url.rstrip(".,;")
+        try:
+            title, body = read_url(url)
+            if body:
+                out.append("PAGE CONTENT of %s%s:\n%s" % (url, " (" + title[:120] + ")" if title else "", body))
+        except Exception as e:
+            out.append("PAGE %s could not be read: %s" % (url, e))
+    return "\n\n".join(out)
+
+
 # ---------- router: decide which tools a question needs ----------
 _NUM = re.compile(r"\d|calculate|compute|sum of|product of|how many|percent|%|sqrt|root|average")
 _LIVE = re.compile(r"today|latest|news|current|currently|right now|price|rate|score|"
                    r"who is the|weather|this week|this month|this year|2025|2026|"
-                   r"recent|update|trending|live|\bwho (is|are|won|wins)\b|"
+                   r"recent|update|trending|live|headline|happening|breaking|current affairs|\bwho (is|are|won|wins)\b|"
                    r"\b(pm|cm|ceo|president|prime minister|chief minister|governor|minister|captain|"
                    r"coach|champion|winner|leader|chairman)\b|\bipl\b|\bmatch\b|\belection", re.I)
 _ROLE = re.compile(r"\b(pm|cm|ceo|president|prime minister|chief minister|governor|minister|captain|"
                    r"coach|chairman|who is|who won)\b", re.I)
 _COUNT = re.compile(r"count|how many (words|letters|characters)|word count", re.I)
+_NEWSQ = re.compile(r"news|headline|current affairs|happening|breaking|what.s going on|this week|trending|today|latest|recent|update", re.I)
 
 
 def run_tools(question, fast_chat):
     """Returns (tool_text, used_list). fast_chat(messages, temp, max_tokens) -> str"""
+    pg = pages_context(question) if _URL_RE.search(question) else ""
+    if pg:  # the person pasted a link: read it, then still run the other tools
+        t2, u2 = _run_tools_inner(question, fast_chat)
+        return (pg + ("\n\n" + t2 if t2 else ""), ["web"] + u2)
+    return _run_tools_inner(question, fast_chat)
+
+
+def _run_tools_inner(question, fast_chat):
     if not (_NUM.search(question) or _LIVE.search(question) or _COUNT.search(question)):
         return "", []
     prompt = (
@@ -351,7 +514,8 @@ def run_tools(question, fast_chat):
         plan = json.loads(m.group(0)) if m else {}
     except Exception as e:
         print("router failed:", e)
-        return "", []
+        nc = news_context(question) if _NEWSQ.search(question) else ""
+        return (nc, ["news"]) if nc else ("", [])
 
     if not plan.get("search") and _ROLE.search(question):
         plan["search"] = question[:100]  # who holds a job today can change, so always look it up
@@ -365,11 +529,19 @@ def run_tools(question, fast_chat):
     if plan.get("count"):
         out.append(f"COUNT of given text = {count_text(str(plan['count']))}")
         used.append("count")
+    if _NEWSQ.search(question):
+        nc = news_context(question, str(plan.get("search") or ""))
+        if nc:
+            out.append(nc)
+            used.append("news")
     if plan.get("search"):
-        hits = web_search(str(plan["search"]))
+        sq = _clean_query(str(plan["search"]))
+        hits = _relevant(web_search(sq), sq)
+        if not hits or _ROLE.search(question):  # who holds an office: Wikipedia names the current holder
+            hits = (hits + wiki_lookup(sq))[:6]
         if hits:
             used.append("web")
-            out.append("WEB RESULTS for '%s':\n%s" % (plan["search"], "\n".join(
+            out.append("WEB RESULTS for '%s':\n%s" % (sq, "\n".join(
                 f"- {h['title']}: {h['body']}" for h in hits)))
     return ("\n".join(out), used) if out else ("", [])
 
@@ -1680,8 +1852,10 @@ def _deep_oq_raw(session, question, force_exam=False, emit=None):
 
     if "web" in used and not (force or exam or is_hard(question)):
         return chat(base + [{"role": "user", "content": user
-                    + "\n\nAnswer from the TOOL RESULTS. Check their dates: if they conflict or look old, "
-                    "say what is most recent and how sure you are. Keep it short."}], 0.2, 2048, smart=True)
+                    + "\n\nAnswer from the TOOL RESULTS when they contain the answer. Check their dates: if they conflict or look old, "
+                    "say what is most recent and how sure you are. If they do not contain the answer or are about something "
+                    "else, ignore them and answer from your own knowledge, saying it may have changed. Never reply that you "
+                    "cannot answer because of the search results. Keep it short."}], 0.2, 2048, smart=True)
     if exam:  # JEE / NEET / UPSC style
         solve_txt = ("\n\nSolve this like a top teacher. Work one step at a time, explain why each step is done, "
                      "do the arithmetic carefully and check the result.")
@@ -1912,7 +2086,7 @@ def index():
     local = who.split("@")[0]
     parts = [w for w in re.split(r"[^A-Za-z]+", local) if w]
     pretty = " ".join(w.capitalize() for w in parts) or first.capitalize()
-    for pair in os.environ.get("DEEP_OQ_NAMES", "mayanksaw70@gmail.com=Mayank Saw;mayanksaw78@gmail.com=Mayank Saw").split(";"):
+    for pair in os.environ.get("DEEP_OQ_NAMES", "").split(";"):
         if "=" in pair and pair.split("=", 1)[0].strip().lower() == who.lower():
             pretty = pair.split("=", 1)[1].strip()
     row = ('<div class="acct" data-name="' + _html.escape(pretty) + '"><div class="av">'
@@ -1922,6 +2096,17 @@ def index():
         row += '<a class="adm" href="/admin">Admin</a>'
     row += '<a href="/logout">Log out</a></div></div>'
     html = PAGE.replace("</header>", row + "</header>", 1).replace("</head>", ACCT_CSS + "</head>", 1)
+    badge = os.environ.get("DEEP_OQ_BADGE", "Entered in the Meta VR Start Developer Competition 2026").strip()
+    if badge and badge.lower() != "off":
+        burl = os.environ.get("DEEP_OQ_BADGE_URL", "").strip()
+        inner = _html.escape(badge)
+        if burl.startswith("https://"):
+            inner = ('<a href="' + _html.escape(burl) + '" target="_blank" rel="noopener" '
+                     'style="color:inherit;text-decoration:none">' + inner + '</a>')
+        html = html.replace('<section class="hero" id="hero">',
+            '<section class="hero" id="hero" style="flex-wrap:wrap"><div style="flex:0 0 100%;text-align:center"><span style="display:inline-block;'
+            'padding:6px 14px;border-radius:99px;font:600 13px var(--ui);background:linear-gradient(135deg,#00c9a7,#2f8cff);'
+            'color:#04122b">' + inner + '</span></div>', 1)
     return html, 200, {"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache"}
 
 
@@ -2344,7 +2529,7 @@ PAGE = r"""<!doctype html>
 *{box-sizing:border-box}
 html,body{height:100%}
 body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--read);
-  display:grid;grid-template-rows:auto minmax(0,1fr);height:100dvh;-webkit-font-smoothing:antialiased}
+  display:grid;grid-template-rows:auto minmax(0,1fr);height:100vh;height:100dvh;-webkit-font-smoothing:antialiased}
 button,textarea{font:inherit;color:inherit}
 :focus-visible{outline:3px solid var(--river);outline-offset:2px}
 
@@ -2579,7 +2764,7 @@ a.primary{text-decoration:none;display:inline-block}
 /* ---- sidebar layout ---- */
 body{grid-template-columns:272px minmax(0,1fr);grid-template-rows:minmax(0,1fr)}
 header.top{grid-column:1;grid-row:1;display:flex;flex-direction:column;align-items:stretch;justify-content:flex-start;flex-wrap:nowrap;
-  gap:4px;padding:14px 12px 12px;height:100dvh;overflow-y:auto;background:var(--surface);border-right:1px solid var(--line);box-sizing:border-box}
+  gap:4px;padding:14px 12px 12px;height:100vh;height:100dvh;overflow-y:auto;background:var(--surface);border-right:1px solid var(--line);box-sizing:border-box}
 .views{grid-column:2;grid-row:1}
 header.top .brand{order:0;margin:0 0 10px;padding:2px 8px}
 #chatTools,body:not([data-view=chat]) #chatTools{display:contents}
@@ -2658,6 +2843,25 @@ body:not(.chatting) #v-chat.on{padding-top:12vh;padding-bottom:0}
   .hero{flex-direction:column;gap:8px}
 }
 [hidden]{display:none!important}
+
+/* ---- theme override, sidebar tools, prompt library ---- */
+:root[data-theme=dark]{--bg:#0E1233;--surface:#151A45;--ink:#EEF0FF;--ink-2:#A3A9D1;--line:#2A3070;--bubble:#2A3192;--bubble-ink:#FFFFFF;--code-bg:#090C26;--code-line:#222962;--err:#FF8D78}
+:root[data-theme=light]{--bg:#EAF0F3;--surface:#F8FAFB;--ink:#161B4A;--ink-2:#51577A;--line:#C9D4DB;--bubble:#161B4A;--bubble-ink:#F3F5FF;--code-bg:#0F1438;--code-line:#262D66;--err:#B3321F}
+.sbtools{order:4;display:flex;gap:6px;margin:8px 8px 0}
+.sbtools button{flex:1;font:600 12.5px var(--ui);padding:7px 4px;border-radius:10px;border:1px solid var(--line);background:transparent;color:var(--ink);cursor:pointer}
+.sbtools button:hover{background:var(--surface)}
+#plib{position:fixed;inset:0;z-index:60;background:rgba(5,8,30,.55);display:flex;align-items:center;justify-content:center;padding:16px}
+#plib[hidden]{display:none}
+#plib .pbox{width:min(520px,100%);max-height:80vh;overflow:auto;background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:16px;padding:16px;font-family:var(--ui)}
+#plib h3{margin:0 0 10px;font-size:18px}
+#plib .prow{display:flex;gap:6px;margin:6px 0}
+#plib .prow .pu{flex:1;text-align:left;font:500 14px var(--ui);padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:transparent;color:var(--ink);cursor:pointer}
+#plib .prow .pu:hover{background:var(--bg)}
+#plib .prow .pd{width:38px;border-radius:10px;border:1px solid var(--line);background:transparent;color:var(--ink);cursor:pointer;font-size:18px}
+#plib .pbar{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+#plib .pbar button{font:600 14px var(--ui);padding:9px 14px;border-radius:10px;border:1px solid var(--line);background:transparent;color:var(--ink);cursor:pointer}
+#plib .pbar .go{background:var(--river);border-color:var(--river);color:#fff}
+#plib .pnote{font-size:13px;color:var(--ink-2);margin:8px 0 0}
 </style>
 </head>
 <body>
@@ -4156,7 +4360,7 @@ $('#lgo').onclick=async()=>{
 
 /* ================= news ================= */
 let ncat='top',nitems=[];
-const NC=[['top','Top'],['nation','India'],['world','World'],['business','Business'],['sports','Sports'],['tech','Tech'],['science','Science'],['health','Health'],['entertainment','Entertainment'],['local','Local'],['search','Search']];
+const NC=[['all','All sources'],['top','Top'],['nation','India'],['world','World'],['business','Business'],['sports','Sports'],['tech','Tech'],['science','Science'],['health','Health'],['entertainment','Entertainment'],['local','Local'],['search','Search']];
 const nstat=m=>$('#nstat').textContent=m;
 function applyNews(){
   const seg=$('#ncats');seg.innerHTML='';
@@ -4204,6 +4408,70 @@ document.querySelector('.tab[data-view="news"]').addEventListener('click',()=>{i
 applyNews();
 
 showView(location.hash.slice(1));
+
+/* ================= theme, export chat, prompt library ================= */
+(function(){
+  const root=document.documentElement;
+  const get=k=>{try{return localStorage.getItem(k)}catch(e){return null}},put=(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}};
+  const sysDark=()=>window.matchMedia&&matchMedia('(prefers-color-scheme: dark)').matches;
+  let th=get('oq_theme');if(th==='light'||th==='dark')root.setAttribute('data-theme',th);
+  const bar=document.createElement('div');bar.className='sbtools';
+  bar.innerHTML='<button type="button" id="thBtn"></button><button type="button" id="exBtn" title="Download this chat">Export</button><button type="button" id="plBtn">Prompts</button>';
+  const hd=document.querySelector('#recentsHd');if(hd)hd.before(bar);else document.body.append(bar);
+  const thBtn=bar.querySelector('#thBtn');
+  const isDark=()=>(root.getAttribute('data-theme')||(sysDark()?'dark':'light'))==='dark';
+  const paint=()=>{thBtn.textContent=isDark()?'Light':'Dark'};paint();
+  thBtn.onclick=()=>{const n=isDark()?'light':'dark';root.setAttribute('data-theme',n);put('oq_theme',n);paint()};
+
+  /* export: the chat on screen becomes a .txt file */
+  bar.querySelector('#exBtn').onclick=()=>{
+    const turns=[...document.querySelectorAll('#log .turn')].filter(t=>!t.classList.contains('thinking'));
+    if(!turns.length){alert('Nothing to export yet. Ask something first.');return}
+    const lines=['Deep OQ chat','Saved '+new Date().toLocaleString(),''];
+    turns.forEach(t=>{
+      const user=t.classList.contains('user');
+      const el=user?t.querySelector('.bubble'):t.querySelector('.body');
+      const txt=(el?el.innerText:t.innerText).replace(/\n{3,}/g,'\n\n').trim();
+      lines.push((user?'You':'Deep OQ')+':',txt,'');
+    });
+    const blob=new Blob([lines.join('\n')],{type:'text/plain;charset=utf-8'});
+    const a=document.createElement('a');a.href=URL.createObjectURL(blob);
+    a.download='deep-oq-chat-'+new Date().toISOString().slice(0,10)+'.txt';
+    document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),2000);
+  };
+
+  /* prompt library: saved in this browser only */
+  const SEED=['Explain this like I am 12: ','Find the bug in this code and fix it:\n','Summarise in 5 short points:\n','Write a polite email about: '];
+  const load=()=>{try{const a=JSON.parse(get('oq_prompts')||'null');return Array.isArray(a)?a:SEED.slice()}catch(e){return SEED.slice()}};
+  let list=load();
+  const m=document.createElement('div');m.id='plib';m.hidden=true;
+  m.innerHTML='<div class="pbox" role="dialog" aria-label="Prompt library"><h3>Prompt library</h3><div id="pl"></div>'
+    +'<div class="pbar"><button type="button" class="go" id="pAdd">Save what I typed</button><button type="button" id="pClose">Close</button></div>'
+    +'<p class="pnote">Tap a prompt to put it in the message box. Saved only in this browser.</p></div>';
+  document.body.append(m);
+  const pl=m.querySelector('#pl');
+  function draw(){
+    pl.innerHTML='';
+    if(!list.length){pl.innerHTML='<p class="pnote">No prompts yet. Type one in the message box, then press Save.</p>';return}
+    list.forEach((t,i)=>{
+      const r=document.createElement('div');r.className='prow';
+      const u=document.createElement('button');u.type='button';u.className='pu';u.textContent=t.length>90?t.slice(0,90)+'...':t;
+      u.onclick=()=>{m.hidden=true;box.value=t;box.dispatchEvent(new Event('input',{bubbles:true}));if(typeof showView==='function')showView('chat');box.focus()};
+      const d=document.createElement('button');d.type='button';d.className='pd';d.textContent='x';d.setAttribute('aria-label','Delete this prompt');
+      d.onclick=()=>{list.splice(i,1);put('oq_prompts',JSON.stringify(list));draw()};
+      r.append(u,d);pl.append(r);
+    });
+  }
+  bar.querySelector('#plBtn').onclick=()=>{draw();m.hidden=false};
+  m.querySelector('#pClose').onclick=()=>{m.hidden=true};
+  m.addEventListener('click',e=>{if(e.target===m)m.hidden=true});
+  document.addEventListener('keydown',e=>{if(e.key==='Escape')m.hidden=true});
+  m.querySelector('#pAdd').onclick=()=>{
+    const t=(box.value||'').trim();
+    if(!t){alert('Type a prompt in the message box first.');return}
+    if(!list.includes(t))list.unshift(t);list=list.slice(0,40);put('oq_prompts',JSON.stringify(list));draw();
+  };
+})();
 </script>
 </body>
 </html>
@@ -4627,11 +4895,13 @@ VR_PAGE = r"""<!doctype html>
   <p id="mstat" aria-live="polite">For the VR screen, paste a direct .mp4 link or choose a file. YouTube and Vimeo links play in a normal window instead.</p>
   <button id="mfix" type="button" hidden>Fix video</button>
 </details>
-<a-scene id="scene" background="color: #0b0b2a" cursor="rayOrigin: mouse" vr-mode-ui="enabled: true">
+<a-scene id="scene" background="color: #0b0b2a" cursor="rayOrigin: mouse" vr-mode-ui="enabled: true" webxr="optionalFeatures: hand-tracking, local-floor, bounded-floor">
   <a-entity position="0 0 0"><a-camera look-controls wasd-controls-enabled="false">
     <a-cursor color="#9ab0ff" fuse="true" fuse-timeout="1500" raycaster="objects: .btn"></a-cursor></a-camera></a-entity>
   <a-entity laser-controls="hand: right" raycaster="objects: .btn; far: 6"></a-entity>
   <a-entity laser-controls="hand: left" raycaster="objects: .btn; far: 6"></a-entity>
+  <a-entity id="handL" hand-tracking-controls="hand: left" pinch-click></a-entity>
+  <a-entity id="handR" hand-tracking-controls="hand: right" pinch-click></a-entity>
   <a-entity id="ui" position="0 0 0">
   <a-plane position="0 1.65 -2.2" width="3.8" height="2.4" material="shader: flat; color: #14143a"></a-plane>
   <a-text value="Deep OQ VR Guide" position="-1.7 2.72 -2.18" width="3.4" color="#ffffff" anchor="left" align="left"></a-text>
@@ -4666,6 +4936,7 @@ function render(){
 function show(t){pages=[t];idx=0;out.setAttribute('value',t);pg.setAttribute('value','')}
 function setAnswer(a){
   const t=a.replace(/[*#`>_]/g,'').replace(/\s+/g,' ').trim();
+  window.__lastQ&&hist.push('You: '+window.__lastQ);hist.push('Deep OQ: '+t);window.__lastQ='';drawHist();
   pages=[];let s=t;
   while(s.length){let c=s.slice(0,420);if(s.length>420){const k=Math.max(c.lastIndexOf('. '),c.lastIndexOf(' '));if(k>200)c=c.slice(0,k+1)}pages.push(c.trim());s=s.slice(c.length).trim()}
   idx=0;render();return t;
@@ -4678,7 +4949,7 @@ async function ask(q,fromRemote){
     catch(e){logLine('Could not reach the server.')}
     return;
   }
-  show('Thinking...');
+  window.__lastQ=q;show('Thinking...');
   try{
     const r=await fetch('/ask',{method:'POST',headers:H(),
       body:JSON.stringify({session:sid,q:'[VR guide mode: answer in under 90 words, short plain sentences, no markdown, no lists.] '+q})});
@@ -4751,6 +5022,35 @@ function addBtn(label,x,y,fn,parent,cls){
   e.addEventListener('mouseleave',()=>e.setAttribute('material','color','#2d3cff'));
   (parent||document.querySelector('#ui')).appendChild(e);return e;
 }
+/* ---- floating panels: History (left) and News (right). Pinch the buttons to open or close them. ---- */
+const hist=[];
+function mkPanel(id,title,x,ry){
+  const e=document.createElement('a-entity');e.setAttribute('id',id);e.setAttribute('visible','false');
+  e.setAttribute('position',x+' 1.65 -1.9');e.setAttribute('rotation','0 '+ry+' 0');
+  e.innerHTML='<a-plane width="1.9" height="2.3" material="shader: flat; color: #14143a; opacity: 0.96"></a-plane>'
+    +'<a-text value="'+title+'" position="-0.88 1.05 0.01" width="1.8" color="#ffffff" anchor="left" align="left"></a-text>'
+    +'<a-text class="ptxt" value="" position="-0.88 0.88 0.01" width="1.76" wrap-count="30" anchor="left" align="left" baseline="top" color="#e8e8ff"></a-text>';
+  document.querySelector('#ui').appendChild(e);return e;
+}
+const pHist=mkPanel('pHist','History',-2.45,25),pNews=mkPanel('pNews','News',2.45,-25);
+function drawHist(){
+  const t=hist.slice(-6).map(x=>x.length>170?x.slice(0,170)+'...':x).join('\n\n')||'No questions yet.';
+  pHist.querySelector('.ptxt').setAttribute('value',t);
+}
+function togglePanel(el,btn,label){
+  const on=!el.__on;el.__on=on;el.setAttribute('visible',on);
+  btn.setAttribute('text','value',(on?'Hide ':'')+label);return on;
+}
+async function loadNewsPanel(){
+  const t=pNews.querySelector('.ptxt');t.setAttribute('value','Loading headlines...');
+  try{
+    const r=await post('/news',{cat:'top'});
+    if(r.status===401){t.setAttribute('value','Access key needed. Leave VR, reload this page and enter the key once.');return}
+    const j=await r.json();if(!r.ok||j.error)throw new Error(j.error||'No news');
+    t.setAttribute('value',j.items.slice(0,6).map((x,i)=>(i+1)+'. '+String(x.title||'').slice(0,110)).join('\n\n'));
+  }catch(e){t.setAttribute('value','Could not load news. '+e.message)}
+}
+drawHist();
 addBtn('Mic',-1.3,2.4,mic);
 addBtn('Guide me',-0.43,2.4,()=>ask('Guide me step by step on how to use VR safely and comfortably.'));
 addBtn('Teach me',0.43,2.4,()=>ask('Teach me one interesting thing, simply.'));
@@ -4762,6 +5062,27 @@ addBtn('Clear',1.3,2.13,()=>{show(WELCOME);if(window.speechSynthesis)speechSynth
 addBtn('Link VR',-1.3,1.86,hostLink);
 addBtn('Unlink',-0.43,1.86,()=>unlink('Link closed.'));
 addBtn('Cinema',0.43,1.86,()=>setCinema(true));
+const hbtn=addBtn('History',1.3,1.86,()=>togglePanel(pHist,hbtn,'History'));
+const nbtn=addBtn('News',-1.3,1.59,()=>{if(togglePanel(pNews,nbtn,'News'))loadNewsPanel()});
+/* ---- hands only: no controllers needed. Put your hand over a button and pinch (thumb + index finger) ---- */
+AFRAME.registerComponent('pinch-click',{
+  init(){
+    const T=AFRAME.THREE;this.ray=new T.Raycaster();this.o=new T.Vector3();this.d=new T.Vector3();this.tip=new T.Vector3();this.tipOk=false;
+    this.el.addEventListener('pinchstarted',e=>{
+      const p=e.detail&&e.detail.position;if(!p)return;
+      this.tip.set(p.x,p.y,p.z);this.fire()});
+  },
+  fire(){
+    const T=AFRAME.THREE,cam=scene.camera;if(!cam)return;
+    cam.getWorldPosition(this.o);this.d.copy(this.tip).sub(this.o).normalize();
+    this.ray.set(this.o,this.d);
+    const objs=[];document.querySelectorAll('.btn,.cbtn').forEach(e=>{if(e.object3D&&e.object3D.visible&&(!e.parentNode||e.parentNode.object3D.visible!==false))objs.push(e.object3D)});
+    const hits=this.ray.intersectObjects(objs,true);
+    if(!hits.length)return;
+    let o=hits[0].object;while(o&&!(o.el&&o.el.classList&&(o.el.classList.contains('btn')||o.el.classList.contains('cbtn'))))o=o.parent;
+    if(o&&o.el)o.el.emit('click');
+  }
+});
 const uiBtns=[...document.querySelectorAll('#ui .btn')];
 const mv=document.querySelector('#mv'),cine=document.querySelector('#cine'),cstat=document.querySelector('#cstat'),
   screen=document.querySelector('#screen'),sphere=document.querySelector('#sphere'),mstat=document.querySelector('#mstat');
@@ -5082,6 +5403,130 @@ def _fetch_rss(url):
     return items
 
 
+# ---- many news platforms at once (public RSS headline feeds; a failed feed is simply skipped) ----
+NEWS_SOURCES = {
+    "top": [("BBC", "https://feeds.bbci.co.uk/news/rss.xml"), ("The Hindu", "https://www.thehindu.com/news/national/feeder/default.rss"),
+            ("Times of India", "https://timesofindia.indiatimes.com/rssfeedstopstories.cms"),
+            ("Indian Express", "https://indianexpress.com/feed/"), ("Hindustan Times", "https://www.hindustantimes.com/feeds/rss/india-news/rssfeed.xml"),
+            ("NDTV", "https://feeds.feedburner.com/ndtvnews-top-stories"), ("Al Jazeera", "https://www.aljazeera.com/xml/rss/all.xml"),
+            ("NPR", "https://feeds.npr.org/1001/rss.xml"), ("The Guardian", "https://www.theguardian.com/world/rss")],
+    "nation": [("The Hindu", "https://www.thehindu.com/news/national/feeder/default.rss"), ("Times of India", "https://timesofindia.indiatimes.com/rssfeeds/-2128936835.cms"),
+               ("Hindustan Times", "https://www.hindustantimes.com/feeds/rss/india-news/rssfeed.xml"), ("Indian Express", "https://indianexpress.com/section/india/feed/"),
+               ("BBC India", "https://feeds.bbci.co.uk/news/world/asia/india/rss.xml")],
+    "world": [("BBC", "https://feeds.bbci.co.uk/news/world/rss.xml"), ("Al Jazeera", "https://www.aljazeera.com/xml/rss/all.xml"),
+              ("The Guardian", "https://www.theguardian.com/world/rss"), ("NPR", "https://feeds.npr.org/1004/rss.xml"),
+              ("Times of India", "https://timesofindia.indiatimes.com/rssfeeds/296589292.cms"), ("The Hindu", "https://www.thehindu.com/news/international/feeder/default.rss")],
+    "business": [("BBC", "https://feeds.bbci.co.uk/news/business/rss.xml"), ("The Hindu", "https://www.thehindu.com/business/feeder/default.rss"),
+                 ("Times of India", "https://timesofindia.indiatimes.com/rssfeeds/1898055.cms"), ("NPR", "https://feeds.npr.org/1006/rss.xml")],
+    "sports": [("BBC Sport", "https://feeds.bbci.co.uk/sport/rss.xml"), ("The Hindu", "https://www.thehindu.com/sport/feeder/default.rss"),
+               ("Times of India", "https://timesofindia.indiatimes.com/rssfeeds/4719148.cms")],
+    "tech": [("BBC", "https://feeds.bbci.co.uk/news/technology/rss.xml"), ("The Hindu", "https://www.thehindu.com/sci-tech/technology/feeder/default.rss"),
+             ("NPR", "https://feeds.npr.org/1019/rss.xml")],
+    "science": [("BBC", "https://feeds.bbci.co.uk/news/science_and_environment/rss.xml"), ("NPR", "https://feeds.npr.org/1007/rss.xml")],
+    "health": [("BBC", "https://feeds.bbci.co.uk/news/health/rss.xml"), ("NPR", "https://feeds.npr.org/1128/rss.xml")],
+    "entertainment": [("BBC", "https://feeds.bbci.co.uk/news/entertainment_and_arts/rss.xml"), ("Times of India", "https://timesofindia.indiatimes.com/rssfeeds/1081479906.cms")],
+}
+_NEWS_STOP = set("news today latest headlines headline current affairs happening breaking tell me what is the in of on about "
+                 "any new this week now right update updates give show a an and for from all india indian world".split())
+
+
+def _news_cat(text):
+    t = text.lower()
+    for cat, words in (("sports", "cricket ipl match score football sport"), ("business", "market sensex nifty stock economy business rbi"),
+                       ("tech", "tech technology ai gadget phone"), ("science", "science space isro nasa"), ("health", "health covid disease"),
+                       ("entertainment", "movie film bollywood actor"), ("world", "world global international war"),
+                       ("nation", "india indian delhi modi")):
+        if any(re.search(r"\b" + w + r"\b", t) for w in words.split()):
+            return cat
+    return "top"
+
+
+def _ts(pub):
+    try:
+        import email.utils
+        return email.utils.parsedate_to_datetime(pub).timestamp()
+    except Exception:
+        return 0.0
+
+
+def live_news(query="", cat="top", n=12):
+    """Headlines from many platforms, newest first. If query has real keywords, matching ones come first."""
+    from concurrent.futures import ThreadPoolExecutor
+    feeds = list(NEWS_SOURCES.get(cat) or NEWS_SOURCES["top"])
+    kws = [w for w in re.findall(r"[A-Za-z0-9]{3,}", query.lower()) if w not in _NEWS_STOP]
+    if kws:
+        feeds.insert(0, ("Google News", "https://news.google.com/rss/search?q=" + urllib.parse.quote(" ".join(kws[:6])) + "&hl=en-IN&gl=IN&ceid=IN:en"))
+
+    def grab(f):
+        try:
+            return [dict(it, source=it["source"] or f[0]) for it in _fetch_rss(f[1])[:25]]
+        except Exception as e:
+            print("feed failed:", f[0], e)
+            return []
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        groups = list(ex.map(grab, feeds))
+    seen, items = set(), []
+    for g in groups:
+        for it in g:
+            key = re.sub(r"\W+", "", it["title"].lower())[:60]
+            if key in seen:
+                continue
+            seen.add(key)
+            hay = it["title"].lower()
+            it = dict(it, ts=_ts(it["time"]), score=sum(1 for w in kws if w in hay))
+            items.append(it)
+    if kws and any(i["score"] for i in items):
+        items = [i for i in items if i["score"] or i["source"] == "Google News"]
+    items.sort(key=lambda i: (i["score"], i["ts"]), reverse=True)
+    return items[:n]
+
+
+_wiki_ce = {"t": 0, "text": ""}
+
+
+def wiki_current_events(chars=1800):
+    """Wikipedia's own daily 'Current events' page for today and yesterday (refreshed every 30 minutes)."""
+    if time.time() - _wiki_ce["t"] < 1800 and _wiki_ce["text"]:
+        return _wiki_ce["text"]
+    out = []
+    for back in (0, 1):
+        d = time.gmtime(time.time() - back * 86400)
+        title = "Portal:Current events/%d %s %d" % (d.tm_year, time.strftime("%B", d), d.tm_mday)
+        try:
+            j = _get_json("https://en.wikipedia.org/w/api.php?action=query&format=json&prop=extracts&explaintext=1&redirects=1&titles="
+                          + urllib.parse.quote(title))
+            for pg in j.get("query", {}).get("pages", {}).values():
+                t = (pg.get("extract") or "").strip()
+                if t:
+                    out.append("[Wikipedia current events, %s]\n%s" % (title.split("/")[-1], t[:chars]))
+        except Exception as e:
+            print("wiki current events failed:", e)
+    text = "\n\n".join(out)
+    if text:
+        _wiki_ce.update(t=time.time(), text=text)
+    return text
+
+
+def news_context(question, query=""):
+    """Text block for the AI: the time now, headlines from many platforms, and Wikipedia current events."""
+    q = query or question
+    parts = ["NOW (UTC): " + time.strftime("%A %d %B %Y, %H:%M", time.gmtime())]
+    try:
+        its = live_news(q, _news_cat(q), 14)
+        if its:
+            parts.append("HEADLINES from many news platforms (newest first):\n" + "\n".join(
+                "- %s (%s, %s)" % (i["title"], i["source"], i["time"][:22]) for i in its))
+    except Exception as e:
+        print("live news failed:", e)
+    try:
+        w = wiki_current_events()
+        if w:
+            parts.append(w)
+    except Exception as e:
+        print("wiki failed:", e)
+    return "\n\n".join(parts) if len(parts) > 1 else ""
+
+
 @app.post("/news")
 def news_route():
     if denied():
@@ -5089,6 +5534,11 @@ def news_route():
     d = request.get_json(silent=True) or {}
     cat = str(d.get("cat", "top"))
     q = str(d.get("q", "")).strip()[:80]
+    if cat == "all":
+        its = live_news(q, _news_cat(q), 40)
+        if not its:
+            return jsonify(error="The news feeds did not answer. Try again in a minute."), 502
+        return jsonify(items=its, updated=time.strftime("%H:%M UTC", time.gmtime()))
     tail = "hl=en-US&gl=US&ceid=US:en" if d.get("ed") == "world" else "hl=en-IN&gl=IN&ceid=IN:en"
     base = "https://news.google.com/rss"
     if cat in ("local", "search"):
