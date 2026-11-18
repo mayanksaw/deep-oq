@@ -4987,7 +4987,7 @@ VR_PAGE = r"""<!doctype html>
   <a-entity id="ui" position="0 0 0">
   <a-plane position="0 1.65 -2.2" width="3.8" height="2.4" material="shader: flat; color: #14143a"></a-plane>
   <a-text value="Deep OQ VR Guide" position="-1.7 2.72 -2.18" width="3.4" color="#ffffff" anchor="left" align="left"></a-text>
-  <a-text id="out" value="Pick a button or press Mic and ask me anything." position="-1.7 1.62 -2.18" width="3.4"
+  <a-text id="out" value="Pick a button or press Mic and ask me anything." position="-1.7 1.38 -2.18" width="3.4"
           wrap-count="46" anchor="left" align="left" baseline="top" color="#e8e8ff"></a-text>
   <a-text id="code" value="" position="1.7 2.72 -2.18" width="2" color="#9ab0ff" anchor="right" align="right"></a-text>
   <a-text id="page" value="" position="1.7 0.58 -2.18" width="1.2" anchor="right" align="right" color="#9aa"></a-text>
@@ -5020,7 +5020,7 @@ function setAnswer(a){
   const t=a.replace(/[*#`>_]/g,'').replace(/\s+/g,' ').trim();
   window.__lastQ&&hist.push('You: '+window.__lastQ);hist.push('Deep OQ: '+t);window.__lastQ='';drawHist();
   pages=[];let s=t;
-  while(s.length){let c=s.slice(0,420);if(s.length>420){const k=Math.max(c.lastIndexOf('. '),c.lastIndexOf(' '));if(k>200)c=c.slice(0,k+1)}pages.push(c.trim());s=s.slice(c.length).trim()}
+  while(s.length){let c=s.slice(0,360);if(s.length>360){const k=Math.max(c.lastIndexOf('. '),c.lastIndexOf(' '));if(k>180)c=c.slice(0,k+1)}pages.push(c.trim());s=s.slice(c.length).trim()}
   idx=0;render();return t;
 }
 async function ask(q,fromRemote){
@@ -5146,6 +5146,15 @@ addBtn('Unlink',-0.43,1.86,()=>unlink('Link closed.'));
 addBtn('Cinema',0.43,1.86,()=>setCinema(true));
 const hbtn=addBtn('History',1.3,1.86,()=>togglePanel(pHist,hbtn,'History'));
 const nbtn=addBtn('News',-1.3,1.59,()=>{if(togglePanel(pNews,nbtn,'News'))loadNewsPanel()});
+addBtn('Today',-0.43,1.59,async()=>{
+  show('Collecting today\'s current affairs...');
+  try{
+    const r=await post('/news/affairs',{});
+    if(r.status===401){show('Access key needed. Leave VR, reload this page and enter the key once.');return}
+    const j=await r.json();if(!r.ok||j.error)throw new Error(j.error||'No answer');
+    setAnswer(j.answer);
+  }catch(e){show('Could not get current affairs. '+e.message)}
+});
 /* ---- hands only: no controllers needed. Put your hand over a button and pinch (thumb + index finger) ---- */
 AFRAME.registerComponent('pinch-click',{
   init(){
