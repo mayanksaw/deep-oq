@@ -1962,6 +1962,63 @@ def knowledge_block(question):
     return "KNOWLEDGE:\n" + "\n\n".join(parts)
 
 
+# ---------- rigour: assumptions, edge cases, proofs, independent checking ----------
+REASON_RULES = (" Be rigorous. Write every assumption the question does not give as a line starting 'Assumption:'; if a missing "
+                "detail would change the answer, answer for each case or say what you need. Test edge cases (zero, negative, empty, "
+                "one item, very large, equal values, off-by-one) before you call a result general. In a proof, justify every step "
+                "with a reason and never skip one with 'clearly' or 'obviously'. Recompute numbers a second way before you give them.")
+
+CRITIC = ("You are a strict independent reviewer. Do NOT trust the draft. Go through this checklist:\n"
+          "1. Hidden assumptions: did the draft assume something the question never said? Make it explicit, or cover each case.\n"
+          "2. Edge cases: zero, negative, empty, one item, very large, duplicates, equal values, off-by-one, wrong types, None.\n"
+          "3. Recompute every number and each logic step by a different method and compare with the draft.\n"
+          "4. Code: read it line by line, then trace it by hand on one normal input and two edge inputs. Check names, imports, "
+          "return values, loops and indexes.\n"
+          "5. Proofs: every step must follow from earlier ones with a stated reason. No gaps, no circular steps.\n"
+          "If the draft is fully correct and complete, reply with exactly: OK\n"
+          "Otherwise output ONLY the full corrected final answer for the user, with no mention of this review, "
+          "keeping everything that was right.")
+
+
+def _py_blocks(text):
+    return re.findall(r"```(?:python|py)\s*\n(.*?)```", text, re.S | re.I)
+
+
+def _syntax_problem(text):
+    import ast as _ast
+    for code in _py_blocks(text):
+        try:
+            _ast.parse(code)
+        except SyntaxError as e:
+            return "line %s: %s" % (e.lineno, e.msg)
+    return ""
+
+
+def verify_answer(sysmsg, user, draft, emit):
+    """A different model re-checks the draft against the checklist; Python code is also syntax-checked (never run here)."""
+    emit("status", "Checking the answer independently")
+    out = draft
+    try:
+        r = (chat([{"role": "system", "content": sysmsg}, {"role": "user", "content":
+                  f"{user}\n\nDRAFT ANSWER:\n{draft}\n\n{CRITIC}"}], 0.1, 4096, smart=True, prefer=EXAM_CHECK_MODEL) or "").strip()
+        if r and not re.fullmatch(r"OK[.!\s]*", r) and not (len(draft) > 600 and len(r) < 0.3 * len(draft)):
+            out = r  # a much shorter reply is probably cut off, so keep the draft
+    except Exception as e:
+        print("verify failed:", e)
+    bad = _syntax_problem(out)
+    if bad:
+        emit("status", "Fixing a code error")
+        try:
+            fixed = chat([{"role": "system", "content": sysmsg}, {"role": "user", "content":
+                          f"{user}\n\nANSWER:\n{out}\n\nThe Python code in this answer has a syntax error ({bad}). Output ONLY the "
+                          "full corrected answer, with no mention of this fix."}], 0.1, 4096, smart=True)
+            if fixed and not _syntax_problem(fixed):
+                out = fixed
+        except Exception as e:
+            print("syntax fix failed:", e)
+    return out
+
+
 def _deep_oq_raw(session, question, force_exam=False, emit=None):
     emit = emit or (lambda kind, val: None)
     emit("status", "Thinking")
@@ -1979,7 +2036,8 @@ def _deep_oq_raw(session, question, force_exam=False, emit=None):
     if exam:
         emit("status", "Solving step by step")
     today = datetime.date.today().strftime("%A, %d %B %Y")
-    sysmsg = (SYSTEM + (EXAM_SYSTEM if exam else "") + f" Today's date is {today}. TOOL RESULTS (calculator, counter, "
+    rigorous = force or exam or is_hard(question)
+    sysmsg = (SYSTEM + (EXAM_SYSTEM if exam else "") + (REASON_RULES if rigorous else "") + f" Today's date is {today}. TOOL RESULTS (calculator, counter, "
               "web search) are exact or current: trust them over your own arithmetic "
               "and memory, and do not mention the tools. When a result says 'Current holder (incumbent)', that is "
               "the answer; never prefer your older memory over it.")
@@ -1997,9 +2055,10 @@ def _deep_oq_raw(session, question, force_exam=False, emit=None):
     if exam:  # JEE / NEET / UPSC style
         solve_txt = ("\n\nSolve this like a top teacher. Work one step at a time, explain why each step is done, "
                      "do the arithmetic carefully and check the result.")
-        if not is_checkable(question):  # essays and explanations: one strong answer
-            return chat(base + [{"role": "user", "content": user + solve_txt}], 0.2, 6144,
-                        smart=True, prefer=EXAM_MODEL)
+        if not is_checkable(question):  # essays, explanations and proofs: one strong answer, then an independent check
+            first = chat(base + [{"role": "user", "content": user + solve_txt}], 0.2, 6144,
+                         smart=True, prefer=EXAM_MODEL)
+            return verify_answer(sysmsg, user, first, emit)
         tag = ("\nEnd with one last line exactly like this: FINAL: <the final answer only, for example the "
                "option letter and the value>")
 
@@ -2059,10 +2118,7 @@ def _deep_oq_raw(session, question, force_exam=False, emit=None):
         f"{user}\n\nPLAN:\n{plan}\n\nFollow the plan and give the full answer. "
         "Do arithmetic and logic one step at a time."}], 0.2, smart=True)
 
-    return chat([{"role": "system", "content": sysmsg}, {"role": "user", "content":
-        f"{user}\n\nDRAFT ANSWER:\n{draft}\n\nCheck the draft for mistakes (math, "
-        "logic, code bugs, missed requirements). Output ONLY the corrected final "
-        "answer for the user, with no mention of this review."}], 0.1, smart=True)
+    return verify_answer(sysmsg, user, draft, emit)
 
 
 # ==========================================================================
@@ -4952,6 +5008,8 @@ VR_PAGE = r"""<!doctype html>
 #mov{position:fixed;top:10px;left:10px;z-index:10;max-width:min(340px,80vw);font:14px system-ui,sans-serif;padding:8px 12px;border-radius:10px;border:1px solid #6a76ff;background:#14143aee;color:#fff}
 #mov summary{cursor:pointer;font-weight:700}
 #mov p{margin:8px 0;color:#cfd6ff}
+#myt{display:block;margin:8px 0;padding:10px 12px;border-radius:8px;background:#2f3cff;color:#fff;text-decoration:none;font-weight:700;text-align:center}
+#myt[hidden]{display:none}
 #mov input[type=text],#mov input:not([type]){width:100%;box-sizing:border-box;font-size:15px;padding:8px;border-radius:8px;border:1px solid #556;margin:6px 0}
 .mbtn,#mgo,#mfix{display:inline-block;font-size:15px;padding:8px 12px;border-radius:8px;border:0;background:#2d3cff;color:#fff;cursor:pointer;margin-right:6px}
 .mchk{display:block;margin-top:8px}
@@ -4973,7 +5031,8 @@ VR_PAGE = r"""<!doctype html>
   <input id="mu" placeholder="Or paste a direct video link (.mp4 or .webm)" aria-label="Direct video link">
   <button id="mgo" type="button">Load link</button>
   <label class="mchk">Video type <select id="mtype"><option value="flat">Normal 2D</option><option value="sbs">3D side by side</option><option value="ou">3D top and bottom</option><option value="360">360 video</option></select></label>
-  <p>YouTube and Vimeo links play in a normal window.</p>
+  <p>YouTube and Vimeo links play in a normal window. For 3D, 360 or VR180 YouTube videos, use the YouTube button that appears below.</p>
+  <a id="myt" href="#" target="_blank" rel="noopener" hidden></a>
   <p id="mstat" aria-live="polite">For the VR screen, paste a direct .mp4 link or choose a file. YouTube and Vimeo links play in a normal window instead.</p>
   <button id="mfix" type="button" hidden>Fix video</button>
 </details>
@@ -5109,27 +5168,35 @@ const hist=[];
 function mkPanel(id,title,x,ry){
   const e=document.createElement('a-entity');e.setAttribute('id',id);e.setAttribute('visible','false');
   e.setAttribute('position',x+' 1.65 -1.9');e.setAttribute('rotation','0 '+ry+' 0');
-  e.innerHTML='<a-plane width="1.9" height="2.3" material="shader: flat; color: #14143a; opacity: 0.96"></a-plane>'
-    +'<a-text value="'+title+'" position="-0.88 1.05 0.01" width="1.8" color="#ffffff" anchor="left" align="left"></a-text>'
-    +'<a-text class="ptxt" value="" position="-0.88 0.88 0.01" width="1.76" wrap-count="30" anchor="left" align="left" baseline="top" color="#e8e8ff"></a-text>';
+  e.innerHTML='<a-plane width="2.3" height="2.7" material="shader: flat; color: #101038; opacity: 0.98"></a-plane>'
+    +'<a-text class="ptit" value="'+title+'" position="-1.02 1.2 0.01" width="2.4" color="#ffffff" anchor="left" align="left"></a-text>'
+    +'<a-text class="ptxt" value="" position="-1.02 1.0 0.01" width="2.05" wrap-count="27" line-height="62" anchor="left" align="left" baseline="top" color="#f2f2ff"></a-text>';
   document.querySelector('#ui').appendChild(e);return e;
 }
-const pHist=mkPanel('pHist','History',-2.45,25),pNews=mkPanel('pNews','News',2.45,-25);
+/* panels sit well to the left and right of the menu so they never cover it */
+const pHist=mkPanel('pHist','History',-3.4,28),pNews=mkPanel('pNews','News',3.4,-28);
 function drawHist(){
-  const t=hist.slice(-6).map(x=>x.length>170?x.slice(0,170)+'...':x).join('\n\n')||'No questions yet.';
+  const t=hist.slice(-4).map(x=>x.length>190?x.slice(0,190)+'...':x).join('\n\n')||'No questions yet.';
   pHist.querySelector('.ptxt').setAttribute('value',t);
 }
 function togglePanel(el,btn,label){
   const on=!el.__on;el.__on=on;el.setAttribute('visible',on);
   btn.setAttribute('text','value',(on?'Hide ':'')+label);return on;
 }
+let newsItems=[],newsPage=0;const NEWS_PER=3;
+function drawNewsPage(){
+  const pages=Math.max(1,Math.ceil(newsItems.length/NEWS_PER));newsPage=newsPage%pages;
+  const from=newsPage*NEWS_PER;
+  pNews.querySelector('.ptit').setAttribute('value','News  '+(newsPage+1)+' / '+pages);
+  pNews.querySelector('.ptxt').setAttribute('value',newsItems.slice(from,from+NEWS_PER).map((x,i)=>(from+i+1)+'. '+String(x.title||'').slice(0,120)+'\n('+(x.source||'news')+')').join('\n\n'));
+}
 async function loadNewsPanel(){
   const t=pNews.querySelector('.ptxt');t.setAttribute('value','Loading headlines...');
   try{
-    const r=await post('/news',{cat:'top'});
+    const r=await post('/news',{cat:'all'});
     if(r.status===401){t.setAttribute('value','Access key needed. Leave VR, reload this page and enter the key once.');return}
     const j=await r.json();if(!r.ok||j.error)throw new Error(j.error||'No news');
-    t.setAttribute('value',j.items.slice(0,6).map((x,i)=>(i+1)+'. '+String(x.title||'').slice(0,110)).join('\n\n'));
+    newsItems=j.items.slice(0,15);newsPage=0;drawNewsPage();
   }catch(e){t.setAttribute('value','Could not load news. '+e.message)}
 }
 drawHist();
@@ -5146,6 +5213,49 @@ addBtn('Unlink',-0.43,1.86,()=>unlink('Link closed.'));
 addBtn('Cinema',0.43,1.86,()=>setCinema(true));
 const hbtn=addBtn('History',1.3,1.86,()=>togglePanel(pHist,hbtn,'History'));
 const nbtn=addBtn('News',-1.3,1.59,()=>{if(togglePanel(pNews,nbtn,'News'))loadNewsPanel()});
+/* ---- hands-only game: Pop the bubbles. Pinch a bubble (or point a controller, or look at it) to pop it. 30 seconds. ---- */
+let gameOn=false,gScore=0,gLeft=0,gTick=null,gSpawn=null,gN=0;
+const gBox=document.createElement('a-entity');gBox.setAttribute('id','game');document.querySelector('#ui').appendChild(gBox);
+const gHud=document.createElement('a-text');
+gHud.setAttribute('position','0 3.0 -1.6');gHud.setAttribute('width','3.2');gHud.setAttribute('align','center');gHud.setAttribute('color','#ffffff');gHud.setAttribute('value','');
+document.querySelector('#ui').appendChild(gHud);
+function gBest(){try{return +localStorage.getItem('oq_best')||0}catch(e){return 0}}
+function gSaveBest(v){try{localStorage.setItem('oq_best',String(v))}catch(e){}}
+let gAudio=null;
+function beep(f){try{gAudio=gAudio||new (window.AudioContext||window.webkitAudioContext)();const o=gAudio.createOscillator(),g=gAudio.createGain();o.frequency.value=f;g.gain.value=0.08;o.connect(g);g.connect(gAudio.destination);o.start();o.stop(gAudio.currentTime+0.08)}catch(e){}}
+function gDraw(){gHud.setAttribute('value',gameOn?('Score '+gScore+'     Time '+gLeft+'s     Best '+gBest()):'')}
+function spawnBubble(){
+  if(!gameOn||gBox.children.length>=5)return;
+  const gold=(++gN%7===0),e=document.createElement('a-sphere');
+  e.classList.add('btn');
+  e.setAttribute('radius',gold?'0.14':'0.18');
+  e.setAttribute('color',gold?'#ffd54a':['#ff5d8f','#4cc9f0','#7cf29a','#b388ff'][Math.floor(Math.random()*4)]);
+  e.setAttribute('material','shader: flat; opacity: 0.95');
+  e.setAttribute('position',(Math.random()*3.0-1.5).toFixed(2)+' '+(1.0+Math.random()*1.7).toFixed(2)+' -1.5');
+  e.addEventListener('click',()=>{
+    if(!gameOn||!e.parentNode)return;
+    gScore+=gold?3:1;beep(gold?880:520);e.remove();gDraw();
+  });
+  gBox.appendChild(e);
+  setTimeout(()=>{if(e.parentNode)e.remove()},gold?1700:2600);
+}
+function endGame(){
+  gameOn=false;clearInterval(gTick);clearInterval(gSpawn);
+  while(gBox.firstChild)gBox.removeChild(gBox.firstChild);
+  const best=gBest();let msg='Game over. You popped '+gScore+' points.';
+  if(gScore>best){gSaveBest(gScore);msg+=' New best score!'}
+  gHud.setAttribute('value','');show(msg+' Press Play game to try again.');
+  if(typeof gbtn!=='undefined')gbtn.setAttribute('text','value','Play game');
+}
+function startGame(){
+  if(gameOn){endGame();return}
+  gameOn=true;gScore=0;gLeft=30;gN=0;gDraw();show('Pop the bubbles! Pinch them with your fingers. Gold ones give 3 points.');
+  gbtn.setAttribute('text','value','Stop game');
+  gTick=setInterval(()=>{gLeft--;gDraw();if(gLeft<=0)endGame()},1000);
+  gSpawn=setInterval(spawnBubble,700);spawnBubble();
+}
+const gbtn=addBtn('Play game',1.3,1.59,startGame);
+addBtn('More news',0.43,1.59,()=>{if(!pNews.__on||!newsItems.length)return;newsPage++;drawNewsPage()});
 addBtn('Today',-0.43,1.59,async()=>{
   show('Collecting today\'s current affairs...');
   try{
@@ -5310,8 +5420,15 @@ document.querySelector('#mtype').onchange=e=>setMode(e.target.value);
 document.querySelector('#mgo').onclick=()=>{
   const u=document.querySelector('#mu').value.trim();
   if(!/^https?:\/\//i.test(u)){mstat.textContent='Paste a full link that starts with https://';return}
-  const emb=embedUrl(u);
-  if(emb){playEmbed(emb);return}
+  const emb=embedUrl(u),yt=document.querySelector('#myt');yt.hidden=true;
+  if(emb){
+    playEmbed(emb);
+    const m=u.match(/(?:youtube\.com\/(?:watch\?(?:.*&)?v=|shorts\/|embed\/|live\/)|youtu\.be\/)([\w-]{11})/i);
+    if(m){
+      yt.href='https://www.youtube.com/watch?v='+m[1];yt.hidden=false;yt.textContent='Open on YouTube for 3D, 360 or VR180 (use its headset button)';
+      mstat.textContent='YouTube does not allow its videos to be placed on the Deep OQ cinema screen, so this plays flat. 3D, 360 and VR180 videos work best on YouTube itself: press the button below, then use the headset icon in the YouTube player. For your own 3D video, choose the file instead.';
+    }
+    return}
   if(/(netflix\.com|primevideo|hotstar|disneyplus|jiocinema)/i.test(u)){
     mstat.textContent='Streaming services like this cannot play here. Use their own app on your headset.';return}
   lastFile=null;loadMovie(u,'Your link');
