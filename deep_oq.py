@@ -3230,6 +3230,7 @@ body:not(.chatting) #v-chat.on{padding-top:12vh;padding-bottom:0}
 .pitem b{font-size:14.5px}
 .pitem small{font-size:12px}
 @media (max-height:820px){.pitem small{display:none}.pitem{padding:8px 10px}}
+#memDrawer{z-index:9600}
 .sbtoggle,.sbshade{display:none}
 @media (max-width:860px){
   body{grid-template-columns:minmax(0,1fr)}
@@ -3903,7 +3904,7 @@ async function loadMem(){
       +'<button type="button" class="hd" data-mid="'+f.id+'" aria-label="Forget this" title="Forget this">×</button></div>').join('');
   }catch(e){memList.innerHTML='<p class="hempty">Could not load your memory right now.</p>'}
 }
-function memOpen(o){memDrawer.hidden=!o;if(o)loadMem();else $('#memBtn').focus()}
+function memOpen(o){memDrawer.hidden=!o;if(o){sbClose();loadMem()}else if(innerWidth>860)$('#memBtn').focus()}
 $('#memBtn').onclick=()=>memOpen(memDrawer.hidden);
 $('#closeMem').onclick=()=>memOpen(false);
 memList.addEventListener('click',async e=>{
@@ -3922,7 +3923,7 @@ $('#memClear').onclick=async()=>{
   try{await api('/api/memory/clear',{});loadMem()}catch(e){}
 };
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!memDrawer.hidden)memOpen(false)});
-document.addEventListener('click',e=>{if(!memDrawer.hidden&&!e.target.closest('#memDrawer,#memBtn'))memOpen(false)});
+document.addEventListener('click',e=>{if(!memDrawer.hidden&&!e.target.closest('#memDrawer,#memBtn,#sbShade,#sbToggle,header.top'))memOpen(false)});
 
 /* ================= plus menu: attach, edit, create image ================= */
 const canSend=()=>!busy&&!attBusy&&(!!box.value.trim()||!!att);
