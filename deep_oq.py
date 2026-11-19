@@ -7284,9 +7284,9 @@ def makevideo_route():
         return jsonify(error="Another video is being made. Try again in a minute."), 503
     work = tempfile.mkdtemp(prefix="oq_")
     try:
-        j = _json_from(chat([{"role": "user", "content":
+         j = _json_from(chat([{"role": "user", "content":
             'Plan a video for this idea: ' + idea + '\nReply ONLY JSON: {"scenes": ["image prompt in English, '
-            'max 40 words, same style and characters in every scene", ...]} with exactly %d scenes.' % n]}],
+            'max 40 words, same style and characters in every scene", ...]} with exactly %d scenes.' % n}],
             0.5, 300 + 120 * n))
         scenes = [str(s)[:400] for s in j.get("scenes", []) if str(s).strip()][:n]
         if not scenes:
