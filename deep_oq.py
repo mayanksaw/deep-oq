@@ -1402,7 +1402,7 @@ def _video():
                 o["end"] = 0  # end after the video: just run to the end
         if o["reverse"]:
             span = (o["end"] if o["end"] > o["start"] else (dur or 0)) - o["start"]
-            if dur is None or span > 60:
+            if dur is None:
                 return jsonify(error="Play backwards works on clips up to 60 seconds. "
                                      "Set a start and end to trim the clip first."), 422
         cmd = build_command(exe, src, dst, o)
@@ -3615,6 +3615,7 @@ body:not(.chatting) #v-chat.on{padding-top:12vh;padding-bottom:0}
 const $=s=>document.querySelector(s);
 const log=$('#log'),scroller=$('#scroll'),box=$('#q'),send=$('#send');
 let sid=uid(),busy=false,att=null,imgMode=false,attBusy=false;
+let vidMode=false;
 
 function uid(){return (crypto.randomUUID&&crypto.randomUUID())||String(Date.now())+Math.random()}
 const mark=(s,c='')=>`<svg class="mark ${c}" width="${s}" height="${s}" viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="24" r="15" fill="none" stroke="currentColor" stroke-width="4.5"/><g class="orbit"><circle cx="34.6" cy="34.6" r="4.6" fill="var(--accent)"/></g></svg>`;
@@ -3943,6 +3944,7 @@ pmenu.querySelectorAll('.pitem').forEach(b=>b.onclick=()=>{
   else if(a==='camera')openCamera();
   else if(a==='photo')$('#fpe').click();
   else if(a==='video')$('#fve').click();
+  else if(a==='mkvideo'){setImgMode(false);vidMode=true;box.placeholder='Describe the video you want';box.focus()}
   else{setImgMode(true);box.focus()}
 });
 $('#fpe').onchange=e=>{const f=e.target.files[0];e.target.value='';if(f){showView('photo');loadPhoto(f)}};
@@ -4167,6 +4169,21 @@ async function askExtra(q,a,mode){
   }catch(e){botFail(bot,e)}
   busy=false;send.disabled=!canSend();toEnd();box.focus();loadRecents();
 }
+async function makeVideoChat(q){
+  if(busy)return;busy=true;send.disabled=true;document.body.classList.add('chatting');
+  box.value='';box.style.height='auto';addUserRich(q,null);
+  const bot=addBot();toEnd();
+  try{
+    const w=bot.querySelector('.wait');if(w)w.textContent='Making your video (this can take a few minutes)';
+    const ms=q.match(/(\d+)\s*scenes?/i),mt=q.match(/(\d+)\s*(?:seconds?|secs?|s)\s*(?:each|per scene)/i);
+    const r=await api('/makevideo',{text:q,scenes:ms?+ms[1]:8,secs:mt?+mt[1]:4});
+    if(!r.ok){const j=await r.json().catch(()=>({}));throw new Error(j.error||'The server did not answer.')}
+    const url=URL.createObjectURL(await r.blob());
+    bot.classList.remove('thinking');
+    bot.lastChild.innerHTML='<div class="body"><video controls playsinline style="max-width:100%;border-radius:14px" src="'+url+'"></video></div><div class="acts"><a class="mini" download="deep-oq-video.mp4" href="'+url+'" style="text-decoration:none">Download</a></div>';
+  }catch(e){botFail(bot,e)}
+  busy=false;send.disabled=!canSend();toEnd();box.focus();
+}
 function submit(){
   const q=box.value.trim();
   if(busy||attBusy)return;
@@ -4177,6 +4194,21 @@ function submit(){
     }
     return askExtra(q,att,false);
   }
+  async function makeVideoChat(q){
+  if(busy)return;busy=true;send.disabled=true;document.body.classList.add('chatting');
+  box.value='';box.style.height='auto';addUserRich(q,null);
+  const bot=addBot();toEnd();
+  try{
+    const w=bot.querySelector('.wait');if(w)w.textContent='Making your video (1 to 3 minutes)';
+    const r=await api('/makevideo',{text:q});
+    if(!r.ok){const j=await r.json().catch(()=>({}));throw new Error(j.error||'The server did not answer.')}
+    const url=URL.createObjectURL(await r.blob());
+    bot.classList.remove('thinking');
+    bot.lastChild.innerHTML='<div class="body"><video controls playsinline style="max-width:100%;border-radius:14px" src="'+url+'"></video></div><div class="acts"><a class="mini" download="deep-oq-video.mp4" href="'+url+'" style="text-decoration:none">Download</a></div>';
+  }catch(e){botFail(bot,e)}
+  busy=false;send.disabled=!canSend();toEnd();box.focus();
+}
+if(vidMode){if(!q)return;vidMode=false;return makeVideoChat(q)}
   if(imgMode){if(!q)return;return askExtra(q,null,true)}
   if(!q)return;
   if(IMG_RE.test(q))return askExtra(q,null,true);
@@ -4648,7 +4680,7 @@ function dropZone(stage,handler){
 dropZone($('#pstage'),loadPhoto);
 
 /* ================= video ================= */
-const VMAX=60*1024*1024;
+const VMAX=2000*1024*1024;
 let vfmt='mp4',vfile=null,vurl='',vres='';
 const vstatus=m=>$('#vstatus').textContent=m;
 function applyFmt(){
@@ -7210,7 +7242,95 @@ $("form").addEventListener("submit", async e => {
 </html>
 """
 
+def _fetch_scene_image(prompt, seed, path):
+    tries = []
+    if POLLINATIONS_KEY:
+        tries.append((_pollinations_gen_url(prompt, seed), {"Authorization": "Bearer " + POLLINATIONS_KEY}))
+    tries.append((_pollinations_url(prompt, seed), {}))
+    for url, hd in tries:
+        try:
+            req = urllib.request.Request(url, headers=dict(hd, **{"User-Agent": "DeepOQ/1.0"}))
+            with urllib.request.urlopen(req, timeout=100) as r:
+                if r.headers.get("Content-Type", "").startswith("image/"):
+                    with open(path, "wb") as f:
+                        f.write(r.read(15_000_000))
+                    return True
+        except Exception as e:
+            print("scene image failed:", e)
+    return False
 
+
+MAX_SCENES = _env_int("MAX_SCENES", 200)
+
+
+@app.post("/makevideo")
+def makevideo_route():
+    if denied():
+        return jsonify(error="locked"), 401
+    exe = ffmpeg_path()
+    if not exe:
+        return jsonify(error="Video tools are not installed on this server."), 503
+    d = request.get_json(silent=True) or {}
+    idea = str(d.get("text", "")).strip()[:4000]
+    if not idea:
+        return jsonify(error="Describe the video first."), 400
+    try:
+        n = max(2, min(int(d.get("scenes") or 8), MAX_SCENES))
+        secs = max(1, min(int(d.get("secs") or 4), 60))
+    except (TypeError, ValueError):
+        n, secs = 8, 4
+    frames = secs * 25
+    if not _video_slot.acquire(blocking=False):
+        return jsonify(error="Another video is being made. Try again in a minute."), 503
+    work = tempfile.mkdtemp(prefix="oq_")
+    try:
+        j = _json_from(chat([{"role": "user", "content":
+            'Plan a video for this idea: ' + idea + '\nReply ONLY JSON: {"scenes": ["image prompt in English, '
+            'max 40 words, same style and characters in every scene", ...]} with exactly %d scenes.' % n]}],
+            0.5, 300 + 120 * n))
+        scenes = [str(s)[:400] for s in j.get("scenes", []) if str(s).strip()][:n]
+        if not scenes:
+            return jsonify(error="Could not plan the video. Try again."), 502
+        from concurrent.futures import ThreadPoolExecutor
+        paths = [os.path.join(work, "s%d.jpg" % i) for i in range(len(scenes))]
+        seed = random.randint(1, 10**6)
+        with ThreadPoolExecutor(max_workers=3) as ex:
+            ok = list(ex.map(lambda i: _fetch_scene_image(scenes[i], seed + i, paths[i]), range(len(scenes))))
+        clips = []
+        for i, good in enumerate(ok):
+            if not good:
+                continue
+            out = os.path.join(work, "c%d.mp4" % i)
+            vf = ("scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,"
+                  "zoompan=z='min(zoom+0.0015,1.25)':d=%d:s=1280x720:fps=25,format=yuv420p" % frames)
+            p = subprocess.run([exe, "-y", "-hide_banner", "-loglevel", "error", "-nostdin", "-i", paths[i],
+                                "-vf", vf, "-c:v", "libx264", "-preset", "veryfast", out],
+                               capture_output=True, text=True, timeout=MAX_SECONDS)
+            if p.returncode == 0 and os.path.exists(out):
+                clips.append(out)
+        if len(clips) < 2:
+            return jsonify(error="The picture service did not answer. Try again in a moment."), 502
+        lst = os.path.join(work, "list.txt")
+        with open(lst, "w") as f:
+            f.write("".join("file '%s'\n" % c for c in clips))
+        final = os.path.join(work, "final.mp4")
+        p = subprocess.run([exe, "-y", "-hide_banner", "-loglevel", "error", "-nostdin", "-f", "concat", "-safe", "0",
+                            "-i", lst, "-c", "copy", "-movflags", "+faststart", final],
+                           capture_output=True, text=True, timeout=MAX_SECONDS)
+        if p.returncode != 0 or not os.path.exists(final):
+            print("concat failed:", p.stderr[-400:])
+            return jsonify(error="Could not join the scenes."), 500
+        with open(final, "rb") as fh:
+            data = fh.read()
+    except ValueError as e:
+        return jsonify(error=str(e)), 502
+    except Exception as e:
+        print("makevideo failed:", e)
+        return jsonify(error="Could not make the video right now."), 500
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+        _video_slot.release()
+    return send_file(io.BytesIO(data), mimetype="video/mp4", download_name="deep-oq-video.mp4")
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "ingest":
         ingest(sys.argv[2:])
