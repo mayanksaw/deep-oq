@@ -4860,7 +4860,7 @@ $('#naff').onclick=async()=>{
     o.scrollIntoView({behavior:'smooth',block:'start'});
   }catch(e){nstat(e.message)}
 };
-document.querySelector('.tab[data-view="news"]').addEventListener('click',()=>{if(!nitems.length)loadNews()});
+document.querySelector('.tab[data-view="news"]').addEventListener('click',()=>{if(!nitems.length)loadNews()});setInterval(()=>{if(document.body.dataset.view==='news'&&!document.hidden&&$('#nbout').hidden&&ncat!=='local'&&ncat!=='search')loadNews()},300000);
 applyNews();
 
 showView(location.hash.slice(1));(function(){let ctl=null,on=false;const SI=send.innerHTML,XI='<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>',f0=window.fetch;window.fetch=function(u,o){if(u==='/ask_stream'){ctl=new AbortController();o=Object.assign({},o,{signal:ctl.signal})}return f0.call(this,u,o)};send.addEventListener('click',function(e){if(on){e.preventDefault();e.stopImmediatePropagation();ctl.abort()}},true);setInterval(function(){const now=!!(busy&&ctl&&!ctl.signal.aborted);if(!busy)ctl=null;if(now!==on){on=now;send.innerHTML=on?XI:SI;send.setAttribute('aria-label',on?'Stop answer':'Send')}if(on)send.disabled=false},100)})();
