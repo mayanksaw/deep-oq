@@ -3320,6 +3320,9 @@ body:not(.chatting) #v-chat.on{padding-top:12vh;padding-bottom:0}
           <button class="pitem" type="button" role="menuitem" data-act="image">
             <svg viewBox="0 0 24 24"><path d="M12 3l1.8 4.7 4.7 1.8-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z"/><path d="M19 15l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z"/></svg>
             <span><b>Create an image</b><small>Describe it and Deep OQ draws it</small></span></button>
+          <button class="pitem" type="button" role="menuitem" data-act="mkvideo">
+            <svg viewBox="0 0 24 24"><rect x="3" y="6" width="13" height="12" rx="3"/><path d="m16 10 5-3v10l-5-3z"/></svg>
+            <span><b>Create a video</b><small>Describe it and Deep OQ makes a short video</small></span></button>
         </div>
         <input type="file" id="fq" hidden accept="image/*,video/*,.pdf,.txt,.md,.csv,.tsv,.json,.xml,.yaml,.yml,.log,.html,.css,.js,.ts,.jsx,.tsx,.py,.java,.c,.cpp,.h,.cs,.go,.rs,.rb,.php,.kt,.swift,.sql,.sh,.bat">
         <input type="file" id="fpe" hidden accept="image/*">
