@@ -3741,7 +3741,7 @@ async function ask(q){
     dropN=0;
   }catch(e){
     bot.classList.remove('thinking');bot.classList.add('err');
-    bot.lastChild.innerHTML='<div class="body"><p>Could not get an answer.</p><p>'+esc(e.message)+'</p></div><div class="acts"><button type="button" class="mini" data-retry>Try again</button></div>';
+    if(e.name==='AbortError'){bot.classList.remove('err');botDone(bot,bot.raw||'*Stopped.*')}else bot.lastChild.innerHTML='<div class="body"><p>Could not get an answer.</p><p>'+esc(e.message)+'</p></div><div class="acts"><button type="button" class="mini" data-retry>Try again</button></div>';
     bot.q=q;
   }
   busy=false;send.disabled=!canSend();toEnd();box.focus();loadRecents();
@@ -4863,7 +4863,7 @@ $('#naff').onclick=async()=>{
 document.querySelector('.tab[data-view="news"]').addEventListener('click',()=>{if(!nitems.length)loadNews()});
 applyNews();
 
-showView(location.hash.slice(1));
+showView(location.hash.slice(1));(function(){let ctl=null,on=false;const SI=send.innerHTML,XI='<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>',f0=window.fetch;window.fetch=function(u,o){if(u==='/ask_stream'){ctl=new AbortController();o=Object.assign({},o,{signal:ctl.signal})}return f0.call(this,u,o)};send.addEventListener('click',function(e){if(on){e.preventDefault();e.stopImmediatePropagation();ctl.abort()}},true);setInterval(function(){const now=!!(busy&&ctl&&!ctl.signal.aborted);if(!busy)ctl=null;if(now!==on){on=now;send.innerHTML=on?XI:SI;send.setAttribute('aria-label',on?'Stop answer':'Send')}if(on)send.disabled=false},100)})();
 
 </script>
 </body>
