@@ -7266,6 +7266,71 @@ def _fetch_scene_image(prompt, seed, path):
 MAX_SCENES = _env_int("MAX_SCENES", 200)
 
 
+def _tts(text, path):
+    from gtts import gTTS
+    if re.search(r"[\u0900-\u097F]", text):
+        gTTS(text, lang="hi").save(path)
+    else:
+        gTTS(text, lang="en", tld="co.in").save(path)
+
+
+def _caption_png(text, path, w=1280, h=720):
+    from PIL import Image, ImageDraw, ImageFont
+    img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    if text.strip():
+        try:
+            font = ImageFont.load_default(size=38)
+        except TypeError:
+            font = ImageFont.load_default()
+        d = ImageDraw.Draw(img)
+        lines, cur = [], ""
+        for wd in text.split():
+            t = (cur + " " + wd).strip()
+            if cur and d.textlength(t, font=font) > w - 120:
+                lines.append(cur)
+                cur = wd
+            else:
+                cur = t
+        if cur:
+            lines.append(cur)
+        lines = lines[:4]
+        lh = 48
+        top = h - 40 - lh * len(lines)
+        d.rectangle([0, top - 16, w, h - 24], fill=(0, 0, 0, 150))
+        for i, line in enumerate(lines):
+            tw = d.textlength(line, font=font)
+            d.text(((w - tw) / 2, top + i * lh), line, font=font, fill=(255, 255, 255, 255))
+    img.save(path)
+
+
+def _ai_motion(prompt, path):
+    """Real AI video clip from Replicate (paid). Needs REPLICATE_API_TOKEN."""
+    import urllib.request as _ur
+    token = os.environ.get("REPLICATE_API_TOKEN", "").strip()
+    model = os.environ.get("REPLICATE_VIDEO_MODEL", "minimax/video-01").strip()
+    hd = {"Authorization": "Bearer " + token, "Content-Type": "application/json"}
+    body = json.dumps({"input": {"prompt": prompt}}).encode()
+    req = _ur.Request("https://api.replicate.com/v1/models/" + model + "/predictions", body, hd)
+    with _ur.urlopen(req, timeout=60) as r:
+        pred = json.loads(r.read().decode())
+    get_url = pred["urls"]["get"]
+    for _ in range(60):
+        if pred.get("status") in ("succeeded", "failed", "canceled"):
+            break
+        time.sleep(5)
+        with _ur.urlopen(_ur.Request(get_url, headers=hd), timeout=60) as r:
+            pred = json.loads(r.read().decode())
+    if pred.get("status") != "succeeded":
+        raise RuntimeError("AI motion failed: " + str(pred.get("error"))[:200])
+    out = pred.get("output")
+    if isinstance(out, list):
+        out = out[0]
+    with _ur.urlopen(_ur.Request(str(out), headers={"User-Agent": "DeepOQ/1.0"}), timeout=180) as r:
+        with open(path, "wb") as f:
+            f.write(r.read(100_000_000))
+    return True
+
+
 @app.post("/makevideo")
 def makevideo_route():
     if denied():
@@ -7277,52 +7342,123 @@ def makevideo_route():
     idea = str(d.get("text", "")).strip()[:4000]
     if not idea:
         return jsonify(error="Describe the video first."), 400
+    low = idea.lower()
+    voice = not re.search(r"no (voice|narration)", low)
+    music = "no music" not in low
+    caps = "no caption" not in low
+    motion = bool(re.search(r"(ai|real) motion", low))
+    if motion and not os.environ.get("REPLICATE_API_TOKEN", "").strip():
+        return jsonify(error="AI motion needs a REPLICATE_API_TOKEN setting on Render."), 400
     try:
         n = max(2, min(int(d.get("scenes") or 8), MAX_SCENES))
         secs = max(1, min(int(d.get("secs") or 4), 60))
     except (TypeError, ValueError):
         n, secs = 8, 4
-    frames = secs * 25
     if not _video_slot.acquire(blocking=False):
         return jsonify(error="Another video is being made. Try again in a minute."), 503
     work = tempfile.mkdtemp(prefix="oq_")
     try:
-        j = _json_from(chat([{"role": "user", "content":
-            'Plan a video for this idea: ' + idea + '\nReply ONLY JSON: {"scenes": ["image prompt in English, '
-            'max 40 words, same style and characters in every scene", ...]} with exactly %d scenes.' % n}],
-            0.5, 300 + 120 * n))
-        scenes = [str(s)[:400] for s in j.get("scenes", []) if str(s).strip()][:n]
+        prompt = ('Plan a video for this idea: ' + idea + '\nReply ONLY JSON: {"scenes": [{"image": '
+                  '"image prompt in English, max 40 words, same style and characters in every scene", '
+                  '"narration": "one short sentence spoken in this scene, in the same language as the idea"}]} '
+                  'with exactly %d scenes.' % n)
+        j = _json_from(chat([{"role": "user", "content": prompt}], 0.5, 400 + 200 * n))
+        scenes = []
+        for s in j.get("scenes", []):
+            if isinstance(s, dict):
+                ip, nar = str(s.get("image", "")).strip(), str(s.get("narration", "")).strip()
+            else:
+                ip, nar = str(s).strip(), ""
+            if ip:
+                scenes.append((ip[:400], nar[:300]))
+        scenes = scenes[:n]
         if not scenes:
             return jsonify(error="Could not plan the video. Try again."), 502
         from concurrent.futures import ThreadPoolExecutor
         paths = [os.path.join(work, "s%d.jpg" % i) for i in range(len(scenes))]
+        mpaths = [os.path.join(work, "m%d.mp4" % i) for i in range(len(scenes))]
         seed = random.randint(1, 10**6)
         with ThreadPoolExecutor(max_workers=3) as ex:
-            ok = list(ex.map(lambda i: _fetch_scene_image(scenes[i], seed + i, paths[i]), range(len(scenes))))
+            ok = list(ex.map(lambda i: _fetch_scene_image(scenes[i][0], seed + i, paths[i]), range(len(scenes))))
+
+        def get_motion(i):
+            try:
+                return _ai_motion(scenes[i][0], mpaths[i])
+            except Exception as e:
+                print("ai motion failed:", e)
+                return False
+        if motion:
+            with ThreadPoolExecutor(max_workers=3) as ex:
+                mok = list(ex.map(get_motion, range(len(scenes))))
+        else:
+            mok = [False] * len(scenes)
+
         clips = []
-        for i, good in enumerate(ok):
-            if not good:
+        for i, (ip, nar) in enumerate(scenes):
+            if not ok[i] and not mok[i]:
                 continue
+            cap = os.path.join(work, "cap%d.png" % i)
+            _caption_png(nar if caps else "", cap)
+            aud, adur = None, 0.0
+            if voice and nar:
+                aud = os.path.join(work, "a%d.mp3" % i)
+                try:
+                    _tts(nar, aud)
+                    adur = source_duration(exe, aud) or 0.0
+                except Exception as e:
+                    print("tts failed:", e)
+                    aud = None
+            dur = max(float(secs), adur + 0.5)
             out = os.path.join(work, "c%d.mp4" % i)
-            vf = ("scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,"
-                  "zoompan=z='min(zoom+0.0015,1.25)':d=%d:s=1280x720:fps=25,format=yuv420p" % frames)
-            p = subprocess.run([exe, "-y", "-hide_banner", "-loglevel", "error", "-nostdin", "-i", paths[i],
-                                "-vf", vf, "-c:v", "libx264", "-preset", "veryfast", out],
-                               capture_output=True, text=True, timeout=MAX_SECONDS)
+            cmd = [exe, "-y", "-hide_banner", "-loglevel", "error", "-nostdin"]
+            if mok[i]:
+                cmd += ["-i", mpaths[i], "-i", cap]
+                fc = ("[0:v]scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,fps=25,"
+                      "tpad=stop_mode=clone:stop_duration=30[v0];[v0][1:v]overlay=0:0,format=yuv420p[vout]")
+            else:
+                cmd += ["-i", paths[i], "-i", cap]
+                fc = ("[0:v]scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,"
+                      "zoompan=z='min(zoom+0.0015,1.25)':d=%d:s=1280x720:fps=25[v0];"
+                      "[v0][1:v]overlay=0:0,format=yuv420p[vout]" % int(dur * 25))
+            if aud:
+                cmd += ["-i", aud]
+            else:
+                cmd += ["-f", "lavfi", "-t", "%.2f" % dur, "-i", "anullsrc=r=44100:cl=stereo"]
+            cmd += ["-filter_complex", fc, "-map", "[vout]", "-map", "2:a", "-af", "aresample=44100,apad",
+                    "-ac", "2", "-ar", "44100", "-t", "%.2f" % dur, "-c:v", "libx264", "-preset", "veryfast",
+                    "-pix_fmt", "yuv420p", "-r", "25", "-c:a", "aac", "-b:a", "128k", out]
+            p = subprocess.run(cmd, capture_output=True, text=True, timeout=MAX_SECONDS)
             if p.returncode == 0 and os.path.exists(out):
                 clips.append(out)
+            else:
+                print("clip failed:", p.stderr[-400:])
         if len(clips) < 2:
             return jsonify(error="The picture service did not answer. Try again in a moment."), 502
         lst = os.path.join(work, "list.txt")
         with open(lst, "w") as f:
             f.write("".join("file '%s'\n" % c for c in clips))
-        final = os.path.join(work, "final.mp4")
-        p = subprocess.run([exe, "-y", "-hide_banner", "-loglevel", "error", "-nostdin", "-f", "concat", "-safe", "0",
-                            "-i", lst, "-c", "copy", "-movflags", "+faststart", final],
+        joined = os.path.join(work, "joined.mp4")
+        p = subprocess.run([exe, "-y", "-hide_banner", "-loglevel", "error", "-nostdin", "-f", "concat",
+                            "-safe", "0", "-i", lst, "-c", "copy", joined],
                            capture_output=True, text=True, timeout=MAX_SECONDS)
-        if p.returncode != 0 or not os.path.exists(final):
+        if p.returncode != 0 or not os.path.exists(joined):
             print("concat failed:", p.stderr[-400:])
             return jsonify(error="Could not join the scenes."), 500
+        final = joined
+        if music:
+            final = os.path.join(work, "final.mp4")
+            fc = ("[1:a][2:a][3:a]amix=inputs=3:duration=longest,volume=0.15,tremolo=f=0.25:d=0.5,"
+                  "afade=t=in:d=2[m];[0:a][m]amix=inputs=2:duration=first:dropout_transition=0,volume=2[aout]")
+            p = subprocess.run([exe, "-y", "-hide_banner", "-loglevel", "error", "-nostdin", "-i", joined,
+                                "-f", "lavfi", "-i", "sine=frequency=261.63:sample_rate=44100",
+                                "-f", "lavfi", "-i", "sine=frequency=329.63:sample_rate=44100",
+                                "-f", "lavfi", "-i", "sine=frequency=392:sample_rate=44100",
+                                "-filter_complex", fc, "-map", "0:v", "-map", "[aout]", "-c:v", "copy",
+                                "-c:a", "aac", "-b:a", "128k", "-shortest", "-movflags", "+faststart", final],
+                               capture_output=True, text=True, timeout=MAX_SECONDS)
+            if p.returncode != 0 or not os.path.exists(final):
+                print("music mix failed:", p.stderr[-400:])
+                final = joined
         with open(final, "rb") as fh:
             data = fh.read()
     except ValueError as e:
