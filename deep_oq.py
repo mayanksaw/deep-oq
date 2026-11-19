@@ -4121,7 +4121,7 @@ async function makeImage(bot,prompt,note){
   if(!r.ok||j.error)throw new Error(j.error||'The server did not answer.');
   const im=await loadPic(j.image);
   bot.classList.remove('thinking');
-  bot.lastChild.innerHTML='<div class="body"><div id="gi"></div><p class="muted"></p></div><div class="acts"><a class="mini" target="_blank" rel="noopener" style="text-decoration:none">Open full size</a></div>';
+  bot.lastChild.innerHTML='<div class="body"><div id="gi"></div><p class="muted"></p></div><div class="acts"><a class="mini" target="_blank" rel="noopener" style="text-decoration:none">Open full size</a> <button type="button" class="mini" data-dl>Download</button></div>';
   bot.lastChild.querySelector('#gi').replaceWith(im);
   bot.lastChild.querySelector('.muted').textContent=(j.answer||'')+(note?'\n'+note:'');
   bot.lastChild.querySelector('a').href=j.image;
