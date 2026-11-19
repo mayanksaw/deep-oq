@@ -4098,6 +4098,22 @@ function loadPic(url){return new Promise((ok,no)=>{
   im.onerror=()=>{clearTimeout(t);no(new Error('The picture service did not answer. Try again in a moment.'))};
   im.src=url;
 })}
+async function downloadImage(url,btn){
+  const old=btn.textContent;btn.textContent='Downloading...';btn.disabled=true;
+  const save=blob=>{
+    const a=document.createElement('a');a.href=URL.createObjectURL(blob);
+    a.download='deep-oq-'+Date.now()+'.'+((blob.type.split('/')[1]||'png').replace('jpeg','jpg'));
+    document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),4000);
+  };
+  try{
+    let r;
+    try{r=await fetch(url)}catch(e){r=null}            /* direct first */
+    if(!r||!r.ok)r=await fetch('/dlimg?u='+encodeURIComponent(url));   /* through your server if the host blocks it */
+    if(!r.ok)throw new Error('failed');
+    save(await r.blob());
+  }catch(e){alert('Could not download the image. Use "Open full size", then right-click and Save image.')}
+  btn.textContent=old;btn.disabled=false;
+}
 async function makeImage(bot,prompt,note){
   const w=bot.querySelector('.wait');if(w)w.textContent='Creating your image';
   const r=await api('/lab',{mod:'image',text:prompt}),j=await r.json().catch(()=>({}));
@@ -5224,7 +5240,24 @@ def pimg_route():
             print("pimg", label, "failed:", e)
     return jsonify(error="The picture service did not answer."), 502
 
-
+@app.get("/dlimg")
+def dlimg_route():
+    """Fetches a generated picture for download when the image host blocks direct browser downloads."""
+    u = request.args.get("u", "")
+    p = urllib.parse.urlsplit(u)
+    if p.scheme != "https" or p.hostname not in ("image.pollinations.ai", "gen.pollinations.ai", "pollinations.ai"):
+        return jsonify(error="That image address is not allowed."), 400
+    try:
+        req = urllib.request.Request(u, headers={"User-Agent": "DeepOQ/1.0"})
+        with urllib.request.urlopen(req, timeout=110) as r:
+            ctype = r.headers.get("Content-Type", "")
+            if not ctype.startswith("image/"):
+                return jsonify(error="Not an image."), 502
+            return r.read(15_000_000), 200, {"Content-Type": ctype,
+                                            "Content-Disposition": "attachment; filename=deep-oq-image.png"}
+    except Exception as e:
+        print("dlimg failed:", e)
+        return jsonify(error="Could not fetch the image."), 502
 @app.post("/lab")
 def lab_route():
     if denied():
