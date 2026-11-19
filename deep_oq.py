@@ -4109,6 +4109,7 @@ async function makeImage(bot,prompt,note){
   bot.lastChild.querySelector('#gi').replaceWith(im);
   bot.lastChild.querySelector('.muted').textContent=(j.answer||'')+(note?'\n'+note:'');
   bot.lastChild.querySelector('a').href=j.image;
+  const dlb=bot.lastChild.querySelector('[data-dl]');dlb.onclick=()=>downloadImage(j.image,dlb);
 }
 async function makeFromPhoto(bot,q,a){
   const w=bot.querySelector('.wait');if(w)w.textContent='Looking at your photo';
