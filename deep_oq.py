@@ -6167,13 +6167,53 @@ function ytVoice(msg){
   r.onerror=()=>gSet(msg,'I could not hear you. Try again.');
   r.start();
 }
-function gYT(){
-  gEnter();gClear();
-  gTxt(0,0.95,'YouTube: press Mic and say what to watch',3);
-  const msg=gTxt(0,0.7,'',3.2,'#cfd6ff');
-  gBtn(-0.45,0.4,'Mic',()=>ytVoice(msg),{w:0.8,tw:2});
-  gBtn(0.45,0.4,'Close',gExit,{w:0.8,tw:2,color:'#a02020'});
+/* ===== YouTube in VR with an on-screen keyboard: pinch the keys, or press Mic ===== */
+async function ytSearchVR(q){
+  gClear();gTxt(0,0.5,'Searching for '+q+'...',3);gRefresh();
+  try{ytResultsVR(await ytFind(q),q)}
+  catch(e){
+    gClear();gTxt(0,0.6,e.message,3);
+    gBtn(0,0.1,'Back',()=>gYT(q),{w:0.8,tw:2});gRefresh();
+  }
+}
+function ytResultsVR(items,q){
+  gClear();
+  if(!items.length){
+    gTxt(0,0.6,'Nothing found for '+q,3);
+    gBtn(0,0.1,'Back',()=>gYT(q),{w:0.8,tw:2});gRefresh();return;
+  }
+  gTxt(0,1.05,'Pinch a video to watch it',2.8);
+  items.slice(0,5).forEach((it,i)=>gBtn(0,0.72-i*0.27,it.name.slice(0,46),()=>ytOpen(it.id),{w:2.4,h:0.24,tw:2.3}));
+  gBtn(-0.5,-0.7,'Search again',()=>gYT(q),{w:0.9,tw:2.2});
+  gBtn(0.5,-0.7,'Close',gExit,{w:0.9,tw:2.2,color:'#a02020'});
   gRefresh();
+}
+function gYT(start){
+  gEnter();gClear();
+  let q=typeof start==='string'?start:'';
+  gTxt(0,1.1,'YouTube: type, or press Mic',2.8);
+  const disp=gTxt(0,0.88,'',3.2,'#ffd54a'),msg=gTxt(0,0.72,'',2.6,'#cfd6ff');
+  const show=()=>gSet(disp,(q||'type here')+' _');
+  const key=(x,y,label,fn,o)=>gBtn(x,y,label,fn,Object.assign({w:0.22,h:0.2,tw:3},o||{}));
+  ['1234567890','QWERTYUIOP','ASDFGHJKL','ZXCVBNM'].forEach((row,r)=>{
+    row.split('').forEach((k,i)=>{
+      key((i-(row.length-1)/2)*0.24,0.52-r*0.23,k,()=>{if(q.length<60){q+=k.toLowerCase();beep(500);show()}});
+    });
+  });
+  key(1.0,0.52-3*0.23,'Del',()=>{q=q.slice(0,-1);show()},{w:0.4,tw:2.4,color:'#a02020'});
+  const y=0.52-4*0.23;
+  key(-0.7,y,'Space',()=>{if(q.length<60&&!q.endsWith(' ')){q+=' ';show()}},{w:0.7,tw:2.4});
+  key(0.0,y,'Search',()=>{if(q.trim())ytSearchVR(q.trim());else gSet(msg,'Type something first')},{w:0.6,tw:2.4,color:'#1f9a4a'});
+  key(0.55,y,'Mic',()=>{
+    const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+    if(!SR){gSet(msg,'Voice is not available here. Use the keyboard.');return}
+    const r=new SR();r.lang=navigator.language||'en-US';gSet(msg,'Listening...');
+    r.onresult=e=>{q=e.results[0][0].transcript.slice(0,60);show();ytSearchVR(q)};
+    r.onerror=()=>gSet(msg,'I could not hear you. Try the keyboard.');
+    r.start();
+  },{w:0.4,tw:2.4,color:'#5a3fa8'});
+  key(1.0,y,'Close',gExit,{w:0.4,tw:2.4,color:'#a02020'});
+  show();gRefresh();
 }
 document.querySelector('#ygo').onclick=async()=>{
   const q=document.querySelector('#yq').value.trim(),list=document.querySelector('#ylist');
