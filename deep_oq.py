@@ -3320,9 +3320,6 @@ body:not(.chatting) #v-chat.on{padding-top:12vh;padding-bottom:0}
           <button class="pitem" type="button" role="menuitem" data-act="image">
             <svg viewBox="0 0 24 24"><path d="M12 3l1.8 4.7 4.7 1.8-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z"/><path d="M19 15l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z"/></svg>
             <span><b>Create an image</b><small>Describe it and Deep OQ draws it</small></span></button>
-            <button class="pitem" type="button" role="menuitem" data-act="album">
-            <svg viewBox="0 0 24 24"><rect x="3" y="3" width="8" height="10" rx="2"/><rect x="13" y="8" width="8" height="13" rx="2"/><rect x="3" y="15" width="8" height="6" rx="2"/></svg>
-            <span><b>Create a cinematic album</b><small>2 to 4 photos become a 9:16 poster</small></span></button>
             <button class="pitem" type="button" role="menuitem" data-act="thumb">
             <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 15 5-4 4 3 3-2 6 4"/></svg>
             <span><b>Create a thumbnail</b><small>YouTube thumbnail with your title and photo</small></span></button>
@@ -3335,7 +3332,6 @@ body:not(.chatting) #v-chat.on{padding-top:12vh;padding-bottom:0}
         <input type="file" id="fcam" hidden accept="image/*" capture="environment">
         <input type="file" id="fsolve" hidden accept="image/*">
         <input type="file" id="fve" hidden accept="video/*,.mkv">
-        <input type="file" id="falb" hidden multiple accept="image/*">
       </div>
       <textarea id="q" rows="1" placeholder="Ask Deep OQ" aria-label="Message" autocomplete="off"></textarea>
       <button class="vlang" id="rsBtn" type="button" aria-pressed="false" title="Research mode: searches many sites, opens pages and writes a cited answer">Research</button>
@@ -3625,7 +3621,6 @@ body:not(.chatting) #v-chat.on{padding-top:12vh;padding-bottom:0}
 const $=s=>document.querySelector(s);
 const log=$('#log'),scroller=$('#scroll'),box=$('#q'),send=$('#send');
 let sid=uid(),busy=false,att=null,imgMode=false,attBusy=false;
-let albumMode=false,albumImgs=[];
 let vidMode=false;
 let thumbMode=false;
 
@@ -3958,7 +3953,6 @@ pmenu.querySelectorAll('.pitem').forEach(b=>b.onclick=()=>{
   else if(a==='video')$('#fve').click();
   else if(a==='thumb'){setImgMode(false);vidMode=false;thumbMode=true;box.placeholder='Title | scene (example: MY FIRST CAR | standing on a luxury car)';$('#fq').click();box.focus()}
   else if(a==='mkvideo'){setImgMode(false);vidMode=true;box.placeholder='Describe the video you want';box.focus()}
-  else if(a==='album'){$('#falb').click()}
   else{setImgMode(true);box.focus()}
 });
 $('#fpe').onchange=e=>{const f=e.target.files[0];e.target.value='';if(f){showView('photo');loadPhoto(f)}};
