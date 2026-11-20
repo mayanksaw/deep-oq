@@ -7495,7 +7495,7 @@ def makevideo_route():
         shutil.rmtree(work, ignore_errors=True)
         _video_slot.release()
     return send_file(io.BytesIO(data), mimetype="video/mp4", download_name="deep-oq-video.mp4")
-  @app.post("/editphoto")
+@app.post("/editphoto")
 def editphoto_route():
     if denied():
         return jsonify(error="locked"), 401
