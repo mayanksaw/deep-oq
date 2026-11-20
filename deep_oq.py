@@ -6128,7 +6128,7 @@ const GAMES=[['Pop bubbles',gPop],['Whack a mole',gMole],['Memory match',gMem],[
 function gMenu(){
   gEnter();gClear();gTxt(0,0.95,'Pick a game: pinch it',3);
   Object.keys(BR).forEach((k,i)=>gBtn((i-3.5)*0.5,0.95,BR[k],()=>gBrowse(k,0,''),{w:0.48,h:0.2,tw:1.6,color:k===cat?'#1f9a4a':'#2d3cff'}));
-  gBtn(1.75,0.95,'Search',()=>gKeys('Search '+BR[cat],t=>gBrowse(cat,0,t),q),{w:0.48,h:0.2,tw:1.6,color:'#5a3fa8'});
+  gBtn(-1.4,-0.9,'Search',()=>gKeys('Search '+BR[cat],t=>gBrowse(cat,0,t),q),{w:0.5,h:0.2,tw:1.8,color:'#5a3fa8'});,()=>gKeys('Search '+BR[cat],t=>gBrowse(cat,0,t),q),{w:0.48,h:0.2,tw:1.6,color:'#5a3fa8'});
   GAMES.forEach((g,i)=>gBtn(((i%2)-0.5)*1.1,0.65-Math.floor(i/2)*0.27,g[0],()=>g[1](),{w:1.0,h:0.22,tw:2.2}));
   const LN=['Normal','Long','Marathon'],SPN=['Slow','Normal','Fast'],SPV=[0.7,1,1.5],LV=[1,2,4];
   const lb=gBtn(-0.55,-0.97,'Length: '+LN[LV.indexOf(GLEN)],()=>{GLEN=LV[(LV.indexOf(GLEN)+1)%3];gLab(lb,'Length: '+LN[LV.indexOf(GLEN)])},{w:1.0,h:0.22,tw:2.2,color:'#5a3fa8'});
