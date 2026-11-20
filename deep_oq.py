@@ -7611,17 +7611,7 @@ def editphoto_route():
     except Exception as e:
         print("editphoto failed:", e)
         return jsonify(error="Could not edit the photo right now."), 500
-    def _bold_font(size):
-    from PIL import ImageFont
-    for p in ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-              "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"):
-        if os.path.exists(p):
-            return ImageFont.truetype(p, size)
-    try:
-        return ImageFont.load_default(size=size)
-    except TypeError:
-        return ImageFont.load_default()
-
+    
 
 def _rep_image_edit(prompt, image, token):
     import urllib.request as _ur
@@ -7655,44 +7645,7 @@ def _rep_image_edit(prompt, image, token):
     raise last
 
 
-def _compose_thumbnail(raw, title):
-    from PIL import Image, ImageDraw, ImageOps
-    im = Image.open(io.BytesIO(raw)).convert("RGB")
-    im = ImageOps.fit(im, (1280, 720), Image.LANCZOS)
-    shade = Image.new("RGBA", (1280, 720), (0, 0, 0, 0))
-    sd = ImageDraw.Draw(shade)
-    for x in range(800):
-        sd.line([(x, 0), (x, 720)], fill=(0, 0, 0, int(170 * (1 - x / 800))))
-    im = Image.alpha_composite(im.convert("RGBA"), shade)
-    title = title.upper().strip()
-    if title:
-        d = ImageDraw.Draw(im)
-        maxw, maxh, size = 760, 560, 150
-        while True:
-            font = _bold_font(size)
-            lines, cur = [], ""
-            for wd in title.split():
-                t = (cur + " " + wd).strip()
-                if cur and d.textlength(t, font=font) > maxw:
-                    lines.append(cur)
-                    cur = wd
-                else:
-                    cur = t
-            if cur:
-                lines.append(cur)
-            lh = int(size * 1.1)
-            widest = max(d.textlength(x, font=font) for x in lines)
-            if (len(lines) * lh <= maxh and widest <= maxw) or size <= 40:
-                break
-            size -= 6
-        y = (720 - len(lines) * lh) // 2
-        for i, line in enumerate(lines):
-            d.text((50, y + i * lh), line, font=font,
-                   fill=(255, 230, 0) if i == 0 else (255, 255, 255),
-                   stroke_width=max(4, size // 14), stroke_fill=(0, 0, 0))
-    out = io.BytesIO()
-    im.convert("RGB").save(out, "JPEG", quality=92)
-    return out.getvalue()
+
 
 def _fit_thumb(raw):
     from PIL import Image, ImageOps
