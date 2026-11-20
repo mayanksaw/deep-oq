@@ -3264,6 +3264,7 @@ body:not(.chatting) #v-chat.on{padding-top:12vh;padding-bottom:0}
     <button class="tab" type="button" data-view="video">Video</button>
     <button class="tab" type="button" data-view="lab">Lab</button>
     <button class="tab" type="button" data-view="news">News</button>
+    <button class="tab" type="button" data-view="music">Music</button>
     <a class="tab" href="/vr" style="text-decoration:none;display:inline-flex;align-items:center;background:linear-gradient(135deg,#00c9a7,#2f8cff);color:#04122b;font-weight:700">VR</a>
   </nav>
   <div class="tools" id="chatTools">
@@ -3304,19 +3305,10 @@ body:not(.chatting) #v-chat.on{padding-top:12vh;padding-bottom:0}
         <div class="pmenu" id="pmenu" role="menu" hidden>
           <button class="pitem" type="button" role="menuitem" data-act="ask">
             <svg viewBox="0 0 24 24"><path d="M21 11.5l-8.6 8.6a5 5 0 0 1-7-7l8.6-8.6a3.4 3.4 0 0 1 4.9 4.9l-8.6 8.6a1.7 1.7 0 0 1-2.4-2.4l7.9-7.9"/></svg>
-            <span><b>Upload to ask a question</b><small>Image, video, PDF or text file</small></span></button>
+            <span><b>Upload to ask a question or anything</b><small>Image, video, PDF or text file</small></span></button>
           <button class="pitem" type="button" role="menuitem" data-act="solve">
             <svg viewBox="0 0 24 24"><path d="M18 5H7l6 7-6 7h11"/></svg>
-            <span><b>Solve a question from a photo</b><small>Maths, science or exam question</small></span></button>
-          <button class="pitem" type="button" role="menuitem" data-act="camera">
-            <svg viewBox="0 0 24 24"><path d="M4 8h3l1.6-2.4h6.8L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.6"/></svg>
-            <span><b>Take a photo</b><small>Use your camera, then ask about it</small></span></button>
-          <button class="pitem" type="button" role="menuitem" data-act="photo">
-            <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="1.8"/><path d="m21 16-5-5-8 9"/></svg>
-            <span><b>Edit a photo</b><small>Opens the Photo editor</small></span></button>
-          <button class="pitem" type="button" role="menuitem" data-act="video">
-            <svg viewBox="0 0 24 24"><rect x="3" y="6" width="13" height="12" rx="3"/><path d="m16 10 5-3v10l-5-3z"/></svg>
-            <span><b>Edit a video</b><small>Opens the Video editor</small></span></button>
+            <span><b>Solve a question from a photo or anything</b><small>Maths, science or exam question</small></span></button>
           <button class="pitem" type="button" role="menuitem" data-act="image">
             <svg viewBox="0 0 24 24"><path d="M12 3l1.8 4.7 4.7 1.8-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z"/><path d="M19 15l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z"/></svg>
             <span><b>Create an image</b><small>Describe it and Deep OQ draws it</small></span></button>
@@ -3529,7 +3521,20 @@ body:not(.chatting) #v-chat.on{padding-top:12vh;padding-bottom:0}
     </div>
   </div>
 </section>
-
+<section class="view studio" id="v-music">
+  <div class="wrap">
+    <h2 class="st-title">Music</h2>
+    <p class="st-sub">Search a song, artist or album, or paste a Spotify link. It plays in the Spotify player below.</p>
+    <div class="panel">
+      <input class="in" id="sp-q" type="text" placeholder="Song, artist, album or a Spotify link" aria-label="Search Spotify">
+      <div><button class="primary" id="sp-go" type="button">Search</button></div>
+      <p class="muted" id="sp-stat" aria-live="polite"></p>
+      <iframe id="sp-frame" hidden title="Spotify player" width="100%" height="352" style="border:0;border-radius:14px"
+        allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture" loading="lazy"></iframe>
+      <div id="sp-list"></div>
+    </div>
+  </div>
+</section>
 <section class="view studio" id="v-video">
   <div class="wrap">
     <h2 class="st-title">Video</h2>
@@ -4392,7 +4397,7 @@ $('#drawer').setAttribute('aria-hidden','true');
 stats();box.focus();
 
 /* ================= tabs ================= */
-const VIEWS=['chat','code','photo','video','lab','news'];
+const VIEWS=['chat','code','photo','video','lab','news','music'];
 function showView(v){
   if(!VIEWS.includes(v))v='chat';
   document.body.dataset.view=v;
@@ -5062,7 +5067,31 @@ $('#naff').onclick=async()=>{
 };
 document.querySelector('.tab[data-view="news"]').addEventListener('click',()=>{if(!nitems.length)loadNews()});setInterval(()=>{if(document.body.dataset.view==='news'&&!document.hidden&&$('#nbout').hidden&&ncat!=='local'&&ncat!=='search')loadNews()},300000);
 applyNews();
-
+/* ================= music (Spotify) ================= */
+(function(){
+  const fr=$('#sp-frame'),list=$('#sp-list'),st=$('#sp-stat');
+  const play=(type,id)=>{fr.src='https://open.spotify.com/embed/'+type+'/'+id;fr.hidden=false};
+  const parse=u=>{const m=u.match(/open\.spotify\.com\/(?:intl-[a-z]+\/)?(track|album|playlist|artist|episode|show)\/([A-Za-z0-9]+)/);return m?[m[1],m[2]]:null};
+  async function go(){
+    const q=$('#sp-q').value.trim();if(!q)return;
+    const p=parse(q);if(p){play(p[0],p[1]);st.textContent='';return}
+    st.textContent='Searching...';list.innerHTML='';
+    try{
+      const r=await api('/spotify/search',{q}),j=await r.json();
+      if(!r.ok||j.error)throw new Error(j.error||'Search failed.');
+      st.textContent=j.items.length?'':'Nothing found.';
+      j.items.forEach(it=>{
+        const b=document.createElement('button');b.type='button';b.className='btn';
+        b.style.cssText='display:block;width:100%;text-align:left;margin:6px 0;white-space:normal';
+        b.textContent=it.name+' - '+it.by+' ('+it.type+')';
+        b.onclick=()=>{play(it.type,it.id);fr.scrollIntoView({behavior:'smooth',block:'nearest'})};
+        list.append(b);
+      });
+    }catch(e){st.textContent=e.message}
+  }
+  $('#sp-go').onclick=go;
+  $('#sp-q').addEventListener('keydown',e=>{if(e.key==='Enter')go()});
+})();
 showView(location.hash.slice(1));(function(){let ctl=null,on=false;const SI=send.innerHTML,XI='<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>',f0=window.fetch;window.fetch=function(u,o){if(u==='/ask_stream'){ctl=new AbortController();o=Object.assign({},o,{signal:ctl.signal})}return f0.call(this,u,o)};send.addEventListener('click',function(e){if(on){e.preventDefault();e.stopImmediatePropagation();ctl.abort()}},true);setInterval(function(){const now=!!(busy&&ctl&&!ctl.signal.aborted);if(!busy)ctl=null;if(now!==on){on=now;send.innerHTML=on?XI:SI;send.setAttribute('aria-label',on?'Stop answer':'Send')}if(on)send.disabled=false},100)})();
 
 </script>
@@ -7756,6 +7785,50 @@ def thumbnail_route():
     finally:
         shutil.rmtree(work, ignore_errors=True)
     return jsonify(image="data:image/jpeg;base64," + base64.b64encode(data).decode(), note=note)
+  _sp = {"tok": "", "exp": 0}
+
+
+def _spotify_token():
+    cid = os.environ.get("SPOTIFY_CLIENT_ID", "").strip()
+    sec = os.environ.get("SPOTIFY_CLIENT_SECRET", "").strip()
+    if not cid or not sec:
+        raise ValueError("Search needs SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET on Render. You can still paste a Spotify link.")
+    if time.time() < _sp["exp"] - 30:
+        return _sp["tok"]
+    auth = base64.b64encode((cid + ":" + sec).encode()).decode()
+    req = urllib.request.Request("https://accounts.spotify.com/api/token", b"grant_type=client_credentials",
+                                 {"Authorization": "Basic " + auth, "Content-Type": "application/x-www-form-urlencoded"})
+    with urllib.request.urlopen(req, timeout=15) as r:
+        j = json.load(r)
+    _sp.update(tok=j["access_token"], exp=time.time() + j.get("expires_in", 3600))
+    return _sp["tok"]
+
+
+@app.post("/spotify/search")
+def spotify_search():
+    if denied():
+        return jsonify(error="locked"), 401
+    q = str((request.get_json(silent=True) or {}).get("q", "")).strip()[:100]
+    if not q:
+        return jsonify(error="Type a song, artist or album."), 400
+    try:
+        req = urllib.request.Request(
+            "https://api.spotify.com/v1/search?type=track,album&limit=8&q=" + urllib.parse.quote(q),
+            headers={"Authorization": "Bearer " + _spotify_token()})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            j = json.load(r)
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+    except Exception as e:
+        print("spotify failed:", e)
+        return jsonify(error="Spotify did not answer. Try again."), 502
+    items = []
+    for kind, key in (("track", "tracks"), ("album", "albums")):
+        for it in (j.get(key) or {}).get("items") or []:
+            if it:
+                items.append({"type": kind, "id": it["id"], "name": it["name"],
+                              "by": ", ".join(a["name"] for a in it.get("artists", []))})
+    return jsonify(items=items)
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "ingest":
         ingest(sys.argv[2:])
