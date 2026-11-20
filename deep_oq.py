@@ -7343,6 +7343,8 @@ def makevideo_route():
     if not idea:
         return jsonify(error="Describe the video first."), 400
     low = idea.lower()
+    clean = re.sub(r"(?i)\b(\d+\s*scenes?|\d+\s*(seconds?|secs?|s)\s*(each|per scene)|no\s+(music|voice|narration|captions?)|(use\s+)?(hindi|english)\s+(song|music)|(use\s+)?music|(ai|real)\s+motion|(stock|real|online)\s+video)\b", " ", idea)
+    clean = re.sub(r"(\s*,)+", ",", clean).strip(" ,")
     voice = not re.search(r"no (voice|narration)", low)
     music = "no music" not in low
     caps = "no caption" not in low
@@ -7372,6 +7374,9 @@ def makevideo_route():
             if ip:
                 scenes.append((ip[:400], nar[:300]))
         scenes = scenes[:n]
+        if "|" in idea:
+            parts = [p.strip() for p in clean.split("|") if p.strip()]
+            scenes = [(p[:400], p[:300]) for p in parts][:n]
         if not scenes:
             return jsonify(error="Could not plan the video. Try again."), 502
         from concurrent.futures import ThreadPoolExecutor
