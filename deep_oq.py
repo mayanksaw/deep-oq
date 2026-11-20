@@ -5076,19 +5076,20 @@ applyNews();
     const q=$('#sp-q').value.trim();if(!q)return;
     const p=parse(q);if(p){play(p[0],p[1]);st.textContent='';return}
     st.textContent='Searching...';list.innerHTML='';
-    try{
-      const r=await api('/spotify/search',{q}),j=await r.json();
+        try{
+      const r=await api('/music/search',{q}),j=await r.json();
       if(!r.ok||j.error)throw new Error(j.error||'Search failed.');
-      st.textContent=j.items.length?'':'Nothing found.';
+      st.textContent=j.items.length?'30 second previews:':'Nothing found.';
       j.items.forEach(it=>{
-        const b=document.createElement('button');b.type='button';b.className='btn';
-        b.style.cssText='display:block;width:100%;text-align:left;margin:6px 0;white-space:normal';
-        b.textContent=it.name+' - '+it.by+' ('+it.type+')';
-        b.onclick=()=>{play(it.type,it.id);fr.scrollIntoView({behavior:'smooth',block:'nearest'})};
-        list.append(b);
+        const row=document.createElement('div');
+        row.style.cssText='display:flex;gap:12px;align-items:center;margin:10px 0;flex-wrap:wrap';
+        const im=document.createElement('img');im.src=it.art;im.alt='';im.width=56;im.height=56;im.style.borderRadius='8px';
+        const t=document.createElement('div');t.style.cssText='flex:1;min-width:160px';t.textContent=it.name+' - '+it.by;
+        const a=document.createElement('audio');a.controls=true;a.preload='none';a.src=it.preview;
+        a.addEventListener('play',()=>list.querySelectorAll('audio').forEach(x=>{if(x!==a)x.pause()}));
+        row.append(im,t,a);list.append(row);
       });
     }catch(e){st.textContent=e.message}
-  }
   $('#sp-go').onclick=go;
   $('#sp-q').addEventListener('keydown',e=>{if(e.key==='Enter')go()});
 })();
@@ -7803,35 +7804,27 @@ def _spotify_token():
     return _sp["tok"]
 
 
-@app.post("/spotify/search")
-def spotify_search():
+@app.post("/music/search")
+def music_search():
     if denied():
         return jsonify(error="locked"), 401
     q = str((request.get_json(silent=True) or {}).get("q", "")).strip()[:100]
     if not q:
         return jsonify(error="Type a song, artist or album."), 400
     try:
-        req = urllib.request.Request(
-            "https://api.spotify.com/v1/search?type=track,album&limit=8&q=" + urllib.parse.quote(q),
-            headers={"Authorization": "Bearer " + _spotify_token()})
-        with urllib.request.urlopen(req, timeout=15) as r:
-            j = json.load(r)
-    except ValueError as e:
-        return jsonify(error=str(e)), 400
-    except urllib.error.HTTPError as e:
-        body = e.read()[:300].decode("utf-8", "replace")
-        print("spotify failed:", e.code, e.url, body)
-        return jsonify(error="Spotify error %d (%s): %s" % (e.code, e.url.split("?")[0].split("/")[-1], body[:150])), 502
+        j = _get_json("https://itunes.apple.com/search?media=music&entity=song&limit=12&term="
+                      + urllib.parse.quote(q))
     except Exception as e:
-        print("spotify failed:", e)
-        return jsonify(error="Spotify did not answer. Try again."), 502
+        print("music search failed:", e)
+        return jsonify(error="Music search did not answer. Try again."), 502
     items = []
-    for kind, key in (("track", "tracks"), ("album", "albums")):
-        for it in (j.get(key) or {}).get("items") or []:
-            if it:
-                items.append({"type": kind, "id": it["id"], "name": it["name"],
-                              "by": ", ".join(a["name"] for a in it.get("artists", []))})
+    for it in j.get("results", []):
+        if it.get("previewUrl"):
+            items.append({"name": it.get("trackName", ""), "by": it.get("artistName", ""),
+                          "preview": it["previewUrl"],
+                          "art": (it.get("artworkUrl100") or "").replace("100x100", "200x200")})
     return jsonify(items=items)
+  
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "ingest":
         ingest(sys.argv[2:])
