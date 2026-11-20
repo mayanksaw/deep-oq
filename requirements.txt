@@ -10,3 +10,9 @@ psycopg2-binary
 sympy>=1.12
 anthropic>=0.40.0
 pyflakes
+fastapi
+uvicorn[standard]
+httpx
+sympy
+mpmath
+pydantic
