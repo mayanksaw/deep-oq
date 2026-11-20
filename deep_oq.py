@@ -6217,6 +6217,56 @@ function gYT(start){
   key(1.0,y,'Close',gExit,{w:0.4,tw:2.4,color:'#a02020'});
   show();gRefresh();
 }
+/* ===== Movies on the cinema screen (Internet Archive), with the pinch keyboard ===== */
+function gKeys(title,onSearch,start){
+  gEnter();gClear();
+  let q=start||'';
+  gTxt(0,1.1,title,2.8);
+  const disp=gTxt(0,0.88,'',3.2,'#ffd54a'),msg=gTxt(0,0.72,'',2.6,'#cfd6ff');
+  const show=()=>gSet(disp,(q||'type here')+' _');
+  const key=(x,y,label,fn,o)=>gBtn(x,y,label,fn,Object.assign({w:0.22,h:0.2,tw:3},o||{}));
+  ['1234567890','QWERTYUIOP','ASDFGHJKL','ZXCVBNM'].forEach((row,r)=>{
+    row.split('').forEach((k,i)=>key((i-(row.length-1)/2)*0.24,0.52-r*0.23,k,()=>{if(q.length<60){q+=k.toLowerCase();beep(500);show()}}));
+  });
+  key(1.0,0.52-3*0.23,'Del',()=>{q=q.slice(0,-1);show()},{w:0.4,tw:2.4,color:'#a02020'});
+  const y=0.52-4*0.23;
+  key(-0.7,y,'Space',()=>{if(q.length<60&&!q.endsWith(' ')){q+=' ';show()}},{w:0.7,tw:2.4});
+  key(0.0,y,'Search',()=>{if(q.trim())onSearch(q.trim());else gSet(msg,'Type something first')},{w:0.6,tw:2.4,color:'#1f9a4a'});
+  key(0.55,y,'Mic',()=>{
+    const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+    if(!SR){gSet(msg,'Voice is not available here. Use the keyboard.');return}
+    const r=new SR();r.lang=navigator.language||'en-US';gSet(msg,'Listening...');
+    r.onresult=e=>{q=e.results[0][0].transcript.slice(0,60);show();onSearch(q)};
+    r.onerror=()=>gSet(msg,'I could not hear you. Try the keyboard.');
+    r.start();
+  },{w:0.4,tw:2.4,color:'#5a3fa8'});
+  key(1.0,y,'Close',gExit,{w:0.4,tw:2.4,color:'#a02020'});
+  show();gRefresh();
+}
+async function movieSearch(q){
+  gClear();gTxt(0,0.5,'Searching for '+q+'...',3);gRefresh();
+  try{
+    const r=await post('/movies/ia',{q}),j=await r.json().catch(()=>({}));
+    if(!r.ok||j.error)throw new Error(j.error||'Search failed. Log in to Deep OQ in this browser first.');
+    gClear();
+    if(!j.items.length){gTxt(0,0.6,'Nothing found for '+q,3);gBtn(0,0.1,'Back',()=>gMovie(q),{w:0.8,tw:2});gRefresh();return}
+    gTxt(0,1.05,'Pinch a movie to put it on the cinema screen',2.8);
+    j.items.slice(0,6).forEach((it,i)=>gBtn(0,0.72-i*0.27,it.name.slice(0,46),()=>movieLoad(it),{w:2.4,h:0.24,tw:2.3}));
+    gBtn(-0.5,-0.95,'Search again',()=>gMovie(q),{w:0.9,tw:2.2});
+    gBtn(0.5,-0.95,'Close',gExit,{w:0.9,tw:2.2,color:'#a02020'});
+    gRefresh();
+  }catch(e){gClear();gTxt(0,0.6,e.message,3);gBtn(0,0.1,'Back',()=>gMovie(q),{w:0.8,tw:2});gRefresh()}
+}
+async function movieLoad(it){
+  gClear();gTxt(0,0.5,'Loading '+it.name.slice(0,40)+'...',3);gRefresh();
+  try{
+    const r=await post('/movies/ia/file',{id:it.id}),j=await r.json().catch(()=>({}));
+    if(!r.ok||j.error)throw new Error(j.error||'Could not load it.');
+    lastFile=null;loadMovie(j.url,it.name);
+  }catch(e){gClear();gTxt(0,0.6,e.message,3);gBtn(0,0.1,'Back',()=>gMovie(),{w:0.8,tw:2});gRefresh()}
+}
+function gMovie(start){gKeys('Movies: type a title, or press Mic',movieSearch,typeof start==='string'?start:'')}
+addBtn('Movies',-0.43,1.32,()=>gMovie());
 document.querySelector('#ygo').onclick=async()=>{
   const q=document.querySelector('#yq').value.trim(),list=document.querySelector('#ylist');
   if(!q)return;
@@ -7965,6 +8015,42 @@ def music_yt():
                           "art": ((sn.get("thumbnails") or {}).get("default") or {}).get("url", "")})
     _yt_cache[q.lower()] = (time.time(), items)
     return jsonify(items=items)
+  @app.post("/movies/ia")
+def movies_ia():
+    if denied():
+        return jsonify(error="locked"), 401
+    q = re.sub(r"[^\w ]", "", str((request.get_json(silent=True) or {}).get("q", ""))).strip()[:60]
+    if not q:
+        return jsonify(error="Type a movie name."), 400
+    query = ("title:(%s) AND mediatype:movies AND collection:(feature_films OR classic_cartoons OR prelinger)" % q)
+    url = ("https://archive.org/advancedsearch.php?q=" + urllib.parse.quote(query)
+           + "&fl[]=identifier&fl[]=title&rows=8&sort[]=downloads+desc&output=json")
+    try:
+        docs = _get_json(url)["response"]["docs"]
+    except Exception as e:
+        print("archive search failed:", e)
+        return jsonify(error="The movie search did not answer. Try again."), 502
+    return jsonify(items=[{"id": d["identifier"], "name": str(d.get("title", ""))[:80]} for d in docs])
+
+
+@app.post("/movies/ia/file")
+def movies_ia_file():
+    if denied():
+        return jsonify(error="locked"), 401
+    ident = str((request.get_json(silent=True) or {}).get("id", ""))
+    if not re.fullmatch(r"[\w.\-]{1,120}", ident):
+        return jsonify(error="Bad movie id."), 400
+    try:
+        files = _get_json("https://archive.org/metadata/" + ident).get("files", [])
+    except Exception as e:
+        print("archive metadata failed:", e)
+        return jsonify(error="Could not open that movie."), 502
+    mp4 = [f for f in files if str(f.get("name", "")).lower().endswith(".mp4")]
+    if not mp4:
+        return jsonify(error="That item has no MP4 video. Try another."), 404
+    best = min(mp4, key=lambda f: int(f.get("size") or 10**12))  # the smallest MP4 starts fastest
+    return jsonify(url="https://archive.org/download/%s/%s" % (ident, urllib.parse.quote(best["name"])),
+                   name=str(best["name"])[:80])
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "ingest":
         ingest(sys.argv[2:])
