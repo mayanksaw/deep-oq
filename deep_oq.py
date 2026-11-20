@@ -7826,7 +7826,7 @@ def music_search():
                           "preview": it["previewUrl"],
                           "art": (it.get("artworkUrl100") or "").replace("100x100", "200x200")})
     return jsonify(items=items)
-  _yt_cache = {}
+_yt_cache = {}
 
 
 @app.post("/music/yt")
