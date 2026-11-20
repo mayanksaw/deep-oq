@@ -7816,8 +7816,12 @@ def spotify_search():
             headers={"Authorization": "Bearer " + _spotify_token()})
         with urllib.request.urlopen(req, timeout=15) as r:
             j = json.load(r)
-    except ValueError as e:
+       except ValueError as e:
         return jsonify(error=str(e)), 400
+    except urllib.error.HTTPError as e:
+        body = e.read()[:300].decode("utf-8", "replace")
+        print("spotify failed:", e.code, e.url, body)
+        return jsonify(error="Spotify error %d (%s): %s" % (e.code, e.url.split("?")[0].split("/")[-1], body[:150])), 502
     except Exception as e:
         print("spotify failed:", e)
         return jsonify(error="Spotify did not answer. Try again."), 502
