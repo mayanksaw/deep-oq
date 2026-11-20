@@ -4232,57 +4232,7 @@ async function makeThumbChat(q,a){
   }catch(e){botFail(bot,e)}
   busy=false;send.disabled=!canSend();toEnd();box.focus();
 }
-</script>
-</body>
-</html>
-"""
-@app.post("/thumbnail")
-def thumbnail_route():
-    if denied():
-        return jsonify(error="locked"), 401
-    d = request.get_json(silent=True) or {}
-    title = str(d.get("title", "")).strip()[:300]
-    scene = str(d.get("scene", "")).strip()[:1500]
-    side = str(d.get("side", "left"))
-    image = str(d.get("image", ""))[:8_000_000]
-    if not title:
-        return jsonify(error="Write the thumbnail title first."), 400
-    place = {"left": "Place the person on the right side of the frame and leave empty space on the left.",
-             "right": "Place the person on the left side of the frame and leave empty space on the right.",
-             "center": "Place the person in the middle and keep the bottom of the frame less busy."}.get(
-        side, "Place the person on the right side of the frame.")
-    token = os.environ.get("REPLICATE_API_TOKEN", "").strip()
-    raw, note = None, ""
-    if image.startswith("data:image/") and token:
-        try:
-            raw = _rep_image_edit(
-                "Create an eye-catching YouTube thumbnail image, 16:9. Scene: " + scene +
-                ". Keep the same person with exactly the same face, hairstyle and clothes. " + place +
-                " Vibrant colors, dramatic lighting, high contrast. No text, no letters, no watermark.",
-                image, token)
-        except Exception as e:
-            print("thumbnail edit failed:", e)
-            note = "Photo editing failed, so the background is a new picture."
-    elif image.startswith("data:image/"):
-        note = "REPLICATE_API_TOKEN is not set, so your photo was not used."
-    work = tempfile.mkdtemp(prefix="oq_")
-    try:
-        if raw is None:
-            path = os.path.join(work, "bg.jpg")
-            ok = _fetch_scene_image("YouTube thumbnail background, " + scene +
-                                    ", vibrant colors, dramatic lighting, high contrast, no text, no letters",
-                                    random.randint(1, 10**6), path)
-            if not ok:
-                return jsonify(error="The picture service did not answer. Try again in a moment."), 502
-            with open(path, "rb") as f:
-                raw = f.read()
-        data = _fit_thumb(raw)
-    except Exception as e:
-        print("thumbnail failed:", e)
-        return jsonify(error="Could not make the thumbnail right now."), 500
-    finally:
-        shutil.rmtree(work, ignore_errors=True)
-    return jsonify(image="data:image/jpeg;base64," + base64.b64encode(data).decode(), note=note)
+
 function submit(){
   const q=box.value.trim();
   if(busy||attBusy)return;
