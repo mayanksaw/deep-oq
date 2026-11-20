@@ -4232,6 +4232,10 @@ async function makeThumbChat(q,a){
   }catch(e){botFail(bot,e)}
   busy=false;send.disabled=!canSend();toEnd();box.focus();
 }
+</script>
+</body>
+</html>
+"""
 @app.post("/thumbnail")
 def thumbnail_route():
     if denied():
