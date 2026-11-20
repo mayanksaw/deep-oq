@@ -4030,7 +4030,8 @@ function renderAtts(note){
     el.append(c);
   };
   if(note)chip('',note,null);
-  if(att)chip(att.thumb||'',(att.kind==='video'?'Video: ':att.kind==='doc'?'File: ':att.solve?'Question photo: ':'')+att.name,clearAtt);
+  if(att&&att.all){att.all.forEach((p,i)=>chip(p.data,(att.solve?'Question: ':'')+p.name,()=>{setPhotos(att.all.filter((_,j)=>j!==i),att.solve);renderAtts()}))}
+  else if(att)chip(att.thumb||'',(att.kind==='video'?'Video: ':att.kind==='doc'?'File: ':att.solve?'Question photo: ':'')+att.name,clearAtt);
   if(imgMode)chip('','Create image: describe it below',()=>setImgMode(false));
   el.hidden=!el.children.length;
   box.placeholder=imgMode?'Describe the image you want':att&&att.solve?'Add a note (optional), then press send':att?'Ask something about this file':'Ask Deep OQ';
@@ -4100,29 +4101,22 @@ async function attach(f,opts){
     el.append(c);setTimeout(()=>{c.remove();el.hidden=!el.children.length},9000);
   }
 }
+function setPhotos(list,solve){
+  if(!list.length){att=null;return}
+  if(list.length===1){att={kind:'image',name:list[0].name,data:list[0].data,doc:list[0].doc,thumb:list[0].data,solve:solve};return}
+  att={kind:'image',name:list.length+' photos',all:list,data:list[0].data,doc:list[0].doc,thumb:list[0].data,count:list.length,solve:solve};
+}
 function attachMany(fs,opts){
-  const imgs=fs.filter(f=>f.type.startsWith('image/')).slice(0,6);
-  if(imgs.length<2)return attach(fs[0],opts);
+  const imgs=fs.filter(f=>f.type.startsWith('image/'));
+  const old=att&&att.kind==='image'?(att.all||[{name:att.name,data:att.data,doc:att.doc}]):[];
+  if(!imgs.length||(imgs.length<2&&!old.length))return attach(fs[0],opts);
   (async()=>{
-    imgMode=false;att=null;attBusy=true;renderAtts('Reading '+imgs.length+' photos...');
+    attBusy=true;imgMode=false;renderAtts('Reading photos...');
     try{
-      if(opts&&opts.solve){
-        const all=[];
-        for(const f of imgs)all.push({data:await shrinkImage(f),doc:await shrinkImage(f,1800,true)});
-        att={kind:'image',name:imgs.length+' question photos',data:all[0].data,doc:all[0].doc,thumb:all[0].data,solve:true,all:all,count:imgs.length};
-      }else{
-        const ims=await Promise.all(imgs.map(async f=>loadImg(await shrinkImage(f,900))));
-        const cols=ims.length>4?3:2,rows=Math.ceil(ims.length/cols),cw=700,ch=700;
-        const c=document.createElement('canvas');c.width=cols*cw;c.height=rows*ch;
-        const g=c.getContext('2d');g.fillStyle='#fff';g.fillRect(0,0,c.width,c.height);
-        ims.forEach((im,i)=>{
-          const k=Math.min((cw-8)/im.width,(ch-8)/im.height),w=im.width*k,h=im.height*k;
-          g.drawImage(im,(i%cols)*cw+(cw-w)/2,Math.floor(i/cols)*ch+(ch-h)/2,w,h);
-        });
-        const d=c.toDataURL('image/jpeg',.88);
-        att={kind:'image',name:imgs.length+' photos',data:d,doc:d,thumb:d,count:imgs.length,solve:false};
-      }
-    }catch(e){att=null;alert(e.message)}
+      const add=[];
+      for(const f of imgs.slice(0,8-old.length))add.push({name:f.name,data:await shrinkImage(f),doc:await shrinkImage(f,1800,true)});
+      setPhotos(old.concat(add),!!((opts&&opts.solve)||(att&&att.solve)));
+    }catch(e){alert(e.message)}
     attBusy=false;renderAtts();
   })();
 }
@@ -4234,12 +4228,17 @@ async function askExtra(q,a,mode){
       if(r.status===401)throw new Error('That access key was not accepted. Reload the page and enter it again.');
       if(!r.ok||j.error)throw new Error(j.error||'The server did not answer.');
       botDone(bot,j.answer);
-    }else{
-      const lead=a.kind==='video'?'These four pictures are frames taken in order (left to right, top to bottom) from one video. ':a.count?'This picture is a grid of '+a.count+' separate photos, in order left to right, top to bottom. ':'';
-      const r=await api('/lab',{mod:'vision',text:lead+(q||'Describe this '+(a.kind==='video'?'video':'photo')+' in detail.'),image:a.data,session:sid,label:q||(a.kind==='video'?'Explain this video':'Describe this photo')}),j=await r.json().catch(()=>({}));
-      if(r.status===401)throw new Error('That access key was not accepted. Reload the page and enter it again.');
-      if(!r.ok||j.error)throw new Error(j.error||'The server did not answer.');
-      botDone(bot,(a.kind==='video'?'*I looked at four frames from your video. I cannot hear its sound.*\n\n':'')+j.answer);
+    else{
+      const list=a.all||[a];let out='';
+      for(let i=0;i<list.length;i++){
+        const w=bot.querySelector('.wait');if(w&&list.length>1)w.textContent='Looking at photo '+(i+1)+' of '+list.length;
+        const lead=a.kind==='video'?'These four pictures are frames taken in order (left to right, top to bottom) from one video. ':'';
+        const r=await api('/lab',{mod:'vision',text:lead+(q||'Describe this '+(a.kind==='video'?'video':'photo')+' in detail.'),image:list[i].data,session:sid,label:q||(a.kind==='video'?'Explain this video':'Describe this photo')}),j=await r.json().catch(()=>({}));
+        if(r.status===401)throw new Error('That access key was not accepted. Reload the page and enter it again.');
+        if(!r.ok||j.error)throw new Error(j.error||'The server did not answer.');
+        out+=(list.length>1?'**Photo '+(i+1)+'**\n\n':'')+j.answer+'\n\n';
+      }
+      botDone(bot,(a.kind==='video'?'*I looked at four frames from your video. I cannot hear its sound.*\n\n':'')+out);
     }
   }catch(e){botFail(bot,e)}
   busy=false;send.disabled=!canSend();toEnd();box.focus();loadRecents();
