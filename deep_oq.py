@@ -8050,11 +8050,37 @@ def movies_ia_file():
     mp4 = [f for f in files if str(f.get("name", "")).lower().endswith(".mp4")]
     if not mp4:
         return jsonify(error="That item has no MP4 video. Try another."), 404
-    best = min(mp4, key=lambda f: int(f.get("size") or 10**12))
-    return jsonify(url="https://archive.org/download/%s/%s" % (ident, urllib.parse.quote(best["name"])),
+    good = [f for f in mp4 if "sample" not in f["name"].lower() and int(f.get("size") or 0) > 2_000_000]
+    best = min(good or mp4, key=lambda f: int(f.get("size") or 10**12))
+        return jsonify(url="/movies/stream?id=%s&n=%s" % (ident, urllib.parse.quote(best["name"])),
                    name=str(best["name"])[:80])
 
-
+@app.get("/movies/stream")
+def movies_stream():
+    if denied():
+        return jsonify(error="locked"), 401
+    ident = request.args.get("id", "")
+    name = request.args.get("n", "")
+    if not re.fullmatch(r"[\w.\-]{1,120}", ident) or ".." in name or not name.lower().endswith(".mp4"):
+        return jsonify(error="Bad request."), 400
+    url = "https://archive.org/download/%s/%s" % (ident, urllib.parse.quote(name))
+    hd = {"User-Agent": "DeepOQ/1.0"}
+    if request.headers.get("Range"):
+        hd["Range"] = request.headers["Range"]
+    try:
+        up = urllib.request.urlopen(urllib.request.Request(url, headers=hd), timeout=30)
+    except urllib.error.HTTPError as e:
+        up = e
+    except Exception:
+        return jsonify(error="Could not reach the movie."), 502
+    h = {k: up.headers[k] for k in ("Content-Type", "Content-Length", "Content-Range", "Accept-Ranges") if up.headers.get(k)}
+    def gen():
+        while True:
+            c = up.read(65536)
+            if not c:
+                break
+            yield c
+    return Response(gen(), status=up.status if hasattr(up, "status") else up.code, headers=h)
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "ingest":
         ingest(sys.argv[2:])
