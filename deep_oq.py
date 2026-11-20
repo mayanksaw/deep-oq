@@ -5067,27 +5067,28 @@ $('#naff').onclick=async()=>{
 };
 document.querySelector('.tab[data-view="news"]').addEventListener('click',()=>{if(!nitems.length)loadNews()});setInterval(()=>{if(document.body.dataset.view==='news'&&!document.hidden&&$('#nbout').hidden&&ncat!=='local'&&ncat!=='search')loadNews()},300000);
 applyNews();
-/* ================= music (Spotify) ================= */
+/* ================= music ================= */
 (function(){
   const fr=$('#sp-frame'),list=$('#sp-list'),st=$('#sp-stat');
-  const play=(type,id)=>{fr.src='https://open.spotify.com/embed/'+type+'/'+id;fr.hidden=false};
-  const parse=u=>{const m=u.match(/open\.spotify\.com\/(?:intl-[a-z]+\/)?(track|album|playlist|artist|episode|show)\/([A-Za-z0-9]+)/);return m?[m[1],m[2]]:null};
+  const playSp=(type,id)=>{fr.src='https://open.spotify.com/embed/'+type+'/'+id;fr.hidden=false};
+  const playYt=id=>{fr.src='https://www.youtube.com/embed/'+id+'?autoplay=1&rel=0';fr.hidden=false;fr.scrollIntoView({behavior:'smooth',block:'nearest'})};
+  const parseSp=u=>{const m=u.match(/open\.spotify\.com\/(?:intl-[a-z]+\/)?(track|album|playlist|artist|episode|show)\/([A-Za-z0-9]+)/);return m?[m[1],m[2]]:null};
+  const parseYt=u=>{const m=u.match(/(?:youtube\.com\/(?:watch\?(?:.*&)?v=|shorts\/|embed\/)|youtu\.be\/)([\w-]{11})/i);return m?m[1]:null};
   async function go(){
     const q=$('#sp-q').value.trim();if(!q)return;
-    const p=parse(q);if(p){play(p[0],p[1]);st.textContent='';return}
+    const p=parseSp(q);if(p){playSp(p[0],p[1]);st.textContent='';return}
+    const y=parseYt(q);if(y){playYt(y);st.textContent='';return}
     st.textContent='Searching...';list.innerHTML='';
-        try{
-      const r=await api('/music/search',{q}),j=await r.json();
+    try{
+      const r=await api('/music/yt',{q}),j=await r.json();
       if(!r.ok||j.error)throw new Error(j.error||'Search failed.');
-      st.textContent=j.items.length?'30 second previews:':'Nothing found.';
+      st.textContent=j.items.length?'Tap a song to play the full track:':'Nothing found.';
       j.items.forEach(it=>{
-        const row=document.createElement('div');
-        row.style.cssText='display:flex;gap:12px;align-items:center;margin:10px 0;flex-wrap:wrap';
-        const im=document.createElement('img');im.src=it.art;im.alt='';im.width=56;im.height=56;im.style.borderRadius='8px';
-        const t=document.createElement('div');t.style.cssText='flex:1;min-width:160px';t.textContent=it.name+' - '+it.by;
-        const a=document.createElement('audio');a.controls=true;a.preload='none';a.src=it.preview;
-        a.addEventListener('play',()=>list.querySelectorAll('audio').forEach(x=>{if(x!==a)x.pause()}));
-        row.append(im,t,a);list.append(row);
+        const b=document.createElement('button');b.type='button';b.className='btn';
+        b.style.cssText='display:flex;gap:12px;align-items:center;width:100%;text-align:left;margin:6px 0;white-space:normal';
+        const im=document.createElement('img');im.src=it.art;im.alt='';im.width=80;im.height=45;im.style.borderRadius='6px';
+        const t=document.createElement('span');t.textContent=it.name+' - '+it.by;
+        b.append(im,t);b.onclick=()=>playYt(it.id);list.append(b);
       });
     }catch(e){st.textContent=e.message}
   }
@@ -7825,7 +7826,42 @@ def music_search():
                           "preview": it["previewUrl"],
                           "art": (it.get("artworkUrl100") or "").replace("100x100", "200x200")})
     return jsonify(items=items)
-  
+  _yt_cache = {}
+
+
+@app.post("/music/yt")
+def music_yt():
+    if denied():
+        return jsonify(error="locked"), 401
+    key = os.environ.get("YOUTUBE_API_KEY", "").strip()
+    if not key:
+        return jsonify(error="Add YOUTUBE_API_KEY on Render first."), 400
+    q = str((request.get_json(silent=True) or {}).get("q", "")).strip()[:100]
+    if not q:
+        return jsonify(error="Type a song or artist."), 400
+    hit = _yt_cache.get(q.lower())
+    if hit and time.time() - hit[0] < 7 * 24 * 3600:  # same search again: no quota used
+        return jsonify(items=hit[1])
+    url = ("https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&videoCategoryId=10"
+           "&videoEmbeddable=true&maxResults=10&q=" + urllib.parse.quote(q) + "&key=" + urllib.parse.quote(key))
+    try:
+        j = _get_json(url)
+    except urllib.error.HTTPError as e:
+        body = e.read()[:300].decode("utf-8", "replace")
+        print("youtube failed:", e.code, body)
+        return jsonify(error="YouTube error %d: %s" % (e.code, body[:150])), 502
+    except Exception as e:
+        print("youtube failed:", e)
+        return jsonify(error="YouTube did not answer. Try again."), 502
+    items = []
+    for it in j.get("items", []):
+        vid = (it.get("id") or {}).get("videoId")
+        sn = it.get("snippet") or {}
+        if vid:
+            items.append({"id": vid, "name": _html.unescape(sn.get("title", "")), "by": sn.get("channelTitle", ""),
+                          "art": ((sn.get("thumbnails") or {}).get("default") or {}).get("url", "")})
+    _yt_cache[q.lower()] = (time.time(), items)
+    return jsonify(items=items)
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "ingest":
         ingest(sys.argv[2:])
