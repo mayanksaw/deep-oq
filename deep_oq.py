@@ -5521,7 +5521,7 @@ VR_PAGE = r"""<!doctype html>
 #mfix[hidden]{display:none}
 #emb{position:fixed;inset:0;z-index:20;background:#000d;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px}
 #emb[hidden]{display:none}
-#emb iframe{width:min(92vw,calc(70vh*16/9));aspect-ratio:16/9;border:0;border-radius:12px;background:#000}
+#emb iframe{width:min(96vw,calc(82vh*16/9));aspect-ratio:16/9;border:0;border-radius:12px;background:#000}
 #embx{font-size:16px;padding:10px 18px;border-radius:10px;border:0;background:#2d3cff;color:#fff;cursor:pointer}
 #fs{position:fixed;top:10px;right:10px;z-index:10;font:600 14px system-ui,sans-serif;padding:9px 14px;border-radius:10px;border:1px solid #6a76ff;background:#14143aee;color:#fff;cursor:pointer}
 </style></head>
@@ -5529,6 +5529,7 @@ VR_PAGE = r"""<!doctype html>
 <button id="fs" type="button" aria-label="Toggle full screen">Full screen</button>
 <video id="mv" crossorigin="anonymous" playsinline preload="auto" style="display:none"></video>
 <div id="emb" hidden><button id="embx" type="button">Close video</button><iframe id="embf" title="Video player" allow="autoplay; fullscreen; picture-in-picture; encrypted-media" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe></div>
+<a id="embyt" target="_blank" rel="noopener" style="color:#fff;font:15px system-ui">Open on YouTube (3D / 360 / VR180)</a>
 <details id="mov"><summary>Movies</summary>
   <p>Watch your own videos on a huge virtual screen. Deep OQ does not provide movies, so use files you own or have the right to watch.</p>
   <label class="mbtn">Choose a video file<input id="mf" type="file" accept="video/*" hidden></label>
@@ -6137,6 +6138,7 @@ function ytOpen(id){
   if(scene.is('vr-mode'))scene.exitVR();   /* the player cannot show inside immersive VR */
   document.querySelector('#embf').src='https://www.youtube-nocookie.com/embed/'+id+'?autoplay=1&rel=0';
   document.querySelector('#emb').hidden=false;
+  document.querySelector('#embyt').href='https://www.youtube.com/watch?v='+id;
   mstat.textContent='Playing YouTube in a normal window. If it does not start, press play in the player.';
 }
 async function ytFind(q){
