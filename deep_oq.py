@@ -3968,9 +3968,9 @@ pmenu.querySelectorAll('.pitem').forEach(b=>b.onclick=()=>{
 });
 $('#fpe').onchange=e=>{const f=e.target.files[0];e.target.value='';if(f){showView('photo');loadPhoto(f)}};
 $('#fve').onchange=e=>{const f=e.target.files[0];e.target.value='';if(f){showView('video');loadVideo(f)}};
-$('#fq').onchange=e=>{const fs=[...e.target.files];e.target.value='';if(fs.length)attachMany(fs)};
+$('#fq').onchange=e=>{const fs=[...e.target.files];e.target.value='';if(!fs.length)return;if(thumbMode)attach(fs[0]);else attachMany(fs)};
 $('#fcam').onchange=e=>{const f=e.target.files[0];e.target.value='';if(f)attach(f)};
-$('#fsolve').onchange=e=>{const f=e.target.files[0];e.target.value='';if(f)attach(f,{solve:true})};
+$('#fsolve').onchange=e=>{const fs=[...e.target.files];e.target.value='';if(fs.length)attachMany(fs,{solve:true})};
 let camStream=null,camFacing='environment';
 async function openCamera(){
   if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){$('#fcam').click();return}
@@ -4263,12 +4263,12 @@ async function makeThumbChat(q,a){
   busy=false;send.disabled=!canSend();toEnd();box.focus();
 }
 $('#falb').onchange=async e=>{
-  const fs=[...e.target.files].slice(0,4);e.target.value='';
+  const fs=[...e.target.files];e.target.value='';
   if(!fs.length)return;
   try{
-    albumImgs=[];
-    for(const f of fs)albumImgs.push(await shrinkImage(f,1800));
-    albumMode=true;att=null;renderAtts(albumImgs.length+' photos ready');
+    for(const f of fs){if(albumImgs.length<4)albumImgs.push(await shrinkImage(f,1800))}
+    albumMode=true;att=null;
+    renderAtts(albumImgs.length+' photos ready'+(albumImgs.length<4?' - choose Create a cinematic album again to add more':''));
     box.placeholder='Title | subtitle  (example: MY JOURNEY | Life style edits)';box.focus();
   }catch(err){albumMode=false;alert(err.message)}
 };
