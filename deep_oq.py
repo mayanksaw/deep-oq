@@ -8057,8 +8057,6 @@ def movies_ia_file():
 
 @app.get("/movies/stream")
 def movies_stream():
-    if denied():
-        return jsonify(error="locked"), 401
     ident = request.args.get("id", "")
     name = request.args.get("n", "")
     if not re.fullmatch(r"[\w.\-]{1,120}", ident) or ".." in name or not name.lower().endswith(".mp4"):
