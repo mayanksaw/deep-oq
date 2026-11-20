@@ -8126,7 +8126,7 @@ def movies_stream():
                 break
             yield c
     return Response(gen(), status=up.status if hasattr(up, "status") else up.code, headers=h)
-  BROWSE_Q = {
+BROWSE_Q = {
     "movies": "mediatype:movies AND collection:feature_films",
     "cartoons": "mediatype:movies AND collection:classic_cartoons",
     "old": "mediatype:movies AND collection:prelinger",
