@@ -1,7 +1,6 @@
 """
 Deep OQ - one-file AI app: Chat, Code, Photo and Video.
 Made for Mayank Kumar Saw. Everything is in this single file.
-
 WHAT IT DOES
   Chat   knowledge database + exact calculator/counter + live web search + plan/solve/verify
   Code   write, fix, explain, convert, review code in 16 languages (HTML and JavaScript can run)
@@ -3325,7 +3324,7 @@ body:not(.chatting) #v-chat.on{padding-top:12vh;padding-bottom:0}
         <input type="file" id="fq" hidden multiple accept="image/*,video/*,.pdf,.txt,.md,.csv,.tsv,.json,.xml,.yaml,.yml,.log,.html,.css,.js,.ts,.jsx,.tsx,.py,.java,.c,.cpp,.h,.cs,.go,.rs,.rb,.php,.kt,.swift,.sql,.sh,.bat">
         <input type="file" id="fpe" hidden accept="image/*">
         <input type="file" id="fcam" hidden accept="image/*" capture="environment">
-        <input type="file" id="fsolve" hidden accept="image/*">
+        <input type="file" id="fsolve" hidden multiple accept="image/*">
         <input type="file" id="fve" hidden accept="video/*,.mkv">
         <input type="file" id="falb" hidden multiple accept="image/*">
       </div>
@@ -4095,22 +4094,28 @@ async function attach(f,opts){
     el.append(c);setTimeout(()=>{c.remove();el.hidden=!el.children.length},9000);
   }
 }
-function attachMany(fs){
-  const imgs=fs.filter(f=>f.type.startsWith('image/')).slice(0,6);   // change 6 for more photos
-  if(imgs.length<2)return attach(fs[0]);
+function attachMany(fs,opts){
+  const imgs=fs.filter(f=>f.type.startsWith('image/')).slice(0,6);
+  if(imgs.length<2)return attach(fs[0],opts);
   (async()=>{
-    attBusy=true;renderAtts('Reading '+imgs.length+' photos...');
+    imgMode=false;att=null;attBusy=true;renderAtts('Reading '+imgs.length+' photos...');
     try{
-      const ims=await Promise.all(imgs.map(async f=>loadImg(await shrinkImage(f,900))));
-      const cols=ims.length>4?3:2,rows=Math.ceil(ims.length/cols),cw=700,ch=700;
-      const c=document.createElement('canvas');c.width=cols*cw;c.height=rows*ch;
-      const g=c.getContext('2d');g.fillStyle='#fff';g.fillRect(0,0,c.width,c.height);
-      ims.forEach((im,i)=>{
-        const k=Math.min((cw-8)/im.width,(ch-8)/im.height),w=im.width*k,h=im.height*k;
-        g.drawImage(im,(i%cols)*cw+(cw-w)/2,Math.floor(i/cols)*ch+(ch-h)/2,w,h);
-      });
-      const d=c.toDataURL('image/jpeg',.88);
-      att={kind:'image',name:imgs.length+' photos',data:d,doc:d,thumb:d,count:imgs.length,solve:false};
+      if(opts&&opts.solve){
+        const all=[];
+        for(const f of imgs)all.push({data:await shrinkImage(f),doc:await shrinkImage(f,1800,true)});
+        att={kind:'image',name:imgs.length+' question photos',data:all[0].data,doc:all[0].doc,thumb:all[0].data,solve:true,all:all,count:imgs.length};
+      }else{
+        const ims=await Promise.all(imgs.map(async f=>loadImg(await shrinkImage(f,900))));
+        const cols=ims.length>4?3:2,rows=Math.ceil(ims.length/cols),cw=700,ch=700;
+        const c=document.createElement('canvas');c.width=cols*cw;c.height=rows*ch;
+        const g=c.getContext('2d');g.fillStyle='#fff';g.fillRect(0,0,c.width,c.height);
+        ims.forEach((im,i)=>{
+          const k=Math.min((cw-8)/im.width,(ch-8)/im.height),w=im.width*k,h=im.height*k;
+          g.drawImage(im,(i%cols)*cw+(cw-w)/2,Math.floor(i/cols)*ch+(ch-h)/2,w,h);
+        });
+        const d=c.toDataURL('image/jpeg',.88);
+        att={kind:'image',name:imgs.length+' photos',data:d,doc:d,thumb:d,count:imgs.length,solve:false};
+      }
     }catch(e){att=null;alert(e.message)}
     attBusy=false;renderAtts();
   })();
@@ -4205,11 +4210,16 @@ async function askExtra(q,a,mode){
   try{
     if(mode==='from'){await makeFromPhoto(bot,q,a)}
     else if(mode==='snap'){
-      const w=bot.querySelector('.wait');if(w)w.textContent='Reading your question';
-      const r=await api('/lab',{mod:'snap',text:q,image:a.doc||a.data,session:sid}),j=await r.json().catch(()=>({}));
-      if(r.status===401)throw new Error('That access key was not accepted. Reload the page and enter it again.');
-      if(!r.ok||j.error)throw new Error(j.error||'The server did not answer.');
-      botDone(bot,j.answer);
+      const list=a.all||[{doc:a.doc,data:a.data}];
+      let out='';
+      for(let i=0;i<list.length;i++){
+        const w=bot.querySelector('.wait');if(w)w.textContent='Reading photo '+(i+1)+' of '+list.length;
+        const r=await api('/lab',{mod:'snap',text:q,image:list[i].doc||list[i].data,session:sid}),j=await r.json().catch(()=>({}));
+        if(r.status===401)throw new Error('That access key was not accepted. Reload the page and enter it again.');
+        if(!r.ok||j.error)throw new Error(j.error||'The server did not answer.');
+        out+=(list.length>1?'**Photo '+(i+1)+'**\n\n':'')+j.answer+'\n\n';
+      }
+      botDone(bot,out);
     }
     else if(mode){await makeImage(bot,q)}
     else if(a.kind==='doc'){
