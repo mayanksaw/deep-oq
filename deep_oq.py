@@ -7785,7 +7785,7 @@ def thumbnail_route():
     finally:
         shutil.rmtree(work, ignore_errors=True)
     return jsonify(image="data:image/jpeg;base64," + base64.b64encode(data).decode(), note=note)
-  _sp = {"tok": "", "exp": 0}
+         _sp = {"tok": "", "exp": 0}
 
 
 def _spotify_token():
