@@ -3320,6 +3320,9 @@ body:not(.chatting) #v-chat.on{padding-top:12vh;padding-bottom:0}
           <button class="pitem" type="button" role="menuitem" data-act="image">
             <svg viewBox="0 0 24 24"><path d="M12 3l1.8 4.7 4.7 1.8-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z"/><path d="M19 15l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z"/></svg>
             <span><b>Create an image</b><small>Describe it and Deep OQ draws it</small></span></button>
+            <button class="pitem" type="button" role="menuitem" data-act="album">
+            <svg viewBox="0 0 24 24"><rect x="3" y="3" width="8" height="10" rx="2"/><rect x="13" y="8" width="8" height="13" rx="2"/><rect x="3" y="15" width="8" height="6" rx="2"/></svg>
+            <span><b>Create a cinematic album</b><small>2 to 4 photos become a 9:16 poster</small></span></button>
             <button class="pitem" type="button" role="menuitem" data-act="thumb">
             <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 15 5-4 4 3 3-2 6 4"/></svg>
             <span><b>Create a thumbnail</b><small>YouTube thumbnail with your title and photo</small></span></button>
@@ -3332,6 +3335,7 @@ body:not(.chatting) #v-chat.on{padding-top:12vh;padding-bottom:0}
         <input type="file" id="fcam" hidden accept="image/*" capture="environment">
         <input type="file" id="fsolve" hidden accept="image/*">
         <input type="file" id="fve" hidden accept="video/*,.mkv">
+        <input type="file" id="falb" hidden multiple accept="image/*">
       </div>
       <textarea id="q" rows="1" placeholder="Ask Deep OQ" aria-label="Message" autocomplete="off"></textarea>
       <button class="vlang" id="rsBtn" type="button" aria-pressed="false" title="Research mode: searches many sites, opens pages and writes a cited answer">Research</button>
@@ -3621,6 +3625,7 @@ body:not(.chatting) #v-chat.on{padding-top:12vh;padding-bottom:0}
 const $=s=>document.querySelector(s);
 const log=$('#log'),scroller=$('#scroll'),box=$('#q'),send=$('#send');
 let sid=uid(),busy=false,att=null,imgMode=false,attBusy=false;
+let albumMode=false,albumImgs=[];
 let vidMode=false;
 let thumbMode=false;
 
@@ -3953,6 +3958,7 @@ pmenu.querySelectorAll('.pitem').forEach(b=>b.onclick=()=>{
   else if(a==='video')$('#fve').click();
   else if(a==='thumb'){setImgMode(false);vidMode=false;thumbMode=true;box.placeholder='Title | scene (example: MY FIRST CAR | standing on a luxury car)';$('#fq').click();box.focus()}
   else if(a==='mkvideo'){setImgMode(false);vidMode=true;box.placeholder='Describe the video you want';box.focus()}
+  else if(a==='album'){$('#falb').click()}
   else{setImgMode(true);box.focus()}
 });
 $('#fpe').onchange=e=>{const f=e.target.files[0];e.target.value='';if(f){showView('photo');loadPhoto(f)}};
@@ -4279,6 +4285,82 @@ def thumbnail_route():
     finally:
         shutil.rmtree(work, ignore_errors=True)
     return jsonify(image="data:image/jpeg;base64," + base64.b64encode(data).decode(), note=note)
+    $('#falb').onchange=async e=>{
+  const fs=[...e.target.files].slice(0,4);e.target.value='';
+  if(!fs.length)return;
+  try{
+    albumImgs=[];
+    for(const f of fs)albumImgs.push(await shrinkImage(f,1800));
+    albumMode=true;att=null;renderAtts(albumImgs.length+' photos ready');
+    box.placeholder='Title | subtitle  (example: MY JOURNEY | Life style edits)';box.focus();
+  }catch(err){albumMode=false;alert(err.message)}
+};
+function loadImg(src){return new Promise((ok,no)=>{const i=new Image();i.onload=()=>ok(i);i.onerror=()=>no(new Error('Could not open a photo.'));i.src=src})}
+function coverDraw(g,im,x,y,w,h){const k=Math.max(w/im.width,h/im.height),sw=w/k,sh=h/k;g.drawImage(im,(im.width-sw)/2,(im.height-sh)/2,sw,sh,x,y,w,h)}
+function rrect(g,x,y,w,h,r){g.beginPath();g.moveTo(x+r,y);g.arcTo(x+w,y,x+w,y+h,r);g.arcTo(x+w,y+h,x,y+h,r);g.arcTo(x,y+h,x,y,r);g.arcTo(x,y,x+w,y,r);g.closePath()}
+function card(g,im,x,y,w,h,rot){
+  g.save();g.translate(x+w/2,y+h/2);g.rotate(rot);
+  g.shadowColor='rgba(0,0,0,.7)';g.shadowBlur=40;g.shadowOffsetY=14;
+  rrect(g,-w/2,-h/2,w,h,28);g.fillStyle='#000';g.fill();
+  g.shadowColor='transparent';
+  g.save();rrect(g,-w/2,-h/2,w,h,28);g.clip();coverDraw(g,im,-w/2,-h/2,w,h);g.restore();
+  rrect(g,-w/2,-h/2,w,h,28);g.lineWidth=5;g.strokeStyle='rgba(255,255,255,.9)';g.stroke();
+  g.restore();
+}
+async function drawAlbum(srcs,title,sub){
+  const ims=await Promise.all(srcs.map(loadImg));
+  const W=1080,H=1920,S=2,c=document.createElement('canvas');c.width=W*S;c.height=H*S;
+  const g=c.getContext('2d');g.scale(S,S);
+  g.fillStyle='#000';g.fillRect(0,0,W,H);
+  g.filter='blur(80px) brightness(.45)';coverDraw(g,ims[0],-120,-120,W+240,H+240);g.filter='none';
+  const t=document.createElement('canvas');t.width=W;t.height=1000;const tg=t.getContext('2d');
+  coverDraw(tg,ims[0],0,0,W,1000);
+  tg.globalCompositeOperation='destination-in';
+  const m=tg.createLinearGradient(0,0,0,1000);
+  m.addColorStop(0,'rgba(0,0,0,0)');m.addColorStop(.25,'rgba(0,0,0,.95)');m.addColorStop(.7,'rgba(0,0,0,.5)');m.addColorStop(1,'rgba(0,0,0,0)');
+  tg.fillStyle=m;tg.fillRect(0,0,W,1000);
+  g.globalCompositeOperation='screen';g.globalAlpha=.6;g.drawImage(t,0,40);
+  g.globalAlpha=1;g.globalCompositeOperation='source-over';
+  const cards=ims.length>1?ims.slice(1):[ims[0]];
+  card(g,cards[0],380,500,640,860,0.03);
+  if(cards[1])card(g,cards[1],60,1180,420,540,-0.06);
+  if(cards[2])card(g,cards[2],620,1380,400,500,0.05);
+  const v=g.createRadialGradient(W/2,H/2,H*.25,W/2,H/2,H*.75);
+  v.addColorStop(0,'rgba(0,0,0,0)');v.addColorStop(1,'rgba(0,0,0,.65)');
+  g.fillStyle=v;g.fillRect(0,0,W,H);
+  const FF='"Noto Sans Devanagari","Nirmala UI","Segoe UI",Impact,Arial,sans-serif';
+  g.textBaseline='alphabetic';g.textAlign='left';
+  let size=130,lines=[];
+  for(;;){
+    g.font='italic 900 '+size+'px '+FF;lines=[];let cur='';
+    title.split(/\s+/).forEach(w=>{const x=cur?cur+' '+w:w;if(cur&&g.measureText(x).width>520){lines.push(cur);cur=w}else cur=x});
+    if(cur)lines.push(cur);
+    if((lines.length<=3&&lines.every(l=>g.measureText(l).width<=520))||size<=44)break;
+    size-=6;
+  }
+  g.shadowColor='rgba(0,0,0,.8)';g.shadowBlur=18;
+  lines.forEach((l,i)=>{g.fillStyle=i===0?'#ffffff':'#ff3b3b';g.fillText(l,60,200+i*size*1.1)});
+  g.shadowColor='transparent';
+  if(sub){g.font='600 34px '+FF;g.fillStyle='rgba(255,255,255,.85)';g.fillText(sub.toUpperCase().split('').join(' '),64,200+lines.length*size*1.1+30)}
+  return c.toDataURL('image/jpeg',.92);
+}
+async function makeAlbum(q){
+  if(busy)return;busy=true;send.disabled=true;document.body.classList.add('chatting');
+  box.value='';box.style.height='auto';addUserRich('📷 '+albumImgs.length+' photos\n'+q,null);
+  const imgs=albumImgs;albumImgs=[];att=null;renderAtts();
+  const bot=addBot();toEnd();
+  try{
+    const w=bot.querySelector('.wait');if(w)w.textContent='Designing your album';
+    const p=q.split('|').map(s=>s.trim());
+    const url=await drawAlbum(imgs,p[0],p[1]||'');
+    const im=await loadPic(url);
+    bot.classList.remove('thinking');
+    bot.lastChild.innerHTML='<div class="body"><div id="gi"></div></div><div class="acts"><button type="button" class="mini" data-dl>Download</button></div>';
+    bot.lastChild.querySelector('#gi').replaceWith(im);
+    const dlb=bot.lastChild.querySelector('[data-dl]');dlb.onclick=()=>downloadImage(url,dlb);
+  }catch(e){botFail(bot,e)}
+  busy=false;send.disabled=!canSend();toEnd();box.focus();
+}
 function submit(){
   const q=box.value.trim();
   if(busy||attBusy)return;
