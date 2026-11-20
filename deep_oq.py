@@ -8052,7 +8052,7 @@ def movies_ia_file():
         return jsonify(error="That item has no MP4 video. Try another."), 404
     good = [f for f in mp4 if "sample" not in f["name"].lower() and int(f.get("size") or 0) > 2_000_000]
     best = min(good or mp4, key=lambda f: int(f.get("size") or 10**12))
-        return jsonify(url="/movies/stream?id=%s&n=%s" % (ident, urllib.parse.quote(best["name"])),
+    return jsonify(url="/movies/stream?id=%s&n=%s" % (ident, urllib.parse.quote(best["name"])),
                    name=str(best["name"])[:80])
 
 @app.get("/movies/stream")
