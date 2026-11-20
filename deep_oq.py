@@ -8015,7 +8015,9 @@ def music_yt():
                           "art": ((sn.get("thumbnails") or {}).get("default") or {}).get("url", "")})
     _yt_cache[q.lower()] = (time.time(), items)
     return jsonify(items=items)
-  @app.post("/movies/ia")
+ 
+
+@app.post("/movies/ia")
 def movies_ia():
     if denied():
         return jsonify(error="locked"), 401
@@ -8048,9 +8050,11 @@ def movies_ia_file():
     mp4 = [f for f in files if str(f.get("name", "")).lower().endswith(".mp4")]
     if not mp4:
         return jsonify(error="That item has no MP4 video. Try another."), 404
-    best = min(mp4, key=lambda f: int(f.get("size") or 10**12))  # the smallest MP4 starts fastest
+    best = min(mp4, key=lambda f: int(f.get("size") or 10**12))
     return jsonify(url="https://archive.org/download/%s/%s" % (ident, urllib.parse.quote(best["name"])),
                    name=str(best["name"])[:80])
+
+
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "ingest":
         ingest(sys.argv[2:])
