@@ -4228,6 +4228,7 @@ async function askExtra(q,a,mode){
       if(r.status===401)throw new Error('That access key was not accepted. Reload the page and enter it again.');
       if(!r.ok||j.error)throw new Error(j.error||'The server did not answer.');
       botDone(bot,j.answer);
+      }
     else{
       const list=a.all||[a];let out='';
       for(let i=0;i<list.length;i++){
