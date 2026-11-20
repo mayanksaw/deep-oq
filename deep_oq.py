@@ -5509,7 +5509,7 @@ VR_PAGE = r"""<!doctype html>
 #log{flex-basis:100%;max-height:18vh;overflow:auto;color:#dde;white-space:pre-wrap;font-size:15px}
 #dom input{flex:1;min-width:120px;font-size:16px;padding:10px;border-radius:10px;border:1px solid #556}
 #dom button{font-size:16px;padding:10px 16px;border-radius:10px;border:0;background:#2d3cff;color:#fff}
-#mov{position:fixed;top:10px;left:10px;z-index:10;max-width:min(340px,80vw);font:14px system-ui,sans-serif;padding:8px 12px;border-radius:10px;border:1px solid #6a76ff;background:#14143aee;color:#fff}
+#mov{position:fixed;top:10px;left:10px;z-index:10;max-width:min(340px,80vw);font:14px system-ui,sans-serif;padding:8px 12px;border-radius:10px;border:1px solid #6a76ff;background:#14143aee;color:#fff;max-height:70vh;overflow:auto}
 #mov summary{cursor:pointer;font-weight:700}
 #mov p{margin:8px 0;color:#cfd6ff}
 #myt{display:block;margin:8px 0;padding:10px 12px;border-radius:8px;background:#2f3cff;color:#fff;text-decoration:none;font-weight:700;text-align:center}
@@ -5536,6 +5536,9 @@ VR_PAGE = r"""<!doctype html>
   <button id="mgo" type="button">Load link</button>
   <label class="mchk">Video type <select id="mtype"><option value="flat">Normal 2D</option><option value="sbs">3D side by side</option><option value="ou">3D top and bottom</option><option value="360">360 video</option></select></label>
   <p>YouTube and Vimeo links play in a normal window. For 3D, 360 or VR180 YouTube videos, use the YouTube button that appears below.</p>
+  <input id="yq" placeholder="Search YouTube" aria-label="Search YouTube">
+  <button id="ygo" type="button">Search YouTube</button>
+<div id="ylist"></div>
   <a id="myt" href="#" target="_blank" rel="noopener" hidden></a>
   <p id="mstat" aria-live="polite">For the VR screen, paste a direct .mp4 link or choose a file. YouTube and Vimeo links play in a normal window instead.</p>
   <button id="mfix" type="button" hidden>Fix video</button>
@@ -5710,6 +5713,7 @@ addBtn('Teach me',0.43,2.4,()=>ask('Teach me one interesting thing, simply.'));
 addBtn('Plan my day',1.3,2.4,()=>ask('Help me plan a productive day in 5 short steps.'));
 addBtn('Back',-1.3,2.13,()=>{if(idx>0){idx--;render()}});
 addBtn('Next',-0.43,2.13,()=>{if(idx<pages.length-1){idx++;render()}});
+addBtn('YouTube',-1.3,1.32,()=>gYT());
 const vb=addBtn('Voice: on',0.43,2.13,()=>{speak=!speak;vb.setAttribute('text','value',speak?'Voice: on':'Voice: off');if(!speak&&window.speechSynthesis)speechSynthesis.cancel()});
 addBtn('Clear',1.3,2.13,()=>{show(WELCOME);if(window.speechSynthesis)speechSynthesis.cancel()});
 addBtn('Link VR',-1.3,1.86,hostLink);
@@ -6128,6 +6132,63 @@ function gMenu(){
   const sb=gBtn(0.55,-0.97,'Speed: '+SPN[SPV.indexOf(GSP)],()=>{GSP=SPV[(SPV.indexOf(GSP)+1)%3];gLab(sb,'Speed: '+SPN[SPV.indexOf(GSP)])},{w:1.0,h:0.22,tw:2.2,color:'#5a3fa8'});
   gBtn(1.2,0.95,'Close',gExit,{w:0.5,h:0.2,tw:1.8,color:'#a02020'});gRefresh();
 }
+/* ================= YouTube: search by voice or typing, pinch a result to watch ================= */
+function ytOpen(id){
+  if(scene.is('vr-mode'))scene.exitVR();   /* the player cannot show inside immersive VR */
+  document.querySelector('#embf').src='https://www.youtube-nocookie.com/embed/'+id+'?autoplay=1&rel=0';
+  document.querySelector('#emb').hidden=false;
+  mstat.textContent='Playing YouTube in a normal window. If it does not start, press play in the player.';
+}
+async function ytFind(q){
+  const r=await post('/music/yt',{q}),j=await r.json().catch(()=>({}));
+  if(!r.ok||j.error)throw new Error(j.error||'YouTube search failed. Log in to Deep OQ in this browser first.');
+  return j.items||[];
+}
+function ytShow(items,msg){
+  gRoot.querySelectorAll('.yr').forEach(e=>e.remove());
+  if(!items.length){gSet(msg,'Nothing found. Try again.');return}
+  gSet(msg,'Pinch a video to play it');
+  items.slice(0,5).forEach((it,i)=>{
+    const b=gBtn(0,0.1-i*0.27,it.name.slice(0,44),()=>ytOpen(it.id),{w:2.2,h:0.24,tw:2.2});
+    b.className='btn yr';
+  });
+  gRefresh();
+}
+async function ytGo(q,msg){
+  if(!q.trim())return;
+  gSet(msg,'Searching...');
+  try{ytShow(await ytFind(q),msg)}catch(e){gSet(msg,e.message)}
+}
+function ytVoice(msg){
+  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  if(!SR){gSet(msg,'Voice is not available here. Leave VR and type in the YouTube box.');return}
+  const r=new SR();r.lang=navigator.language||'en-US';gSet(msg,'Listening...');
+  r.onresult=e=>ytGo(e.results[0][0].transcript,msg);
+  r.onerror=()=>gSet(msg,'I could not hear you. Try again.');
+  r.start();
+}
+function gYT(){
+  gEnter();gClear();
+  gTxt(0,0.95,'YouTube: press Mic and say what to watch',3);
+  const msg=gTxt(0,0.7,'',3.2,'#cfd6ff');
+  gBtn(-0.45,0.4,'Mic',()=>ytVoice(msg),{w:0.8,tw:2});
+  gBtn(0.45,0.4,'Close',gExit,{w:0.8,tw:2,color:'#a02020'});
+  gRefresh();
+}
+document.querySelector('#ygo').onclick=async()=>{
+  const q=document.querySelector('#yq').value.trim(),list=document.querySelector('#ylist');
+  if(!q)return;
+  list.textContent='Searching...';
+  try{
+    const items=await ytFind(q);list.textContent='';
+    if(!items.length){list.textContent='Nothing found.';return}
+    items.forEach(it=>{
+      const b=document.createElement('button');b.type='button';b.className='mbtn';b.style.cssText='display:block;margin:6px 0;text-align:left';
+      b.textContent=it.name+' - '+it.by;b.onclick=()=>ytOpen(it.id);list.appendChild(b);
+    });
+  }catch(e){list.textContent=e.message}
+};
+document.querySelector('#yq').addEventListener('keydown',e=>{if(e.key==='Enter')document.querySelector('#ygo').click()});
 const gbtn=addBtn('Games',1.3,1.59,()=>{G.on?gExit():gMenu()});
 addBtn('More news',0.43,1.59,()=>{if(!pNews.__on||!newsItems.length)return;newsPage++;drawNewsPage()});
 addBtn('Today',-0.43,1.59,async()=>{
