@@ -3330,7 +3330,7 @@ body:not(.chatting) #v-chat.on{padding-top:12vh;padding-bottom:0}
             <svg viewBox="0 0 24 24"><rect x="3" y="6" width="13" height="12" rx="3"/><path d="m16 10 5-3v10l-5-3z"/></svg>
             <span><b>Create a video</b><small>Describe it and Deep OQ makes a short video</small></span></button>
         </div>
-        <input type="file" id="fq" hidden accept="image/*,video/*,.pdf,.txt,.md,.csv,.tsv,.json,.xml,.yaml,.yml,.log,.html,.css,.js,.ts,.jsx,.tsx,.py,.java,.c,.cpp,.h,.cs,.go,.rs,.rb,.php,.kt,.swift,.sql,.sh,.bat">
+        <input type="file" id="fq" hidden multiple accept="image/*,video/*,.pdf,.txt,.md,.csv,.tsv,.json,.xml,.yaml,.yml,.log,.html,.css,.js,.ts,.jsx,.tsx,.py,.java,.c,.cpp,.h,.cs,.go,.rs,.rb,.php,.kt,.swift,.sql,.sh,.bat">
         <input type="file" id="fpe" hidden accept="image/*">
         <input type="file" id="fcam" hidden accept="image/*" capture="environment">
         <input type="file" id="fsolve" hidden accept="image/*">
@@ -3963,7 +3963,7 @@ pmenu.querySelectorAll('.pitem').forEach(b=>b.onclick=()=>{
 });
 $('#fpe').onchange=e=>{const f=e.target.files[0];e.target.value='';if(f){showView('photo');loadPhoto(f)}};
 $('#fve').onchange=e=>{const f=e.target.files[0];e.target.value='';if(f){showView('video');loadVideo(f)}};
-$('#fq').onchange=e=>{const f=e.target.files[0];e.target.value='';if(f)attach(f)};
+$('#fq').onchange=e=>{const fs=[...e.target.files];e.target.value='';if(fs.length)attachMany(fs)};
 $('#fcam').onchange=e=>{const f=e.target.files[0];e.target.value='';if(f)attach(f)};
 $('#fsolve').onchange=e=>{const f=e.target.files[0];e.target.value='';if(f)attach(f,{solve:true})};
 let camStream=null,camFacing='environment';
@@ -4090,7 +4090,26 @@ async function attach(f,opts){
     el.append(c);setTimeout(()=>{c.remove();el.hidden=!el.children.length},9000);
   }
 }
-
+function attachMany(fs){
+  const imgs=fs.filter(f=>f.type.startsWith('image/')).slice(0,6);   // change 6 for more photos
+  if(imgs.length<2)return attach(fs[0]);
+  (async()=>{
+    attBusy=true;renderAtts('Reading '+imgs.length+' photos...');
+    try{
+      const ims=await Promise.all(imgs.map(async f=>loadImg(await shrinkImage(f,900))));
+      const cols=ims.length>4?3:2,rows=Math.ceil(ims.length/cols),cw=700,ch=700;
+      const c=document.createElement('canvas');c.width=cols*cw;c.height=rows*ch;
+      const g=c.getContext('2d');g.fillStyle='#fff';g.fillRect(0,0,c.width,c.height);
+      ims.forEach((im,i)=>{
+        const k=Math.min((cw-8)/im.width,(ch-8)/im.height),w=im.width*k,h=im.height*k;
+        g.drawImage(im,(i%cols)*cw+(cw-w)/2,Math.floor(i/cols)*ch+(ch-h)/2,w,h);
+      });
+      const d=c.toDataURL('image/jpeg',.88);
+      att={kind:'image',name:imgs.length+' photos',data:d,doc:d,thumb:d,count:imgs.length,solve:false};
+    }catch(e){att=null;alert(e.message)}
+    attBusy=false;renderAtts();
+  })();
+}
 function addUserRich(text,a){
   const d=document.createElement('div');d.className='turn user';
   const b=document.createElement('div');b.className='bubble ubox';
@@ -4194,7 +4213,7 @@ async function askExtra(q,a,mode){
       if(!r.ok||j.error)throw new Error(j.error||'The server did not answer.');
       botDone(bot,j.answer);
     }else{
-      const lead=a.kind==='video'?'These four pictures are frames taken in order (left to right, top to bottom) from one video. ':'';
+      const lead=a.kind==='video'?'These four pictures are frames taken in order (left to right, top to bottom) from one video. ':a.count?'This picture is a grid of '+a.count+' separate photos, in order left to right, top to bottom. ':'';
       const r=await api('/lab',{mod:'vision',text:lead+(q||'Describe this '+(a.kind==='video'?'video':'photo')+' in detail.'),image:a.data,session:sid,label:q||(a.kind==='video'?'Explain this video':'Describe this photo')}),j=await r.json().catch(()=>({}));
       if(r.status===401)throw new Error('That access key was not accepted. Reload the page and enter it again.');
       if(!r.ok||j.error)throw new Error(j.error||'The server did not answer.');
