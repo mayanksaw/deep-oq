@@ -5090,6 +5090,7 @@ applyNews();
         row.append(im,t,a);list.append(row);
       });
     }catch(e){st.textContent=e.message}
+  }
   $('#sp-go').onclick=go;
   $('#sp-q').addEventListener('keydown',e=>{if(e.key==='Enter')go()});
 })();
