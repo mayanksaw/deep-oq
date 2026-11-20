@@ -3320,6 +3320,9 @@ body:not(.chatting) #v-chat.on{padding-top:12vh;padding-bottom:0}
           <button class="pitem" type="button" role="menuitem" data-act="image">
             <svg viewBox="0 0 24 24"><path d="M12 3l1.8 4.7 4.7 1.8-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z"/><path d="M19 15l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z"/></svg>
             <span><b>Create an image</b><small>Describe it and Deep OQ draws it</small></span></button>
+            <button class="pitem" type="button" role="menuitem" data-act="thumb">
+            <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 15 5-4 4 3 3-2 6 4"/></svg>
+            <span><b>Create a thumbnail</b><small>YouTube thumbnail with your title and photo</small></span></button>
           <button class="pitem" type="button" role="menuitem" data-act="mkvideo">
             <svg viewBox="0 0 24 24"><rect x="3" y="6" width="13" height="12" rx="3"/><path d="m16 10 5-3v10l-5-3z"/></svg>
             <span><b>Create a video</b><small>Describe it and Deep OQ makes a short video</small></span></button>
@@ -3619,6 +3622,7 @@ const $=s=>document.querySelector(s);
 const log=$('#log'),scroller=$('#scroll'),box=$('#q'),send=$('#send');
 let sid=uid(),busy=false,att=null,imgMode=false,attBusy=false;
 let vidMode=false;
+let thumbMode=false;
 
 function uid(){return (crypto.randomUUID&&crypto.randomUUID())||String(Date.now())+Math.random()}
 const mark=(s,c='')=>`<svg class="mark ${c}" width="${s}" height="${s}" viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="24" r="15" fill="none" stroke="currentColor" stroke-width="4.5"/><g class="orbit"><circle cx="34.6" cy="34.6" r="4.6" fill="var(--accent)"/></g></svg>`;
@@ -3947,6 +3951,7 @@ pmenu.querySelectorAll('.pitem').forEach(b=>b.onclick=()=>{
   else if(a==='camera')openCamera();
   else if(a==='photo')$('#fpe').click();
   else if(a==='video')$('#fve').click();
+  else if(a==='thumb'){setImgMode(false);vidMode=false;thumbMode=true;box.placeholder='Title | scene (example: MY FIRST CAR | standing on a luxury car)';$('#fq').click();box.focus()}
   else if(a==='mkvideo'){setImgMode(false);vidMode=true;box.placeholder='Describe the video you want';box.focus()}
   else{setImgMode(true);box.focus()}
 });
@@ -4207,9 +4212,30 @@ async function makeVideoChat(q){
   }catch(e){botFail(bot,e)}
   busy=false;send.disabled=!canSend();toEnd();box.focus();
 }
+async function makeThumbChat(q,a){
+  if(busy)return;busy=true;send.disabled=true;document.body.classList.add('chatting');
+  box.value='';box.style.height='auto';addUserRich(q,a);
+  if(a){att=null;renderAtts()}
+  const bot=addBot();toEnd();
+  try{
+    const w=bot.querySelector('.wait');if(w)w.textContent='Making your thumbnail (up to 1 minute)';
+    const i=q.indexOf('|'),title=(i>-1?q.slice(0,i):q).trim(),scene=(i>-1?q.slice(i+1):q).trim()||title;
+    const r=await api('/thumbnail',{title:title,scene:scene,image:a?a.data:''});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok||j.error)throw new Error(j.error||'The server did not answer.');
+    const im=await loadPic(j.image);
+    bot.classList.remove('thinking');
+    bot.lastChild.innerHTML='<div class="body"><div id="gi"></div><p class="muted"></p></div><div class="acts"><button type="button" class="mini" data-dl>Download</button></div>';
+    bot.lastChild.querySelector('#gi').replaceWith(im);
+    bot.lastChild.querySelector('.muted').textContent=j.note||'';
+    const dlb=bot.lastChild.querySelector('[data-dl]');dlb.onclick=()=>downloadImage(j.image,dlb);
+  }catch(e){botFail(bot,e)}
+  busy=false;send.disabled=!canSend();toEnd();box.focus();
+}
 function submit(){
   const q=box.value.trim();
   if(busy||attBusy)return;
+  if(thumbMode){if(!q)return;const ta=att&&att.kind==='image'?att:null;thumbMode=false;return makeThumbChat(q,ta)}
   if(att){
     if(att.kind==='image'){
       if(IMG_FROM_RE.test(q))return askExtra(q,att,'from');
@@ -7538,6 +7564,133 @@ def editphoto_route():
     except Exception as e:
         print("editphoto failed:", e)
         return jsonify(error="Could not edit the photo right now."), 500
+      def _bold_font(size):
+    from PIL import ImageFont
+    for p in ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+              "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"):
+        if os.path.exists(p):
+            return ImageFont.truetype(p, size)
+    try:
+        return ImageFont.load_default(size=size)
+    except TypeError:
+        return ImageFont.load_default()
+
+
+def _rep_image_edit(prompt, image, token):
+    import urllib.request as _ur
+    model = os.environ.get("REPLICATE_EDIT_MODEL", "black-forest-labs/flux-kontext-pro").strip()
+    hd = {"Authorization": "Bearer " + token, "Content-Type": "application/json"}
+    last = None
+    for extra in ({"aspect_ratio": "16:9"}, {}):
+        try:
+            body = json.dumps({"input": dict({"prompt": prompt, "input_image": image}, **extra)}).encode()
+            req = _ur.Request("https://api.replicate.com/v1/models/" + model + "/predictions", body, hd)
+            with _ur.urlopen(req, timeout=60) as r:
+                pred = json.loads(r.read().decode())
+            get_url = pred["urls"]["get"]
+            for _ in range(60):
+                if pred.get("status") in ("succeeded", "failed", "canceled"):
+                    break
+                time.sleep(3)
+                with _ur.urlopen(_ur.Request(get_url, headers=hd), timeout=60) as r:
+                    pred = json.loads(r.read().decode())
+            if pred.get("status") != "succeeded":
+                raise RuntimeError(str(pred.get("error"))[:200])
+            out = pred.get("output")
+            if isinstance(out, list):
+                out = out[0]
+            with _ur.urlopen(_ur.Request(str(out), headers={"User-Agent": "DeepOQ/1.0"}), timeout=120) as r:
+                return r.read(15_000_000)
+        except urllib.error.HTTPError as e:
+            last = e
+            if e.code != 422:
+                raise
+    raise last
+
+
+def _compose_thumbnail(raw, title):
+    from PIL import Image, ImageDraw, ImageOps
+    im = Image.open(io.BytesIO(raw)).convert("RGB")
+    im = ImageOps.fit(im, (1280, 720), Image.LANCZOS)
+    shade = Image.new("RGBA", (1280, 720), (0, 0, 0, 0))
+    sd = ImageDraw.Draw(shade)
+    for x in range(800):
+        sd.line([(x, 0), (x, 720)], fill=(0, 0, 0, int(170 * (1 - x / 800))))
+    im = Image.alpha_composite(im.convert("RGBA"), shade)
+    title = title.upper().strip()
+    if title:
+        d = ImageDraw.Draw(im)
+        maxw, maxh, size = 760, 560, 150
+        while True:
+            font = _bold_font(size)
+            lines, cur = [], ""
+            for wd in title.split():
+                t = (cur + " " + wd).strip()
+                if cur and d.textlength(t, font=font) > maxw:
+                    lines.append(cur)
+                    cur = wd
+                else:
+                    cur = t
+            if cur:
+                lines.append(cur)
+            lh = int(size * 1.1)
+            widest = max(d.textlength(x, font=font) for x in lines)
+            if (len(lines) * lh <= maxh and widest <= maxw) or size <= 40:
+                break
+            size -= 6
+        y = (720 - len(lines) * lh) // 2
+        for i, line in enumerate(lines):
+            d.text((50, y + i * lh), line, font=font,
+                   fill=(255, 230, 0) if i == 0 else (255, 255, 255),
+                   stroke_width=max(4, size // 14), stroke_fill=(0, 0, 0))
+    out = io.BytesIO()
+    im.convert("RGB").save(out, "JPEG", quality=92)
+    return out.getvalue()
+
+
+@app.post("/thumbnail")
+def thumbnail_route():
+    if denied():
+        return jsonify(error="locked"), 401
+    d = request.get_json(silent=True) or {}
+    title = str(d.get("title", "")).strip()[:80]
+    scene = str(d.get("scene", "")).strip()[:400]
+    image = str(d.get("image", ""))[:6_000_000]
+    if not title:
+        return jsonify(error="Write the thumbnail title first."), 400
+    token = os.environ.get("REPLICATE_API_TOKEN", "").strip()
+    raw, note = None, ""
+    if image.startswith("data:image/") and token:
+        try:
+            raw = _rep_image_edit(
+                "Create an eye-catching YouTube thumbnail image, 16:9. Scene: " + scene +
+                ". Keep the same person with exactly the same face, hairstyle and clothes. "
+                "Place the person on the right side of the frame and leave empty space on the left. "
+                "Vibrant colors, dramatic lighting, high contrast. No text, no letters, no watermark.",
+                image, token)
+        except Exception as e:
+            print("thumbnail edit failed:", e)
+            note = "Photo editing failed, so the background is a new picture."
+    elif image.startswith("data:image/"):
+        note = "REPLICATE_API_TOKEN is not set, so your photo was not used."
+    work = tempfile.mkdtemp(prefix="oq_")
+    try:
+        if raw is None:
+            path = os.path.join(work, "bg.jpg")
+            ok = _fetch_scene_image("YouTube thumbnail background, " + scene +
+                                    ", vibrant colors, dramatic lighting, high contrast, no text, no letters",
+                                    random.randint(1, 10**6), path)
+            if not ok:
+                return jsonify(error="The picture service did not answer. Try again in a moment."), 502
+            with open(path, "rb") as f:
+                raw = f.read()
+        data = _compose_thumbnail(raw, title)
+    except Exception as e:
+        print("thumbnail failed:", e)
+        return jsonify(error="Could not make the thumbnail right now."), 500
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    return jsonify(image="data:image/jpeg;base64," + base64.b64encode(data).decode(), note=note)
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "ingest":
         ingest(sys.argv[2:])
