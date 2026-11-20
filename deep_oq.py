@@ -3242,6 +3242,11 @@ body:not(.chatting) #v-chat.on{padding-top:12vh;padding-bottom:0}
   #scroll .col{padding-top:46px}
   .hero{flex-direction:column;gap:8px}
 }
+.atts{gap:10px;margin:0 6px 10px}
+.achip.tile{position:relative;padding:0;width:110px;height:110px;border-radius:14px;overflow:hidden}
+.achip.tile img{width:100%;height:100%;object-fit:cover;border-radius:0}
+.achip.tile span{display:none}
+.achip.tile button{position:absolute;top:5px;right:5px;width:24px;height:24px;padding:0;border-radius:50%;background:rgba(0,0,0,.65);color:#fff;opacity:1;font-size:16px;line-height:24px;text-align:center}
 [hidden]{display:none!important}
 
 </style>
@@ -4018,6 +4023,7 @@ function renderAtts(note){
   const el=$('#atts');el.innerHTML='';
   const chip=(thumb,label,onx)=>{
     const c=document.createElement('div');c.className='achip';
+    if(thumb){c.classList.add('tile');c.title=label}
     if(thumb){const i=document.createElement('img');i.src=thumb;i.alt='';c.append(i)}
     const s=document.createElement('span');s.textContent=label;c.append(s);
     if(onx){const x=document.createElement('button');x.type='button';x.textContent='×';x.setAttribute('aria-label','Remove');x.onclick=onx;c.append(x)}
@@ -4123,7 +4129,8 @@ function attachMany(fs,opts){
 function addUserRich(text,a){
   const d=document.createElement('div');d.className='turn user';
   const b=document.createElement('div');b.className='bubble ubox';
-  if(a&&a.thumb){const i=document.createElement('img');i.src=a.thumb;i.alt='Attached '+a.kind;b.append(i)}
+  if(a&&a.all){const row=document.createElement('div');row.style.cssText='display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end;margin-bottom:6px';a.all.forEach(p=>{const i=document.createElement('img');i.src=p.data;i.style.cssText='width:110px;height:110px;object-fit:cover;border-radius:12px;margin:0';row.append(i)});b.append(row)}
+  else if(a&&a.thumb){const i=document.createElement('img');i.src=a.thumb;i.alt='Attached '+a.kind;b.append(i)}
   else if(a)b.append(document.createTextNode('📄 '+a.name+(text?'\n':'')));
   if(text)b.append(document.createTextNode(text));
   d.append(b);log.append(d);return d;
