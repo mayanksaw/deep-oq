@@ -4132,6 +4132,26 @@ async function makeImage(bot,prompt,note){
   bot.lastChild.querySelector('a').href=j.image;
   const dlb=bot.lastChild.querySelector('[data-dl]');dlb.onclick=()=>downloadImage(j.image,dlb);
 }
+async function editFromPhoto(bot,q,a){
+  const w=bot.querySelector('.wait');if(w)w.textContent='Editing your photo (up to 1 minute)';
+  const r=await api('/editphoto',{text:q,image:a.data}),j=await r.json().catch(()=>({}));
+  if(r.status===401)throw new Error('That access key was not accepted. Reload the page and enter it again.');
+  if(!r.ok||j.error)throw new Error(j.error||'The server did not answer.');
+  const im=await loadPic(j.image);
+  bot.classList.remove('thinking');
+  bot.lastChild.innerHTML='<div class="body"><div id="gi"></div></div><div class="acts"><button type="button" class="mini" data-dl>Download</button></div>';
+  bot.lastChild.querySelector('#gi').replaceWith(im);
+  const dlb=bot.lastChild.querySelector('[data-dl]');dlb.onclick=()=>downloadImage(j.image,dlb);
+}
+async function makeFromPhoto(bot,q,a){
+  try{await editFromPhoto(bot,q,a)}
+  catch(e){
+    if(/access key/.test(e.message))throw e;
+    await makeFromPhotoOld(bot,q,a);
+    const m=bot.lastChild.querySelector('.muted');
+    if(m)m.textContent+='\nReal photo editing failed ('+e.message+'), so this is a new picture.';
+  }
+}
 async function makeFromPhoto(bot,q,a){
   const w=bot.querySelector('.wait');if(w)w.textContent='Looking at your photo';
   const r=await api('/lab',{mod:'vision',text:'Describe this photo for an artist who must recreate the scene: the place, every important object, their colours and where they are. Plain words, max 90 words. Output only the description.',image:a.data}),j=await r.json().catch(()=>({}));
@@ -7475,6 +7495,49 @@ def makevideo_route():
         shutil.rmtree(work, ignore_errors=True)
         _video_slot.release()
     return send_file(io.BytesIO(data), mimetype="video/mp4", download_name="deep-oq-video.mp4")
+  @app.post("/editphoto")
+def editphoto_route():
+    if denied():
+        return jsonify(error="locked"), 401
+    token = os.environ.get("REPLICATE_API_TOKEN", "").strip()
+    if not token:
+        return jsonify(error="REPLICATE_API_TOKEN is not set on Render."), 400
+    d = request.get_json(silent=True) or {}
+    prompt = str(d.get("text", "")).strip()[:1000]
+    image = str(d.get("image", ""))[:6_000_000]
+    if not prompt or not image.startswith("data:image/"):
+        return jsonify(error="Send a photo and an instruction."), 400
+    import urllib.request as _ur
+    model = os.environ.get("REPLICATE_EDIT_MODEL", "black-forest-labs/flux-kontext-pro").strip()
+    hd = {"Authorization": "Bearer " + token, "Content-Type": "application/json"}
+    full = prompt + ". Keep the same person, the same face, hairstyle and clothes exactly as in the photo."
+    body = json.dumps({"input": {"prompt": full, "input_image": image}}).encode()
+    try:
+        req = _ur.Request("https://api.replicate.com/v1/models/" + model + "/predictions", body, hd)
+        with _ur.urlopen(req, timeout=60) as r:
+            pred = json.loads(r.read().decode())
+        get_url = pred["urls"]["get"]
+        for _ in range(60):
+            if pred.get("status") in ("succeeded", "failed", "canceled"):
+                break
+            time.sleep(3)
+            with _ur.urlopen(_ur.Request(get_url, headers=hd), timeout=60) as r:
+                pred = json.loads(r.read().decode())
+        if pred.get("status") != "succeeded":
+            return jsonify(error="Photo edit failed: " + str(pred.get("error"))[:200]), 502
+        out = pred.get("output")
+        if isinstance(out, list):
+            out = out[0]
+        with _ur.urlopen(_ur.Request(str(out), headers={"User-Agent": "DeepOQ/1.0"}), timeout=120) as r:
+            ctype = r.headers.get("Content-Type", "image/png")
+            data = r.read(15_000_000)
+        return jsonify(image="data:" + ctype + ";base64," + base64.b64encode(data).decode())
+    except urllib.error.HTTPError as e:
+        print("editphoto failed:", e.code, e.read()[:300])
+        return jsonify(error="Replicate said error %d (check token, billing and model name)." % e.code), 502
+    except Exception as e:
+        print("editphoto failed:", e)
+        return jsonify(error="Could not edit the photo right now."), 500
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "ingest":
         ingest(sys.argv[2:])
