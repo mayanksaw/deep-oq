@@ -6266,7 +6266,54 @@ async function movieLoad(it){
   }catch(e){gClear();gTxt(0,0.6,e.message,3);gBtn(0,0.1,'Back',()=>gMovie(),{w:0.8,tw:2});gRefresh()}
 }
 function gMovie(start){gKeys('Movies: type a title, or press Mic',movieSearch,typeof start==='string'?start:'')}
-addBtn('Movies',-0.43,1.32,()=>gMovie());
+addBtn('Browse',-0.43,1.32,()=>gBrowse('movies'));
+/* ===== Browse: movies, cartoons, songs. Pinch a title to play ===== */
+const BR={movies:'Movies',cartoons:'Cartoons',old:'Old films',scifi:'Sci-fi',music:'Songs'};
+let oqAudio=null,brTok=0;
+async function gBrowse(cat,page,q){
+  cat=cat||'movies';page=page||0;q=q||'';
+  const my=++brTok;
+  gEnter();gClear();
+  gTxt(0,1.17,(q?'Search: '+q:BR[cat])+'  (page '+(page+1)+')',2.8);
+  Object.keys(BR).forEach((k,i)=>gBtn((i-2.5)*0.56,0.95,BR[k],()=>gBrowse(k,0,''),{w:0.54,h:0.2,tw:2,color:k===cat?'#1f9a4a':'#2d3cff'}));
+  gBtn(2.5*0.56,0.95,'Search',()=>gKeys('Search '+BR[cat],t=>gBrowse(cat,0,t),q),{w:0.54,h:0.2,tw:2,color:'#5a3fa8'});
+  const wait=gTxt(0,0.3,'Loading...',3);gRefresh();
+  try{
+    const r=await post('/movies/browse',{cat,page,q}),j=await r.json().catch(()=>({}));
+    if(my!==brTok||!G.on)return;
+    if(!r.ok||j.error)throw new Error(j.error||'Could not load. Log in to Deep OQ in this browser first.');
+    wait.remove();
+    if(!j.items.length)gTxt(0,0.3,'Nothing here. Try another search.',3);
+    j.items.forEach((it,i)=>gBtn(0,0.62-i*0.25,it.name.slice(0,48),
+      ()=>cat==='music'?musicPlay(it,cat,page,q):movieLoad(it),{w:2.6,h:0.22,tw:2.4}));
+    if(page>0)gBtn(-0.9,-0.9,'Prev',()=>gBrowse(cat,page-1,q),{w:0.6,h:0.2,tw:2});
+    if((page+1)*6<j.total)gBtn(0.9,-0.9,'Next',()=>gBrowse(cat,page+1,q),{w:0.6,h:0.2,tw:2});
+    if(oqAudio)gBtn(0,-0.9,'Now playing',()=>gNow({name:'Your song'},cat,page,q),{w:0.9,h:0.2,tw:2,color:'#1f9a4a'});
+    gRefresh();
+  }catch(e){if(my===brTok&&G.on){wait.setAttribute('value',e.message)}}
+}
+async function musicPlay(it,cat,page,q){
+  gClear();gTxt(0,0.5,'Loading '+it.name.slice(0,40)+'...',3);gRefresh();
+  try{
+    const r=await post('/music/ia/file',{id:it.id}),j=await r.json().catch(()=>({}));
+    if(!r.ok||j.error)throw new Error(j.error||'Could not load it.');
+    if(oqAudio)oqAudio.pause();
+    oqAudio=new Audio(j.url);oqAudio.play().catch(()=>{});
+    gNow(it,cat,page,q);
+  }catch(e){gClear();gTxt(0,0.6,e.message,3);gBtn(0,0.1,'Back',()=>gBrowse(cat,page,q),{w:0.8,tw:2});gRefresh()}
+}
+function gNow(it,cat,page,q){
+  gClear();
+  gTxt(0,0.9,'Now playing',2.6,'#cfd6ff');gTxt(0,0.65,it.name.slice(0,50),3);
+  gBtn(-0.5,0.2,'Play / Pause',()=>{if(oqAudio){oqAudio.paused?oqAudio.play():oqAudio.pause()}},{w:0.9,tw:2.2});
+  gBtn(0.5,0.2,'Stop',()=>{if(oqAudio){oqAudio.pause();oqAudio=null}gBrowse(cat,page,q)},{w:0.9,tw:2.2,color:'#a02020'});
+  gBtn(-0.5,-0.1,'Back 10s',()=>{if(oqAudio)oqAudio.currentTime=Math.max(0,oqAudio.currentTime-10)},{w:0.9,tw:2.2});
+  gBtn(0.5,-0.1,'Forward 10s',()=>{if(oqAudio)oqAudio.currentTime+=10},{w:0.9,tw:2.2});
+  gBtn(-0.5,-0.4,'Quieter',()=>{if(oqAudio)oqAudio.volume=Math.max(0,+(oqAudio.volume-.2).toFixed(2))},{w:0.9,tw:2.2});
+  gBtn(0.5,-0.4,'Louder',()=>{if(oqAudio)oqAudio.volume=Math.min(1,+(oqAudio.volume+.2).toFixed(2))},{w:0.9,tw:2.2});
+  gBtn(0,-0.75,'Back to list',()=>gBrowse(cat,page,q),{w:1.0,tw:2.2});
+  gRefresh();
+}
 document.querySelector('#ygo').onclick=async()=>{
   const q=document.querySelector('#yq').value.trim(),list=document.querySelector('#ylist');
   if(!q)return;
@@ -8079,6 +8126,54 @@ def movies_stream():
                 break
             yield c
     return Response(gen(), status=up.status if hasattr(up, "status") else up.code, headers=h)
+  BROWSE_Q = {
+    "movies": "mediatype:movies AND collection:feature_films",
+    "cartoons": "mediatype:movies AND collection:classic_cartoons",
+    "old": "mediatype:movies AND collection:prelinger",
+    "scifi": "mediatype:movies AND collection:SciFi_Horror",
+    "music": "mediatype:audio AND collection:(78rpm OR netlabels OR audio_music)",
+}
+
+
+@app.post("/movies/browse")
+def movies_browse():
+    if denied():
+        return jsonify(error="locked"), 401
+    d = request.get_json(silent=True) or {}
+    cat = d.get("cat") if d.get("cat") in BROWSE_Q else "movies"
+    q = re.sub(r"[^\w ]", "", str(d.get("q", ""))).strip()[:60]
+    try:
+        page = max(0, min(int(d.get("page") or 0), 50))
+    except (TypeError, ValueError):
+        page = 0
+    query = BROWSE_Q[cat] + (" AND title:(%s)" % q if q else "")
+    url = ("https://archive.org/advancedsearch.php?q=" + urllib.parse.quote(query)
+           + "&fl[]=identifier&fl[]=title&rows=6&page=%d&sort[]=downloads+desc&output=json" % (page + 1))
+    try:
+        r = _get_json(url)["response"]
+    except Exception as e:
+        print("browse failed:", e)
+        return jsonify(error="The list did not load. Try again."), 502
+    return jsonify(items=[{"id": x["identifier"], "name": str(x.get("title", ""))[:80]} for x in r["docs"]],
+                   total=r.get("numFound", 0))
+
+
+@app.post("/music/ia/file")
+def music_ia_file():
+    if denied():
+        return jsonify(error="locked"), 401
+    ident = str((request.get_json(silent=True) or {}).get("id", ""))
+    if not re.fullmatch(r"[\w.\-]{1,120}", ident):
+        return jsonify(error="Bad id."), 400
+    try:
+        files = _get_json("https://archive.org/metadata/" + ident).get("files", [])
+    except Exception as e:
+        print("music metadata failed:", e)
+        return jsonify(error="Could not open that song."), 502
+    mp3 = [f for f in files if str(f.get("name", "")).lower().endswith(".mp3")]
+    if not mp3:
+        return jsonify(error="That item has no MP3. Try another."), 404
+    return jsonify(url="https://archive.org/download/%s/%s" % (ident, urllib.parse.quote(mp3[0]["name"])))
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "ingest":
         ingest(sys.argv[2:])
