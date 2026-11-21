@@ -10,6 +10,10 @@ Optional extra providers (OpenAI-compatible; each needs its key AND a model name
     MISTRAL, XAI, DEEPSEEK, TOGETHER, FIREWORKS, CEREBRAS, PERPLEXITY, SAMBANOVA, NVIDIA:
     <NAME>_API_KEY + <NAME>_MODEL (and optionally <NAME>_FAST_MODEL)
 
+Optional tuning (no code changes needed):
+    DEEP_OQ_TIMEOUT=900      seconds to wait for one model reply
+    DEEP_OQ_TOKEN_CAP=64000  ceiling on reply length; if a model allows less, the call halves it and retries
+
 Optional overrides:
     ANTHROPIC_MODEL / OPENAI_MODEL / GEMINI_MODEL / GROQ_MODEL   pin an exact model ID
     DEEP_OQ_LEAD=anthropic,openai,gemini,groq                    order tried for the lead model
@@ -25,8 +29,10 @@ logged and never put in URLs.
 """
 from __future__ import annotations
 
+import base64
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -45,8 +51,16 @@ class ProviderError(Exception):
 # --------------------------------------------------------------------------
 
 
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, "").strip() or default)
+    except ValueError:
+        return default
+
+
 def http_json(method: str, url: str, headers: Optional[dict] = None, body: Optional[dict] = None,
-              timeout: float = 300, retries: int = 3) -> dict:
+              timeout: Optional[float] = None, retries: int = 3) -> dict:
+    timeout = timeout or _env_int("DEEP_OQ_TIMEOUT", 900)   # seconds; long answers from thinking models need time
     data = json.dumps(body).encode("utf-8") if body is not None else None
     hdrs = {"content-type": "application/json", **(headers or {})}
     last: Optional[ProviderError] = None
@@ -77,26 +91,64 @@ def http_json(method: str, url: str, headers: Optional[dict] = None, body: Optio
 
 
 def to_turns(messages: List[dict]) -> Tuple[str, List[dict]]:
-    """Split out system text; merge same-role neighbours; make sure we start with a user turn."""
+    """Split out system text; merge same-role neighbours; make sure we start with a user turn.
+    A message may carry "images": [{"media_type": ..., "data": <base64>}]; they stay on their turn."""
     system_parts: List[str] = []
     turns: List[dict] = []
     for m in messages:
         role = m.get("role")
         content = (m.get("content") or "").strip()
-        if not content:
+        imgs = m.get("images") or []
+        if not content and not imgs:
             continue
         if role == "system":
             system_parts.append(content)
             continue
         if role not in ("user", "assistant"):
             continue
+        if imgs and not content:
+            content = "(see the attached image)"
         if turns and turns[-1]["role"] == role:
             turns[-1]["content"] += "\n\n" + content
+            if imgs:
+                turns[-1].setdefault("images", []).extend(imgs)
         else:
-            turns.append({"role": role, "content": content})
+            turn = {"role": role, "content": content}
+            if imgs:
+                turn["images"] = list(imgs)
+            turns.append(turn)
     if not turns or turns[0]["role"] != "user":
         turns.insert(0, {"role": "user", "content": "(conversation start)"})
     return "\n\n".join(system_parts), turns
+
+
+_IMG_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
+MAX_IMAGE_B64 = 7_000_000  # about 5 MB of picture data, the usual provider limit
+
+
+def normalize_images(images) -> List[dict]:
+    """Accept data-URL strings or {"media_type", "data"} dicts (data = base64 text or raw bytes)."""
+    out: List[dict] = []
+    for im in images or []:
+        if isinstance(im, str):
+            m = re.match(r"data:(image/[a-z+.\-]+);base64,(.+)$", im.strip(), re.S)
+            if not m:
+                raise ValueError("the image is not in a format I can read")
+            mt, data = m.group(1), m.group(2)
+        else:
+            mt = im.get("media_type") or im.get("mime_type") or ""
+            data = im.get("data", "")
+            if isinstance(data, bytes):
+                data = base64.b64encode(data).decode("ascii")
+        mt = "image/jpeg" if mt == "image/jpg" else mt
+        if mt not in _IMG_TYPES:
+            raise ValueError("only PNG, JPEG, GIF and WebP pictures are supported")
+        if not data:
+            raise ValueError("the image is empty")
+        if len(data) > MAX_IMAGE_B64:
+            raise ValueError("the image is too large (about 5 MB is the limit)")
+        out.append({"media_type": mt, "data": data})
+    return out
 
 
 def _clamp_effort(effort: Optional[str], allowed: Tuple[str, ...]) -> Optional[str]:
@@ -124,8 +176,9 @@ class Provider:
     env_model = ""
     strong: List[str] = []
     fast: List[str] = []
+    vision = False          # can this provider read pictures?
     token_floor = 8000      # reasoning models spend max_tokens on thinking too
-    token_cap = 32000
+    token_cap = 64000
     default_effort = "high"
 
     def __init__(self, api_key: str, tier: str = "strong", model: Optional[str] = None):
@@ -168,23 +221,29 @@ class Provider:
 
     # -- public call
     def call(self, messages: List[dict], **opts) -> dict:
+        cap = _env_int("DEEP_OQ_TOKEN_CAP", self.token_cap)      # raise this if your models allow more
         want = int(opts.get("max_tokens") or 0)
-        max_tokens = min(max(want, self.token_floor), self.token_cap)
+        max_tokens = min(max(want, self.token_floor), cap)
         effort = opts.get("effort") or self.default_effort
         last: Optional[Exception] = None
         for model in self.ordered_models():
             minimal = False
-            for attempt in range(2):
+            for attempt in range(8):
                 try:
                     text, finish = self._request(model, messages, max_tokens, effort, minimal)
-                    if not text.strip() and finish == "length" and max_tokens < self.token_cap:
-                        max_tokens = min(self.token_cap, max_tokens * 2)
+                    if not text.strip() and finish == "length" and max_tokens < cap:
+                        max_tokens = min(cap, max_tokens * 2)
                         text, finish = self._request(model, messages, max_tokens, effort, minimal)
                     self._good = model
                     return {"text": text, "finish_reason": finish, "model": model, "provider": self.name}
                 except ProviderError as e:
                     last = e
                     msg = str(e).lower()
+                    if e.status == 400 and max_tokens > self.token_floor // 2 and any(
+                            k in msg for k in ("max_tokens", "max_completion_tokens", "maxoutputtokens",
+                                               "max_output_tokens", "output tokens", "too large", "exceeds")):
+                        max_tokens = max(self.token_floor // 2, max_tokens // 2)   # model allows less: halve and retry
+                        continue
                     if e.status == 400 and not minimal and any(
                             k in msg for k in ("effort", "reasoning", "output_config", "thinking",
                                                "temperature", "unsupported", "unknown field", "unknown name")):
@@ -202,6 +261,7 @@ class Provider:
 
 class AnthropicProvider(Provider):
     name = "anthropic"
+    vision = True
     env_keys = ("ANTHROPIC_API_KEY",)
     env_model = "ANTHROPIC_MODEL"
     strong = ["claude-fable-5-2", "claude-fable-5-1", "claude-opus-5-5", "claude-opus-5"]
@@ -217,13 +277,22 @@ class AnthropicProvider(Provider):
 
     def _request(self, model, messages, max_tokens, effort, minimal):
         system, turns = to_turns(messages)
-        body: dict = {"model": model, "max_tokens": max_tokens, "messages": turns}
+        body: dict = {"model": model, "max_tokens": max_tokens, "messages": [self._turn(t) for t in turns]}
         if system:
             body["system"] = system
         # temperature / top_p / top_k are deliberately never sent: current Claude models reject them.
         if effort and not minimal:
             body["output_config"] = {"effort": effort}
         return self.parse(http_json("POST", f"{self.base}/messages", self._headers(), body))
+
+    @staticmethod
+    def _turn(t: dict) -> dict:
+        if not t.get("images"):
+            return {"role": t["role"], "content": t["content"]}
+        blocks = [{"type": "image", "source": {"type": "base64", "media_type": i["media_type"], "data": i["data"]}}
+                  for i in t["images"]]
+        blocks.append({"type": "text", "text": t["content"]})
+        return {"role": t["role"], "content": blocks}
 
     @staticmethod
     def parse(resp: dict) -> Tuple[str, str]:
@@ -236,6 +305,7 @@ class AnthropicProvider(Provider):
 
 class OpenAIProvider(Provider):
     name = "openai"
+    vision = True
     env_keys = ("OPENAI_API_KEY",)
     env_model = "OPENAI_MODEL"
     strong = ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.5"]
@@ -251,12 +321,20 @@ class OpenAIProvider(Provider):
 
     def _request(self, model, messages, max_tokens, effort, minimal):
         system, turns = to_turns(messages)
-        body: dict = {"model": model, "input": turns, "max_output_tokens": max_tokens}
+        body: dict = {"model": model, "input": [self._turn(t) for t in turns], "max_output_tokens": max_tokens}
         if system:
             body["instructions"] = system
         if effort and not minimal:
             body["reasoning"] = {"effort": effort}
         return self.parse(http_json("POST", f"{self.base}/responses", self._headers(), body))
+
+    @staticmethod
+    def _turn(t: dict) -> dict:
+        if not t.get("images"):
+            return {"role": t["role"], "content": t["content"]}
+        blocks = [{"type": "input_image", "image_url": f"data:{i['media_type']};base64,{i['data']}"} for i in t["images"]]
+        blocks.append({"type": "input_text", "text": t["content"]})
+        return {"role": t["role"], "content": blocks}
 
     @staticmethod
     def parse(resp: dict) -> Tuple[str, str]:
@@ -311,6 +389,7 @@ class GroqProvider(Provider):
 
 class GeminiProvider(Provider):
     name = "gemini"
+    vision = True
     env_keys = ("GEMINI_API_KEY", "GOOGLE_API_KEY")
     env_model = "GEMINI_MODEL"
     strong = ["gemini-4-argon", "gemini-4-carbon", "gemini-3.8-flash", "gemini-3.1-pro-preview"]
@@ -330,7 +409,8 @@ class GeminiProvider(Provider):
         system, turns = to_turns(messages)
         body: dict = {
             "contents": [{"role": "user" if t["role"] == "user" else "model",
-                          "parts": [{"text": t["content"]}]} for t in turns],
+                          "parts": [{"inline_data": {"mime_type": i["media_type"], "data": i["data"]}}
+                                    for i in t.get("images", [])] + [{"text": t["content"]}]} for t in turns],
             "generationConfig": {"maxOutputTokens": max_tokens},
         }
         if system:
@@ -443,6 +523,23 @@ class ProviderPool:
             raise last or ProviderError("all providers failed")
         return call
 
+    def vision_call(self) -> Optional[Callable]:
+        """Lead call restricted to providers that can read pictures (Anthropic, OpenAI, Gemini).
+        Returns None when none of your keys belongs to such a provider."""
+        names = [n for n in self.order if self.strong[n].vision]
+        if not names:
+            return None
+
+        def call(messages, **opts):
+            last: Optional[Exception] = None
+            for name in names:
+                try:
+                    return self.strong[name].call(messages, **opts)
+                except ProviderError as e:
+                    last = e
+            raise last or ProviderError("all image-capable providers failed")
+        return call
+
     def agents(self, n: int, strong_agents: int = 4) -> List[Tuple[Callable, int, str]]:
         """n panel agents, round-robin over providers. The first `strong_agents` use each
         provider's strongest model (weight 2), the rest its fast tier (weight 1)."""
@@ -553,6 +650,55 @@ def _selftest() -> None:
     assert out["text"] == "hi" and out["finish_reason"] == "length" and out["model"] == "some/model"
     assert captured[-1][0] == "https://openrouter.ai/api/v1/chat/completions"
     assert captured[-1][1]["messages"][0]["role"] == "system" and captured[-1][1]["max_tokens"] == 4000
+    # ---- images
+    img = {"media_type": "image/png", "data": "QUJD"}
+    _, tt = to_turns([{"role": "user", "content": "prove this", "images": [img]}, {"role": "user", "content": "please"}])
+    assert tt[0]["images"] == [img] and "please" in tt[0]["content"]
+    a = AnthropicProvider._turn(tt[0])
+    assert a["content"][0]["type"] == "image" and a["content"][0]["source"]["data"] == "QUJD" and a["content"][-1]["type"] == "text"
+    o = OpenAIProvider._turn(tt[0])
+    assert o["content"][0] == {"type": "input_image", "image_url": "data:image/png;base64,QUJD"}
+    sent_g: List[dict] = []
+
+    def fake_g(method, url, headers=None, body=None, timeout=300, retries=3):
+        sent_g.append(body or {})
+        return {"candidates": [{"content": {"parts": [{"text": "seen"}]}, "finishReason": "STOP"}]}
+
+    http_json = fake_g
+    try:
+        gp = GeminiProvider("k", "strong", model="gemini-test")
+        assert gp.call([{"role": "user", "content": "what is this", "images": [img]}])["text"] == "seen"
+    finally:
+        http_json = real
+    assert sent_g[-1]["contents"][0]["parts"][0] == {"inline_data": {"mime_type": "image/png", "data": "QUJD"}}
+    assert normalize_images(["data:image/jpg;base64,QUJD"])[0]["media_type"] == "image/jpeg"
+    assert normalize_images([{"media_type": "image/webp", "data": b"abc"}])[0]["data"] == "YWJj"
+    for bad in (["not an image"], [{"media_type": "image/bmp", "data": "QUJD"}], [{"media_type": "image/png", "data": ""}]):
+        try:
+            normalize_images(bad)
+            raise AssertionError(bad)
+        except ValueError:
+            pass
+    assert ProviderPool({"GROQ_API_KEY": "g"}).vision_call() is None
+    assert ProviderPool({"GROQ_API_KEY": "g", "OPENAI_API_KEY": "o"}).vision_call() is not None
+    # ---- limits: a higher token ceiling is honoured, and a model that allows less is handled by halving
+    seen_tokens: List[int] = []
+
+    def fake_limit(method, url, headers=None, body=None, timeout=None, retries=3):
+        seen_tokens.append(body["max_tokens"])
+        if body["max_tokens"] > 40000:
+            raise ProviderError("HTTP 400: max_tokens: 90000 > 32000, which is the maximum allowed", 400)
+        return {"content": [{"type": "text", "text": "ok"}], "stop_reason": "end_turn"}
+
+    http_json = fake_limit
+    os.environ["DEEP_OQ_TOKEN_CAP"] = "100000"
+    try:
+        r = AnthropicProvider("k", "strong", model="claude-test").call([{"role": "user", "content": "q"}], max_tokens=90000)
+    finally:
+        http_json = real
+        os.environ.pop("DEEP_OQ_TOKEN_CAP", None)
+    assert r["text"] == "ok" and seen_tokens == [90000, 45000, 22500], seen_tokens
+    assert _env_int("DEEP_OQ_TIMEOUT_NOT_SET", 900) == 900
     print(f"providers selftest passed ({len(ALL_CLASSES)} providers)")
 
 
