@@ -6020,13 +6020,37 @@ def _json_from(text):
     except (AttributeError, ValueError):
         raise ValueError("The AI did not return a usable result. Please try again.")
 
-
+def _claude_vision(prompt, image):
+    head, b64 = image.split(",", 1)
+    mime = head[5:].split(";")[0] or "image/jpeg"
+    if mime not in ("image/jpeg", "image/png", "image/gif", "image/webp"):
+        mime = "image/jpeg"
+    content = [{"type": "image", "source": {"type": "base64", "media_type": mime, "data": b64}},
+               {"type": "text", "text": prompt}]
+    last = None
+    for model in dict.fromkeys([CLAUDE_SMART, CLAUDE_FAST]):
+        try:
+            with _claude().messages.stream(model=model, max_tokens=4096,
+                                           messages=[{"role": "user", "content": content}]) as s:
+                msg = s.get_final_message()
+            text = "".join(b.text for b in msg.content if getattr(b, "type", "") == "text").strip()
+            if text:
+                return text
+        except Exception as e:
+            last = e
+            print("claude vision failed:", model, str(e)[:160])
+    raise last or RuntimeError("Claude returned no text for this picture")
 def _vision(prompt, image, temperature=0.3):
     if not image.startswith("data:image/"):
         raise ValueError("Choose a photo first.")
     msgs = [{"role": "user", "content": [
         {"type": "text", "text": prompt},
         {"type": "image_url", "image_url": {"url": image}}]}]
+    if CLAUDE_ON:
+        try:
+            return _claude_vision(prompt, image)
+        except Exception as e:
+            print("claude vision failed:", str(e)[:160])
     last = None
     if _has_gemini():  # Gemini reads handwriting, tables and diagrams best, so it goes first
         try:
@@ -6039,6 +6063,14 @@ def _vision(prompt, image, temperature=0.3):
         except Exception as e:
             last = e
             print("gemini vision failed:", str(e)[:160])
+              if OPENAI_KEY:
+        try:
+            t = _openai_vision(prompt, image)
+            if t:
+                return t
+        except Exception as e:
+            last = e
+            print("openai vision failed:", str(e)[:160])
     for mdl in VISION_MODELS:  # try the newest model first, then the backups
         try:
             r = client.chat.completions.create(model=mdl, max_tokens=4096, temperature=temperature, messages=msgs)
