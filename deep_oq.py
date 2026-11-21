@@ -8090,17 +8090,42 @@ def _doc_context(text, q):
     return ("(This file is long. These are notes of each section, in order.)\n\n"
             + "\n\n".join(f"[section {i + 1} of {len(sections)}]\n{x}" for i, x in enumerate(notes)))
 
+PAPER_RE = re.compile(r"\b(scan|summari[sz]e|summary|important points|key points|key findings|main points|"
+                      r"main findings|analy[sz]e|review (this|the)|explain (this|the)|what is (this|the) paper)\b", re.I)
+PAPER_PROMPT = (
+    "Scan this research paper and give its important points and a clear summary. "
+    "Use exactly these headings:\n"
+    "## Paper\n(title, authors and year if the file states them)\n"
+    "## One-line summary\n"
+    "## Problem it solves\n"
+    "## Method\n(what the authors did, in simple words)\n"
+    "## Key results\n(the most important findings, with the exact numbers, datasets and comparisons from the paper)\n"
+    "## Main conclusions\n"
+    "## Limitations\n"
+    "## Important terms\n(short plain-word meaning of each technical term)\n"
+    "## Worth reading?\n(who should read it and why, in two lines)\n"
+    "Use only what the file says. If something is not stated, write 'Not stated'. "
+    "Never invent numbers, names, citations or results. Keep every point short."
+)
 
+
+def looks_like_paper(text):
+    t = text[:80000].lower()
+    marks = ("abstract", "introduction", "method", "results", "discussion", "conclusion", "references", "et al", "doi", "keywords")
+    return sum(1 for m in marks if m in t) >= 4
 @app.post("/askfile")
 def askfile_route():
     if denied():
         return jsonify(error="locked"), 401
     d = request.get_json(silent=True) or {}
-    q = str(d.get("q", "")).strip()[:2000] or "Summarize this file and list the key points."
+    raw_q = str(d.get("q", "")).strip()[:2000]
+    q = raw_q or "Summarize this file and list the key points."
     name = re.sub(r"[\r\n]+", " ", str(d.get("name", "file")))[:120]
     text = str(d.get("text", ""))[:600000]
     if not text.strip():
         return jsonify(error="That file has no readable text."), 400
+    if looks_like_paper(text) and (not raw_q or PAPER_RE.search(raw_q)):
+        q = PAPER_PROMPT
     sess = (login_session.get("user") or "guest") + ":" + str(d.get("session") or "default")
     ext = os.path.splitext(name.lower())[1]
     if ext in _EXT and _DEBUG_WORDS.search(q) and len(text) < 60000:  # a code file with a problem: debug it
