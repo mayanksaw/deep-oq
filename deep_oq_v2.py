@@ -598,19 +598,19 @@ class Store:
 # --------------------------------------------------------------------------------------
 
 _PG_SCHEMA = [
-    """CREATE TABLE IF NOT EXISTS oq_conversations(
+    """CREATE TABLE IF NOT EXISTS v2_conversations(
            id TEXT PRIMARY KEY, user_id TEXT NOT NULL, title TEXT, created DOUBLE PRECISION,
            updated DOUBLE PRECISION)""",
-    "CREATE INDEX IF NOT EXISTS oq_idx_conv_user ON oq_conversations(user_id, updated DESC)",
-    """CREATE TABLE IF NOT EXISTS oq_messages(
+    "CREATE INDEX IF NOT EXISTS v2_idx_conv_user ON v2_conversations(user_id, updated DESC)",
+    """CREATE TABLE IF NOT EXISTS v2_messages(
            id BIGSERIAL PRIMARY KEY, conv_id TEXT NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL,
            ts DOUBLE PRECISION)""",
-    "CREATE INDEX IF NOT EXISTS oq_idx_msg_conv ON oq_messages(conv_id, id)",
-    """CREATE TABLE IF NOT EXISTS oq_facts(
+    "CREATE INDEX IF NOT EXISTS v2_idx_msg_conv ON v2_messages(conv_id, id)",
+    """CREATE TABLE IF NOT EXISTS v2_facts(
            id BIGSERIAL PRIMARY KEY, user_id TEXT NOT NULL, fact TEXT NOT NULL, ts DOUBLE PRECISION)""",
-    "CREATE INDEX IF NOT EXISTS oq_idx_facts_user ON oq_facts(user_id, id)",
-    "CREATE UNIQUE INDEX IF NOT EXISTS oq_uq_facts ON oq_facts(user_id, lower(fact))",
-    """CREATE TABLE IF NOT EXISTS oq_usage(
+    "CREATE INDEX IF NOT EXISTS v2_idx_facts_user ON v2_facts(user_id, id)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS v2_uq_facts ON v2_facts(user_id, lower(fact))",
+    """CREATE TABLE IF NOT EXISTS v2_usage(
            user_id TEXT NOT NULL, day TEXT NOT NULL, kind TEXT NOT NULL, n INTEGER NOT NULL DEFAULT 0,
            PRIMARY KEY(user_id, day, kind))""",
 ]
@@ -641,19 +641,19 @@ class PgStore:
         title = re.sub(r"\s+", " ", first_text).strip()[:60] or "New chat"
         now = time.time()
         with self._pool.connection() as c:
-            c.execute("INSERT INTO oq_conversations(id, user_id, title, created, updated) "
+            c.execute("INSERT INTO v2_conversations(id, user_id, title, created, updated) "
                       "VALUES(%s,%s,%s,%s,%s) ON CONFLICT (id) DO UPDATE SET updated=EXCLUDED.updated",
                       (conv_id, user_id, title, now, now))
         return conv_id
 
     def add_message(self, conv_id: str, role: str, content: str) -> None:
         with self._pool.connection() as c:
-            c.execute("INSERT INTO oq_messages(conv_id, role, content, ts) VALUES(%s,%s,%s,%s)",
+            c.execute("INSERT INTO v2_messages(conv_id, role, content, ts) VALUES(%s,%s,%s,%s)",
                       (conv_id, role, content, time.time()))
 
     def history(self, conv_id: str, char_budget: int) -> List[Dict[str, str]]:
         with self._pool.connection() as c:
-            rows = c.execute("SELECT role, content FROM (SELECT id, role, content FROM oq_messages "
+            rows = c.execute("SELECT role, content FROM (SELECT id, role, content FROM v2_messages "
                              "WHERE conv_id=%s ORDER BY id DESC LIMIT 400) t ORDER BY id",
                              (conv_id,)).fetchall()
         msgs = [{"role": r["role"], "content": r["content"]} for r in rows if r["content"].strip()]
@@ -670,45 +670,45 @@ class PgStore:
 
     def list_conversations(self, user_id: str, limit: int = 100) -> List[Dict[str, Any]]:
         with self._pool.connection() as c:
-            rows = c.execute("SELECT id, title, updated FROM oq_conversations WHERE user_id=%s "
+            rows = c.execute("SELECT id, title, updated FROM v2_conversations WHERE user_id=%s "
                              "ORDER BY updated DESC LIMIT %s", (user_id, limit)).fetchall()
         return [dict(r) for r in rows]
 
     def messages(self, conv_id: str) -> List[Dict[str, Any]]:
         with self._pool.connection() as c:
-            rows = c.execute("SELECT role, content, ts FROM oq_messages WHERE conv_id=%s ORDER BY id",
+            rows = c.execute("SELECT role, content, ts FROM v2_messages WHERE conv_id=%s ORDER BY id",
                              (conv_id,)).fetchall()
         return [dict(r) for r in rows]
 
     def delete_conversation(self, conv_id: str) -> None:
         with self._pool.connection() as c:
-            c.execute("DELETE FROM oq_messages WHERE conv_id=%s", (conv_id,))
-            c.execute("DELETE FROM oq_conversations WHERE id=%s", (conv_id,))
+            c.execute("DELETE FROM v2_messages WHERE conv_id=%s", (conv_id,))
+            c.execute("DELETE FROM v2_conversations WHERE id=%s", (conv_id,))
 
     def add_fact(self, user_id: str, fact: str) -> None:
         fact = fact.strip()[:400]
         if not fact:
             return
         with self._pool.connection() as c:
-            c.execute("INSERT INTO oq_facts(user_id, fact, ts) VALUES(%s,%s,%s) ON CONFLICT DO NOTHING",
+            c.execute("INSERT INTO v2_facts(user_id, fact, ts) VALUES(%s,%s,%s) ON CONFLICT DO NOTHING",
                       (user_id, fact, time.time()))
 
     def facts(self, user_id: str) -> List[str]:
         with self._pool.connection() as c:
-            rows = c.execute("SELECT fact FROM oq_facts WHERE user_id=%s ORDER BY id", (user_id,)).fetchall()
+            rows = c.execute("SELECT fact FROM v2_facts WHERE user_id=%s ORDER BY id", (user_id,)).fetchall()
         return [r["fact"] for r in rows]
 
     def bump_usage(self, user_id: str, kind: str = "max") -> int:
         day = time.strftime("%Y-%m-%d", time.gmtime())
         with self._pool.connection() as c:
-            row = c.execute("INSERT INTO oq_usage(user_id, day, kind, n) VALUES(%s,%s,%s,1) "
-                            "ON CONFLICT (user_id, day, kind) DO UPDATE SET n=oq_usage.n+1 RETURNING n",
+            row = c.execute("INSERT INTO v2_usage(user_id, day, kind, n) VALUES(%s,%s,%s,1) "
+                            "ON CONFLICT (user_id, day, kind) DO UPDATE SET n=v2_usage.n+1 RETURNING n",
                             (user_id, day, kind)).fetchone()
         return int(row["n"])
 
     def clear_facts(self, user_id: str) -> None:
         with self._pool.connection() as c:
-            c.execute("DELETE FROM oq_facts WHERE user_id=%s", (user_id,))
+            c.execute("DELETE FROM v2_facts WHERE user_id=%s", (user_id,))
 
 
 def make_store(cfg: Config):
