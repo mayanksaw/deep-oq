@@ -8822,7 +8822,7 @@ def music_ia_file():
     if not mp3:
         return jsonify(error="That item has no MP3. Try another."), 404
     return jsonify(url="https://archive.org/download/%s/%s" % (ident, urllib.parse.quote(mp3[0]["name"])))
-  def _legal(title, body):
+def _legal(title, body):
     return ("<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
             "<title>%s</title><body style='font:16px system-ui;max-width:720px;margin:40px auto;padding:0 16px;line-height:1.6'>"
             "<h1>%s</h1>%s<p><a href='/'>Back to Deep OQ</a></p>" % (title, title, body))
