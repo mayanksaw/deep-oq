@@ -8853,8 +8853,8 @@ def privacy_page():
                   "service works. The site owner can read chats to run and improve the service. Messages are sent "
                   "to third-party AI providers to produce answers. You can delete chats and Memory inside the app. "
                   "Contact the owner to delete your account.</p>")
-if __name__ == "__main__":
-  COST_PER_ANSWER = float(os.environ.get("DEEP_OQ_COST_PER_ANSWER", "0.01"))  # your estimate in USD
+
+COST_PER_ANSWER = float(os.environ.get("DEEP_OQ_COST_PER_ANSWER", "0.01"))  # your estimate in USD
 
 
 @app.get("/api/admin/stats")
@@ -8925,6 +8925,7 @@ def admin_stats_page():
     if not is_admin():
         return "Not found", 404
     return STATS_PAGE, 200, {"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store"}
+if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "ingest":
         ingest(sys.argv[2:])
     elif len(sys.argv) > 1 and sys.argv[1] == "migrate":
