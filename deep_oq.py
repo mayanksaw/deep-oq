@@ -3410,7 +3410,7 @@ def ask_stream():
     """Same as /ask, but sends the answer piece by piece (server-sent events)."""
     if denied():
         if not quota_ok(login_session.get("user") or "guest"):
-        return jsonify(error="Daily free limit reached. Come back tomorrow."), 429
+            return jsonify(error="Daily free limit reached. Come back tomorrow."), 429
         return jsonify(error="locked"), 401
     data = request.get_json(silent=True) or {}
     q = str(data.get("q") or "").strip()
@@ -8842,6 +8842,77 @@ def privacy_page():
                   "to third-party AI providers to produce answers. You can delete chats and Memory inside the app. "
                   "Contact the owner to delete your account.</p>")
 if __name__ == "__main__":
+  COST_PER_ANSWER = float(os.environ.get("DEEP_OQ_COST_PER_ANSWER", "0.01"))  # your estimate in USD
+
+
+@app.get("/api/admin/stats")
+def admin_stats():
+    bad = _adm_guard()
+    if bad:
+        return bad
+    rows = _adm_q("SELECT session, role, ts FROM messages WHERE ts >= datetime('now','-14 days')",
+                  "SELECT session, role, ts FROM oq_messages WHERE ts >= now() - interval '14 days'")
+    per_day, per_user = {}, {}
+    for s, role, ts in rows:
+        if role != "user":
+            continue
+        day, u = str(ts)[:10], _session_user(s)
+        d = per_day.setdefault(day, {"users": set(), "questions": 0})
+        d["users"].add(u)
+        d["questions"] += 1
+        per_user[u] = per_user.get(u, 0) + 1
+    days = [{"day": k, "users": len(v["users"]), "questions": v["questions"],
+             "cost": round(v["questions"] * COST_PER_ANSWER, 2)} for k, v in sorted(per_day.items(), reverse=True)]
+    top = [{"user": u, "questions": n, "cost": round(n * COST_PER_ANSWER, 2)}
+           for u, n in sorted(per_user.items(), key=lambda x: -x[1])[:15]]
+    total_users = len(_adm_q("SELECT username FROM users", "SELECT username FROM oq_users"))
+    return jsonify(days=days, top=top, total_users=total_users, cost_per_answer=COST_PER_ANSWER)
+
+
+STATS_PAGE = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Deep OQ Stats</title>
+<style>body{margin:0;background:#04050d;color:#eef0ff;font:15px system-ui,sans-serif;padding:20px;max-width:900px;margin:auto}
+a{color:#00d4ff}h1{margin:0 0 6px}h2{margin:28px 0 8px;font-size:16px;color:#8e94b8}
+.cards{display:flex;gap:12px;flex-wrap:wrap;margin:16px 0}.c{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);border-radius:14px;padding:14px 18px;min-width:150px}
+.c b{display:block;font-size:26px}.c span{color:#8e94b8;font-size:13px}
+table{width:100%;border-collapse:collapse}td,th{padding:8px 10px;text-align:left;border-bottom:1px solid rgba(255,255,255,.1)}
+th{color:#8e94b8;font-weight:600;font-size:13px}.note{color:#8e94b8;font-size:13px}</style></head><body>
+<a href="/admin">&larr; Admin</a><h1>Stats (last 14 days)</h1>
+<div class="cards" id="cards"></div>
+<h2>Per day</h2><table id="days"></table>
+<h2>Top users</h2><table id="top"></table>
+<p class="note" id="note"></p>
+<script>
+const $=s=>document.querySelector(s);
+function row(t,cells,head){const tr=document.createElement('tr');cells.forEach(c=>{const e=document.createElement(head?'th':'td');e.textContent=c;tr.append(e)});t.append(tr)}
+function card(v,l){const d=document.createElement('div');d.className='c';const b=document.createElement('b');b.textContent=v;const s=document.createElement('span');s.textContent=l;d.append(b,s);$('#cards').append(d)}
+async function load(){
+  const go=()=>fetch('/api/admin/stats',{headers:{'X-Access-Key':localStorage.ak||''}});
+  let r=await go();
+  if(r.status===401){localStorage.ak=prompt('Enter the access key')||'';r=await go()}
+  const j=await r.json();
+  if(!r.ok){$('#note').textContent=j.error||'Failed';return}
+  const today=j.days[0]||{users:0,questions:0,cost:0};
+  const q=j.days.reduce((a,d)=>a+d.questions,0),c=j.days.reduce((a,d)=>a+d.cost,0);
+  card(j.total_users,'Total accounts');card(today.users,'Active users (latest day)');
+  card(q,'Questions, 14 days');card('$'+c.toFixed(2),'Est. cost, 14 days');
+  card('$'+(q?(c/q).toFixed(3):'0'),'Est. cost per question');
+  row($('#days'),['Day','Active users','Questions','Est. cost'],true);
+  j.days.forEach(d=>row($('#days'),[d.day,d.users,d.questions,'$'+d.cost.toFixed(2)]));
+  row($('#top'),['User','Questions','Est. cost'],true);
+  j.top.forEach(t=>row($('#top'),[t.user,t.questions,'$'+t.cost.toFixed(2)]));
+  $('#note').textContent='Cost is an estimate: questions x $'+j.cost_per_answer+'. Set DEEP_OQ_COST_PER_ANSWER on Render to match your real average from your API billing pages.';
+}
+load();
+</script></body></html>
+"""
+
+
+@app.get("/admin/stats")
+def admin_stats_page():
+    if not is_admin():
+        return "Not found", 404
+    return STATS_PAGE, 200, {"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store"}
     if len(sys.argv) > 2 and sys.argv[1] == "ingest":
         ingest(sys.argv[2:])
     elif len(sys.argv) > 1 and sys.argv[1] == "migrate":
