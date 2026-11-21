@@ -8860,7 +8860,7 @@ def thumbnail_route():
     finally:
         shutil.rmtree(work, ignore_errors=True)
     return jsonify(image="data:image/jpeg;base64," + base64.b64encode(data).decode(), note=note)
-  THREED_SYS = (
+THREED_SYS = (
     "You are an expert 3D modeller. Write ONE JavaScript function: function buildModel(THREE) { ... return group; } "
     "that builds the requested object with three.js and returns a THREE.Group. Rules: use only THREE geometries "
     "(Box, Sphere, Cylinder, Cone, Torus, Capsule, Lathe, Extrude with Shape, Tube with CatmullRomCurve3), group "
