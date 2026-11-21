@@ -16,3 +16,4 @@ httpx
 sympy
 mpmath
 pydantic
+numpy
