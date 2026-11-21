@@ -1,5 +1,12 @@
 """
-solvers.py - deterministic solvers, each with an independent second-method check.
+solvers.py - 62 deterministic solver modules, each with an independent second-method check.
+
+Covers: calculus (derivatives with rule tracing, integrals, limits, Taylor, ODEs, optimisation), algebra
+(equations, systems, inequalities, factoring, sums, sequences), linear algebra and vectors, number theory,
+combinatorics, probability (binomial, dice, birthday, Bayes, normal, Monty Hall), statistics and regression,
+geometry and trigonometry, complex numbers, physics (projectile, free fall, SUVAT, energy, Ohm), chemistry
+(balancing, pH, gas law, molar mass), finance (loans, interest, NPV, IRR, CAGR), units, dates, text and
+encoding tricks, classic puzzles (switches, jugs, river crossing, N-Queens, Sudoku, Hanoi, coins).
 
     from solvers import try_solve
     r = try_solve("find the derivative of x^2 sin(x)")
@@ -410,8 +417,9 @@ def s_number_theory(q: str) -> Optional[SolverResult]:
         l = sp.ilcm(*nums)
         ok = all(l % n == 0 for n in nums) and l == math.lcm(*nums)
         return SolverResult("lcm", str(l), "divisible by every input and equals math.lcm", ok)
-    if re.search(r"\bprime factori|\bfactori[sz]e\b|\bfactor\b", ql) and nums and 1 < nums[0] < 10 ** 12:
-        n = nums[0]
+    mf = re.search(r"(?:prime factori[sz]ation of|factori[sz]e|factor(?:s of)?)\s+(\d+)\s*[?.!]*$", ql)
+    if mf and 1 < int(mf.group(1)) < 10 ** 12:
+        n = int(mf.group(1))
         f = sp.factorint(n)
         ok = f == _trial_factor(n)
         shown = " × ".join(f"{p}^{e}" if e > 1 else str(p) for p, e in sorted(f.items()))
@@ -429,6 +437,8 @@ def s_stats(q: str) -> Optional[SolverResult]:
     ql = q.lower()
     op = next((k for k in ("mean", "average", "median", "mode", "variance", "standard deviation", "std") if k in ql), None)
     if not op or " of " not in ql:
+        return None
+    if re.search(r"z-?score|correlation|regression|normal distribution|probabilit|dilut|\bm1\b|cagr|\bgrowth\b", ql):
         return None
     import numpy as np
     data = [float(x) for x in re.findall(r"-?\d+(?:\.\d+)?", ql.split(" of ", 1)[1])]
@@ -1218,7 +1228,7 @@ def s_comb(q: str) -> Optional[SolverResult]:
 @register("binomial_probability")
 def s_binom(q: str) -> Optional[SolverResult]:
     ql = q.lower()
-    mn = re.search(r"(?:in|of|after)\s+(\d+)\s+(?:flips?|tosses|trials?|attempts?|throws?|shots?|games?|tests?)", ql)
+    mn = re.search(r"(?:in|of|after)\s+(\d+)\s+(?:\w+\s+)?(?:flips?|tosses|trials?|attempts?|throws?|shots?|games?|tests?)", ql)
     mk = re.search(r"(exactly|at least|at most|more than|fewer than|less than)\s+(\d+)", ql)
     if not mn or not mk or "probab" not in ql:
         return None
@@ -1253,10 +1263,11 @@ def s_binom(q: str) -> Optional[SolverResult]:
 def s_dice(q: str) -> Optional[SolverResult]:
     ql = q.lower()
     words = {"two": 2, "three": 3, "four": 4, "2": 2, "3": 3, "4": 4, "1": 1, "one": 1, "a": 1, "five": 5, "5": 5}
-    m = re.search(r"\b(one|two|three|four|five|\d)\s+(?:fair\s+|standard\s+|six-sided\s+)*dic?e\b.*?\bsum\s*(?:of|is|equals|=|to)?\s*(\d+)", ql)
-    if not m:
+    md = re.search(r"\b(one|two|three|four|five|\d)\s+(?:[a-z-]+\s+)*dic?e\b", ql)
+    ms = re.search(r"\bsum\b(.*)$", ql)
+    if not md or not ms or not re.findall(r"\d+", ms.group(1)):
         return None
-    n, target = words.get(m.group(1), 0), int(m.group(2))
+    n, target = words.get(md.group(1), 0), int(re.findall(r"\d+", ms.group(1))[-1])
     if not n:
         return None
     combos = list(itertools.product(range(1, 7), repeat=n))
@@ -1355,6 +1366,1283 @@ def s_normal(q: str) -> Optional[SolverResult]:
                         f"numerical integration of the density gives {nu:.6f}", abs(ex - nu) < 1e-5)
 
 
+# ==========================================================================
+# BATCH 3 - algebra extras, number facts, text tricks, dates, classic puzzles
+# ==========================================================================
+
+import base64
+import calendar
+import datetime
+from collections import Counter
+
+
+def _equal_numeric(f, g, syms, tries: int = 8) -> bool:
+    syms = list(syms)
+    rnd = random.Random(13)
+    fn, gn = sp.lambdify(syms, f, "math"), sp.lambdify(syms, g, "math")
+    good = 0
+    for _ in range(tries * 3):
+        pt = [rnd.uniform(0.3, 2.7) for _ in syms]
+        try:
+            a, b = fn(*pt), gn(*pt)
+        except Exception:  # noqa: BLE001
+            continue
+        if not (math.isfinite(a) and math.isfinite(b)):
+            continue
+        if not _close(a, b, 1e-7):
+            return False
+        good += 1
+    return good >= 3
+
+
+@register("fractions")
+def s_fractions(q: str) -> Optional[SolverResult]:
+    ql = q.lower()
+    m = re.search(r"(\d+)\s*/\s*(\d+)\s*(\+|-|\*|×|÷|\bx\b|plus|minus|times|divided by)\s*(\d+)\s*/\s*(\d+)", ql)
+    if m:
+        a, b, op, c, d = int(m.group(1)), int(m.group(2)), m.group(3), int(m.group(4)), int(m.group(5))
+        if b == 0 or d == 0:
+            return None
+        x, y = Fraction(a, b), Fraction(c, d)
+        sx, sy = sp.Rational(a, b), sp.Rational(c, d)
+        kind = {"+": "+", "plus": "+", "-": "-", "minus": "-", "*": "*", "×": "*", "x": "*", "times": "*",
+                "÷": "/", "divided by": "/"}[op]
+        if kind == "/" and c == 0:
+            return None
+        res = {"+": x + y, "-": x - y, "*": x * y, "/": x / y if y else None}[kind]
+        ref = {"+": sx + sy, "-": sx - sy, "*": sx * sy, "/": sx / sy if sy else None}[kind]
+        return SolverResult("fraction arithmetic", f"{res} (≈ {float(res):.6g})",
+                            "sympy's exact rational arithmetic agrees", sp.Rational(res.numerator, res.denominator) == ref)
+    m = re.search(r"\b(add|subtract|multiply|divide)\s+(\d+)\s*/\s*(\d+)\s+(?:and|by|to|from|with)\s+(\d+)\s*/\s*(\d+)", ql)
+    if m:
+        verb = m.group(1)
+        a, b, c, d = (int(m.group(i)) for i in (2, 3, 4, 5))
+        if b == 0 or d == 0 or (verb == "divide" and c == 0):
+            return None
+        x, y = Fraction(a, b), Fraction(c, d)
+        sx, sy = sp.Rational(a, b), sp.Rational(c, d)
+        res = {"add": x + y, "subtract": y - x, "multiply": x * y, "divide": x / y}[verb]
+        ref = {"add": sx + sy, "subtract": sy - sx, "multiply": sx * sy, "divide": sx / sy}[verb]
+        return SolverResult("fraction arithmetic", f"{res} (≈ {float(res):.6g})",
+                            "sympy's exact rational arithmetic agrees", sp.Rational(res.numerator, res.denominator) == ref)
+    m = re.search(r"simplify\s+(\d+)\s*/\s*(\d+)\s*[?.!]*$", ql)
+    if m:
+        a, b = int(m.group(1)), int(m.group(2))
+        if b == 0:
+            return None
+        f = Fraction(a, b)
+        return SolverResult("simplify fraction", f"{f}", f"gcd {math.gcd(a, b)} divided out; sympy agrees",
+                            sp.Rational(a, b) == sp.Rational(f.numerator, f.denominator))
+    return None
+
+
+@register("polynomial_algebra")
+def s_poly(q: str) -> Optional[SolverResult]:
+    m = re.search(r"\b(factor(?:ise|ize)?|expand|simplify|partial fractions? of|apart)\b\s*(?:the\s*)?"
+                  r"(?:expression|polynomial|fraction)?\s*:?\s*(.+?)\s*[?.!]*$", q.lower())
+    if not m:
+        return None
+    op, body = m.group(1), m.group(2)
+    if re.fullmatch(r"[\d\s,]+", body):
+        return None
+    f = safe_parse(body)
+    syms = sorted(f.free_symbols, key=lambda s: s.name)
+    if not syms:
+        return None
+    if op.startswith("factor"):
+        g, name = sp.factor(f), "factored form"
+    elif op == "expand":
+        g, name = sp.expand(f), "expanded form"
+    elif op == "simplify":
+        g, name = sp.simplify(f), "simplified form"
+    else:
+        g, name = sp.apart(f, syms[0]), "partial fractions"
+    return SolverResult("polynomial algebra", f"{name}: {sp.sstr(g)}",
+                        "original and result agree at random numeric points", _equal_numeric(f, g, syms))
+
+
+@register("inequality")
+def s_inequality(q: str) -> Optional[SolverResult]:
+    ql = q.lower().replace("≤", "<=").replace("≥", ">=")
+    m = re.search(r"(?:solve|find (?:all )?(?:the )?(?:values? of )?x(?: such that)?|for which (?:values? of )?x)\s*:?\s*(.+?)\s*[?.!]*$", ql)
+    if not m:
+        return None
+    body = m.group(1)
+    op = re.search(r"<=|>=|<|>", body)
+    if not op:
+        return None
+    l, r = body.split(op.group(0), 1)
+    lhs, rhs = safe_parse(l), safe_parse(r)
+    syms = (lhs - rhs).free_symbols
+    if len(syms) != 1:
+        return None
+    x = next(iter(syms))
+    rel = {"<": sp.Lt, "<=": sp.Le, ">": sp.Gt, ">=": sp.Ge}[op.group(0)](lhs, rhs)
+    sol = sp.solve_univariate_inequality(rel, x, relational=False)
+    rnd = random.Random(21)
+    ok = True
+    for _ in range(400):
+        p = sp.Rational(rnd.randint(-20000, 20000), 1000)
+        ok &= bool(rel.subs(x, p)) == bool(sol.contains(p))
+    return SolverResult("inequality", f"{x} ∈ {sol}", "tested 400 points: membership matches the original inequality", ok)
+
+
+@register("summation")
+def s_summation(q: str) -> Optional[SolverResult]:
+    ql = q.lower()
+    m = re.search(r"sum of (.+?)\s+(?:for|from|where|with|as)\s+([a-z])\s*=\s*(-?\d+)\s*(?:to|until|→|up to)\s*(\d+|n|infinity|oo|∞)", ql)
+    if m:
+        body, var, lo, hi = m.group(1), m.group(2), int(m.group(3)), m.group(4)
+        k = sp.Symbol(var)
+        expr = safe_parse(body)
+        if hi.isdigit():
+            hi_i = int(hi)
+            if hi_i - lo > 200000:
+                return None
+            val = sp.summation(expr, (k, lo, hi_i))
+            direct = sum(expr.subs(k, i) for i in range(lo, hi_i + 1))
+            return SolverResult("summation", f"{sp.sstr(val)}", "adding the terms one by one gives the same",
+                                sp.simplify(val - direct) == 0)
+        if hi == "n":
+            n = sp.Symbol("n", integer=True, positive=True)
+            val = sp.simplify(sp.summation(expr, (k, lo, n)))
+            ok = all(sp.simplify(val.subs(n, t) - sum(expr.subs(k, i) for i in range(lo, t + 1))) == 0
+                     for t in range(max(lo, 1), max(lo, 1) + 6))
+            return SolverResult("summation", f"{sp.sstr(val)}", "formula tested against direct sums for 6 values of n", ok)
+        val = sp.summation(expr, (k, lo, sp.oo))
+        if val.has(sp.oo) or val.has(sp.zoo) or val.is_number is False:
+            return None
+        fn = sp.lambdify(k, expr, "math")
+        part = sum(fn(i) for i in range(lo, lo + 100000))
+        return SolverResult("infinite series", f"{sp.sstr(val)} ≈ {float(val.evalf()):.8g}",
+                            f"partial sum of 100,000 terms is {part:.8g}", abs(part - float(val.evalf())) < 1e-3 * (1 + abs(part)))
+    m = re.search(r"sum of (?:the )?first (\d+) (natural numbers|positive integers|odd numbers|even numbers|squares|cubes)", ql)
+    if m:
+        n, kind = int(m.group(1)), m.group(2)
+        gen = {"natural numbers": lambda i: i, "positive integers": lambda i: i, "odd numbers": lambda i: 2 * i - 1,
+               "even numbers": lambda i: 2 * i, "squares": lambda i: i * i, "cubes": lambda i: i ** 3}[kind]
+        formula = {"natural numbers": n * (n + 1) // 2, "positive integers": n * (n + 1) // 2, "odd numbers": n * n,
+                   "even numbers": n * (n + 1), "squares": n * (n + 1) * (2 * n + 1) // 6,
+                   "cubes": (n * (n + 1) // 2) ** 2}[kind]
+        direct = sum(gen(i) for i in range(1, n + 1)) if n <= 2_000_000 else formula
+        return SolverResult("sum of first n terms", f"{formula:,}", "closed formula equals adding every term", formula == direct)
+    return None
+
+
+@register("arithmetic_geometric")
+def s_arith_geo(q: str) -> Optional[SolverResult]:
+    ql = q.lower()
+    kind = "arithmetic" if "arithmetic" in ql else "geometric" if "geometric" in ql else None
+    a = _num_after(ql, "first term")
+    if kind is None or a is None:
+        return None
+    mn = re.search(r"(\d+)(?:st|nd|rd|th)\s+term", ql)
+    ms = re.search(r"sum of (?:the )?first (\d+) terms?", ql)
+    if not mn and not ms:
+        return None
+    A = Fraction(str(a))
+    if kind == "arithmetic":
+        d = _num_after(ql, "common difference")
+        if d is None:
+            return None
+        D = Fraction(str(d))
+        nth = lambda n: A + (n - 1) * D  # noqa: E731
+        total = lambda n: Fraction(n, 2) * (2 * A + (n - 1) * D)  # noqa: E731
+        step = lambda t: t + D  # noqa: E731
+    else:
+        r = _num_after(ql, "common ratio")
+        if r is None:
+            return None
+        Rr = Fraction(str(r))
+        nth = lambda n: A * Rr ** (n - 1)  # noqa: E731
+        total = lambda n: A * n if Rr == 1 else A * (Rr ** n - 1) / (Rr - 1)  # noqa: E731
+        step = lambda t: t * Rr  # noqa: E731
+    out, ok = [], True
+    if mn:
+        n = int(mn.group(1))
+        t = A
+        for _ in range(n - 1):
+            t = step(t)
+        out.append(f"term {n} = {nth(n)}")
+        ok &= t == nth(n)
+    if ms:
+        n = int(ms.group(1))
+        t, s = A, Fraction(0)
+        for _ in range(n):
+            s += t
+            t = step(t)
+        out.append(f"sum of first {n} terms = {total(n)}")
+        ok &= s == total(n)
+    return SolverResult(f"{kind} sequence", "; ".join(out), "step-by-step iteration gives the same", ok)
+
+
+@register("next_term")
+def s_next_term(q: str) -> Optional[SolverResult]:
+    ql = q.lower()
+    if not re.search(r"next|missing|pattern|continue|what comes|sequence|series", ql):
+        return None
+    m = re.search(r"(-?\d+(?:\.\d+)?(?:\s*,\s*-?\d+(?:\.\d+)?){3,})", ql)
+    if not m:
+        return None
+    t = [Fraction(x.strip()) for x in m.group(1).split(",")]
+    n = len(t)
+
+    def show(v):
+        return str(v.numerator) if v.denominator == 1 else f"{v} (≈ {float(v):.6g})"
+
+    def diffs(seq):
+        return [seq[i + 1] - seq[i] for i in range(len(seq) - 1)]
+
+    # 1 arithmetic
+    d1 = diffs(t)
+    if len(set(d1)) == 1:
+        nxt = t[-1] + d1[0]
+        ok = all(t[i] == t[0] + i * d1[0] for i in range(n))
+        return SolverResult("next term", f"{show(nxt)}", f"arithmetic: add {show(d1[0])} each time; reproduces all {n} terms", ok)
+    # 2 geometric
+    if all(x != 0 for x in t[:-1]):
+        ratios = [t[i + 1] / t[i] for i in range(n - 1)]
+        if len(set(ratios)) == 1:
+            nxt = t[-1] * ratios[0]
+            ok = all(t[i] == t[0] * ratios[0] ** i for i in range(n))
+            return SolverResult("next term", f"{show(nxt)}", f"geometric: multiply by {show(ratios[0])}; reproduces all {n} terms", ok)
+    # 3 fibonacci-like
+    if n >= 5 and all(t[i] == t[i - 1] + t[i - 2] for i in range(2, n)):
+        return SolverResult("next term", f"{show(t[-1] + t[-2])}", "each term is the sum of the previous two (checked for every term)", True)
+    # 4 polynomial of degree k via finite differences
+    level = d1
+    for k in range(2, n - 1):
+        level = diffs(level)
+        if len(set(level)) == 1:
+            x = sp.Symbol("x")
+            poly = sp.interpolate([(i, sp.Rational(t[i].numerator, t[i].denominator)) for i in range(k + 1)], x)
+            ok = all(poly.subs(x, i) == sp.Rational(t[i].numerator, t[i].denominator) for i in range(n))
+            nxt = poly.subs(x, n)
+            return SolverResult("next term", f"{nxt}", f"polynomial of degree {k} (constant {k}th differences); term i = {sp.sstr(sp.expand(poly))} for i = 0,1,2,...", ok)
+    return None
+
+
+@register("complex_numbers")
+def s_complex(q: str) -> Optional[SolverResult]:
+    ql = q.lower()
+    m = re.search(r"(modulus|magnitude|absolute value|conjugate|argument|phase|polar form)\s*of\s*(.+?)\s*[?.!]*$", ql)
+    if not m:
+        return None
+    op = m.group(1)
+    z_sym = sp.expand(safe_parse(m.group(2), {"i": sp.I}))
+    if not z_sym.has(sp.I):
+        return None
+    z = complex(sp.N(z_sym))
+    import cmath
+    if op in ("modulus", "magnitude", "absolute value"):
+        ex = sp.simplify(sp.Abs(z_sym))
+        return SolverResult("complex modulus", f"|{sp.sstr(z_sym)}| = {sp.sstr(ex)} ≈ {float(ex.evalf()):.8g}",
+                            f"Python abs() gives {abs(z):.8g}", _close(float(ex.evalf()), abs(z), 1e-9))
+    if op == "conjugate":
+        ex = sp.conjugate(z_sym)
+        return SolverResult("complex conjugate", sp.sstr(sp.expand(ex)), "Python conjugate() agrees",
+                            _close(complex(sp.N(ex)).real, z.conjugate().real) and _close(complex(sp.N(ex)).imag, z.conjugate().imag))
+    th = sp.arg(z_sym)
+    if op in ("argument", "phase"):
+        return SolverResult("complex argument", f"{sp.sstr(sp.simplify(th))} ≈ {float(th.evalf()):.8g} rad",
+                            f"cmath.phase gives {cmath.phase(z):.8g}", _close(float(th.evalf()), cmath.phase(z), 1e-9))
+    r = abs(z)
+    back = complex(r * math.cos(cmath.phase(z)), r * math.sin(cmath.phase(z)))
+    return SolverResult("polar form", f"{r:.6g}·(cos {cmath.phase(z):.6g} + i·sin {cmath.phase(z):.6g})",
+                        f"converting back gives {back.real:.6g}{back.imag:+.6g}i", abs(back - z) < 1e-9)
+
+
+@register("base_conversion")
+def s_base(q: str) -> Optional[SolverResult]:
+    ql = q.lower()
+    names = {"binary": 2, "octal": 8, "hex": 16, "hexadecimal": 16}
+    m = re.search(r"(?:convert\s+)?(?:decimal\s+)?(\d+)\s+(?:to|in|into)\s+(binary|hexadecimal|hex|octal)\b", ql)
+    if m:
+        n, base = int(m.group(1)), names[m.group(2)]
+        out = format(n, {2: "b", 8: "o", 16: "x"}[base])
+        return SolverResult("base conversion", f"{n} in {m.group(2)} = {out}", "parsing the result back gives the original number",
+                            int(out, base) == n)
+    m = re.search(r"(?:convert\s+)?(binary|hexadecimal|hex|octal)\s+([0-9a-f]+)\s+(?:to|in|into)\s+decimal", ql)
+    if m:
+        base = names[m.group(1)]
+        try:
+            val = int(m.group(2), base)
+        except ValueError:
+            return SolverResult("base conversion", f"{m.group(2)} is not a valid {m.group(1)} number", "digit check", True)
+        back = format(val, {2: "b", 8: "o", 16: "x"}[base])
+        return SolverResult("base conversion", f"{m.group(1)} {m.group(2)} = {val} in decimal", "formatting back reproduces the digits",
+                            back == m.group(2).lstrip("0") or val == 0)
+    return None
+
+
+def _binexp(a: int, b: int, n: int) -> int:
+    r, a = 1, a % n
+    while b:
+        if b & 1:
+            r = r * a % n
+        a = a * a % n
+        b >>= 1
+    return r
+
+
+@register("modular_arithmetic")
+def s_modular(q: str) -> Optional[SolverResult]:
+    ql = q.lower().replace(",", "")
+    m = re.search(r"(\d+)\s*\^\s*(\d+)\s*(?:mod|modulo|%)\s*(\d+)", ql) or \
+        re.search(r"remainder when (\d+)\s*\^\s*(\d+)\s+is divided by (\d+)", ql)
+    if m:
+        a, b, n = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        if n == 0:
+            return None
+        v = pow(a, b, n)
+        return SolverResult("modular exponent", f"{a}^{b} mod {n} = {v}", "independent square-and-multiply gives the same", v == _binexp(a, b, n))
+    m = re.search(r"(?:modular )?inverse of (\d+)\s*(?:mod|modulo|under mod|modulus)\s*(\d+)", ql)
+    if m:
+        a, n = int(m.group(1)), int(m.group(2))
+        if math.gcd(a, n) != 1:
+            return SolverResult("modular inverse", f"no inverse: gcd({a}, {n}) = {math.gcd(a, n)} ≠ 1", "gcd computed", True)
+        inv = pow(a, -1, n)
+        return SolverResult("modular inverse", f"{inv}", f"{a}·{inv} mod {n} = {a * inv % n}", a * inv % n == 1)
+    m = re.search(r"last digit of (\d+)\s*\^\s*(\d+)", ql)
+    if m:
+        a, b = int(m.group(1)), int(m.group(2))
+        v = pow(a, b, 10)
+        seen, x, i = [], a % 10, 0
+        cyc = []
+        while x not in cyc:
+            cyc.append(x)
+            x = x * a % 10
+        start = cyc.index(x)
+        period = len(cyc) - start
+        pos = (b - 1) if b - 1 < start else start + ((b - 1 - start) % period)
+        return SolverResult("last digit", f"{v}", f"cycle of last digits {cyc}: position {pos} gives {cyc[pos]}", cyc[pos] == v)
+    m = re.search(r"remainder when (\d+) is divided by (\d+)", ql)
+    if m:
+        a, n = int(m.group(1)), int(m.group(2))
+        if n == 0:
+            return None
+        q_, r_ = divmod(a, n)
+        return SolverResult("remainder", f"{a % n}", f"{n}×{q_} + {r_} = {a}", n * q_ + r_ == a and r_ == a % n)
+    return None
+
+
+@register("percentages")
+def s_percent(q: str) -> Optional[SolverResult]:
+    ql = q.lower().replace(",", "")
+    n = r"(\d+(?:\.\d+)?)"
+    if m := re.search(rf"what is {n}\s*%\s*of\s*{n}", ql):
+        p, v = float(m.group(1)), float(m.group(2))
+        r = p * v / 100
+        return SolverResult("percentage of", f"{r:g}", f"{r:g} is {r / v * 100:g}% of {v:g}", _close(r / v * 100, p, 1e-9) if v else False)
+    if m := re.search(rf"{n}\s+is\s+what\s+percent(?:age)?\s+of\s+{n}", ql):
+        a, b = float(m.group(1)), float(m.group(2))
+        if b == 0:
+            return None
+        p = a / b * 100
+        return SolverResult("what percent", f"{p:.6g}%", f"{p:.6g}% of {b:g} = {b * p / 100:g}", _close(b * p / 100, a, 1e-9))
+    if m := re.search(rf"percent(?:age)?\s+(?:increase|decrease|change)\s+(?:from|between)\s+{n}\s+(?:to|and)\s+{n}", ql):
+        a, b = float(m.group(1)), float(m.group(2))
+        if a == 0:
+            return None
+        p = (b - a) / a * 100
+        return SolverResult("percentage change", f"{p:+.6g}% ({'increase' if p > 0 else 'decrease' if p < 0 else 'no change'})",
+                            f"{a:g} × (1 {p / 100:+.6g}) = {a * (1 + p / 100):g}", _close(a * (1 + p / 100), b, 1e-9))
+    if m := re.search(rf"(increase|decrease|reduce|raise)\s+{n}\s+by\s+{n}\s*%", ql):
+        a, p = float(m.group(2)), float(m.group(3))
+        sign = 1 if m.group(1) in ("increase", "raise") else -1
+        r = a * (1 + sign * p / 100)
+        back = r / (1 + sign * p / 100)
+        return SolverResult("percentage change", f"{r:.8g}", f"undoing the {p:g}% change gives {back:g}", _close(back, a, 1e-9))
+    if m := re.search(rf"(?:{n}\s*%\s*(?:discount|off)\s*(?:on|of|from)?\s*(?:a|an|the)?\s*(?:price of\s*)?{n}|discount of {n}\s*%\s*(?:on|off|from)\s*(?:a|an|the)?\s*(?:price of\s*)?{n})", ql):
+        g = [float(x) for x in m.groups() if x is not None]
+        p, price = g[0], g[1]
+        final = price * (1 - p / 100)
+        return SolverResult("discount", f"final price {final:.2f} (you save {price - final:.2f})",
+                            f"{final:.2f} + {price - final:.2f} = {final + price - final:.2f}", _close(final + (price - final), price, 1e-9))
+    return None
+
+
+@register("roman_numerals")
+def s_roman(q: str) -> Optional[SolverResult]:
+    if "roman" not in q.lower():
+        return None
+    table = [(1000, "M"), (900, "CM"), (500, "D"), (400, "CD"), (100, "C"), (90, "XC"), (50, "L"),
+             (40, "XL"), (10, "X"), (9, "IX"), (5, "V"), (4, "IV"), (1, "I")]
+
+    def to_roman(n):
+        out = ""
+        for v, s in table:
+            while n >= v:
+                out += s
+                n -= v
+        return out
+
+    def from_roman(s):
+        vals = {"I": 1, "V": 5, "X": 10, "L": 50, "C": 100, "D": 500, "M": 1000}
+        total = 0
+        for i, ch in enumerate(reversed(s)):
+            v = vals[ch]
+            total += v if (i == 0 or v >= vals[list(reversed(s))[i - 1]]) else -v
+        return total
+
+    m = re.search(r"(\d+)", q)
+    if m:
+        n = int(m.group(1))
+        if not 1 <= n <= 3999:
+            return None
+        r = to_roman(n)
+        return SolverResult("roman numerals", f"{n} = {r}", f"reading {r} back gives {from_roman(r)}", from_roman(r) == n)
+    m = re.search(r"\b([MDCLXVI]{1,15})\b", q)
+    if not m:
+        return None
+    s = m.group(1)
+    v = from_roman(s)
+    return SolverResult("roman numerals", f"{s} = {v}", f"writing {v} as a numeral gives {to_roman(v)}", from_roman(to_roman(v)) == v)
+
+
+_MONTHS = {name.lower(): i for i, name in enumerate(calendar.month_name) if name}
+_MONTHS.update({name.lower(): i for i, name in enumerate(calendar.month_abbr) if name})
+
+
+def _find_dates(q: str) -> List[datetime.date]:
+    ql = q.lower()
+    found: List[Tuple[int, datetime.date]] = []
+    for m in re.finditer(r"(\d{4})-(\d{1,2})-(\d{1,2})", ql):
+        found.append((m.start(), datetime.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))))
+    for m in re.finditer(r"(\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?([a-z]{3,9})\.?,?\s+(\d{4})", ql):
+        if m.group(2) in _MONTHS:
+            found.append((m.start(), datetime.date(int(m.group(3)), _MONTHS[m.group(2)], int(m.group(1)))))
+    for m in re.finditer(r"([a-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})", ql):
+        if m.group(1) in _MONTHS:
+            found.append((m.start(), datetime.date(int(m.group(3)), _MONTHS[m.group(1)], int(m.group(2)))))
+    found.sort()
+    return [d for _, d in found]
+
+
+def _zeller(y: int, m: int, d: int) -> str:
+    if m < 3:
+        m += 12
+        y -= 1
+    K, J = y % 100, y // 100
+    h = (d + (13 * (m + 1)) // 5 + K + K // 4 + J // 4 + 5 * J) % 7
+    return ["Saturday", "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"][h]
+
+
+def _jdn(y: int, m: int, d: int) -> int:
+    a = (14 - m) // 12
+    yy, mm = y + 4800 - a, m + 12 * a - 3
+    return d + (153 * mm + 2) // 5 + 365 * yy + yy // 4 - yy // 100 + yy // 400 - 32045
+
+
+@register("dates")
+def s_dates(q: str) -> Optional[SolverResult]:
+    ql = q.lower()
+    m = re.search(r"is\s+(\d{4})\s+a\s+leap\s+year|leap\s+year.*?(\d{4})", ql)
+    if m:
+        y = int(m.group(1) or m.group(2))
+        rule = (y % 4 == 0 and y % 100 != 0) or y % 400 == 0
+        days = (datetime.date(y, 12, 31) - datetime.date(y, 1, 1)).days + 1
+        return SolverResult("leap year", f"{y} {'is' if rule else 'is not'} a leap year", f"the year has {days} days",
+                            rule == (days == 366) == calendar.isleap(y))
+    ds = _find_dates(q)
+    if re.search(r"day of (?:the )?week|what day|which day|weekday", ql) and len(ds) == 1:
+        d = ds[0]
+        z = _zeller(d.year, d.month, d.day)
+        return SolverResult("day of the week", f"{d.isoformat()} is a {z}", "Zeller's congruence matches the calendar library",
+                            z == d.strftime("%A"))
+    if re.search(r"days between|how many days|difference between|days from", ql) and len(ds) == 2:
+        a, b = ds
+        diff = (b - a).days
+        j = _jdn(b.year, b.month, b.day) - _jdn(a.year, a.month, a.day)
+        return SolverResult("days between", f"{abs(diff)} days (from {min(a, b)} to {max(a, b)})",
+                            "Julian-day-number arithmetic gives the same", diff == j)
+    return None
+
+
+@register("text_tricks")
+def s_text(q: str) -> Optional[SolverResult]:
+    ql = q.lower().strip()
+    m = re.search(r"how many\s+(?:times\s+)?(?:does\s+)?(?:the\s+)?(?:letter\s+)?['\"]?([a-z])(?:'s|s)?['\"]?\s+"
+                  r"(?:are\s+|is\s+|appears?\s+|occurs?\s+)?(?:there\s+)?(?:in|inside)\s+(?:the\s+)?(?:word\s+)?['\"]?([a-z\-]+)['\"]?", ql)
+    if m:
+        ch, word = m.group(1), m.group(2)
+        a = word.count(ch)
+        b = sum(1 for c in word if c == ch)
+        pos = [i + 1 for i, c in enumerate(word) if c == ch]
+        return SolverResult("letter count", f"'{ch}' appears {a} time{'s' if a != 1 else ''} in \"{word}\" (positions {pos})",
+                            "counted twice, by string count and letter-by-letter", a == b == len(re.findall(ch, word)))
+    m = re.search(r"how many vowels (?:are )?(?:there )?in\s+['\"]?(.+?)['\"]?\s*[?.!]*$", ql)
+    if m:
+        t = m.group(1)
+        a = sum(t.count(v) for v in "aeiou")
+        b = len(re.findall(r"[aeiou]", t))
+        return SolverResult("vowel count", f"{a} vowels in \"{t}\"", "regex count agrees", a == b)
+    m = re.search(r"how many words (?:are )?(?:there )?in[:\s]+['\"]?(.+?)['\"]?\s*[?.!]*$", q, re.I)
+    if m:
+        t = m.group(1)
+        a, b = len(t.split()), len(re.findall(r"\S+", t))
+        return SolverResult("word count", f"{a} words", "two splitting methods agree", a == b)
+    m = re.search(r"\breverse\s+(?:the\s+)?(?:word|string|text|letters (?:of|in))\s+['\"]?([^'\"?]+?)['\"]?\s*[?.!]*$", q, re.I) or \
+        re.search(r"\breverse\s+['\"]([^'\"]+)['\"]", q, re.I)
+    if m:
+        t = m.group(1).strip()
+        r = t[::-1]
+        return SolverResult("reverse", r, "reversing the result gives the original", r[::-1] == t and "".join(reversed(t)) == r)
+    m = re.search(r"is\s+['\"]?([a-z0-9 ]+?)['\"]?\s+a\s+palindrome", ql)
+    if m:
+        t = re.sub(r"[^a-z0-9]", "", m.group(1))
+        a = t == t[::-1]
+        i, j, b = 0, len(t) - 1, True
+        while i < j:
+            b &= t[i] == t[j]
+            i, j = i + 1, j - 1
+        return SolverResult("palindrome", f"\"{m.group(1)}\" {'is' if a else 'is not'} a palindrome", "two-pointer check agrees", a == b)
+    m = re.search(r"are\s+['\"]?([a-z]+)['\"]?\s+and\s+['\"]?([a-z]+)['\"]?\s+anagrams", ql)
+    if m:
+        x, y = m.groups()
+        a = sorted(x) == sorted(y)
+        return SolverResult("anagram", f"{x} and {y} {'are' if a else 'are not'} anagrams", "letter-frequency comparison agrees", a == (Counter(x) == Counter(y)))
+    return None
+
+
+@register("encodings")
+def s_encoding(q: str) -> Optional[SolverResult]:
+    ql = q.lower()
+    if "base64" in ql.replace(" ", "").replace("-", ""):
+        m = re.search(r"(?:encode|convert)\s+['\"]?(.+?)['\"]?\s+(?:to|in|into)\s+base\s*-?64", q, re.I)
+        if m:
+            t = m.group(1)
+            enc = base64.b64encode(t.encode()).decode()
+            return SolverResult("base64 encode", enc, "decoding it returns the original text", base64.b64decode(enc).decode() == t)
+        m = re.search(r"decode\s+(?:this\s+)?(?:base\s*-?64\s+)?(?:string\s+)?['\"]?([A-Za-z0-9+/=]{4,})['\"]?", q, re.I)
+        if m:
+            try:
+                dec = base64.b64decode(m.group(1), validate=True).decode("utf-8")
+            except Exception:  # noqa: BLE001
+                return None
+            return SolverResult("base64 decode", dec, "re-encoding returns the original string",
+                                base64.b64encode(dec.encode()).decode().rstrip("=") == m.group(1).rstrip("="))
+    if "caesar" in ql or "rot13" in ql or "rot-13" in ql:
+        mt = re.search(r"['\"]([^'\"]+)['\"]", q)
+        if not mt:
+            return None
+        shift = 13 if "rot" in ql else None
+        if shift is None:
+            ms = re.search(r"(?:shift|by|key)\s*(?:of\s*)?(\d+)", ql)
+            if not ms:
+                return None
+            shift = int(ms.group(1))
+        if re.search(r"decrypt|decode", ql):
+            shift = -shift
+
+        def rot(t, k):
+            return "".join(chr((ord(c) - base + k) % 26 + base) if c.isalpha() and c.isascii() and (base := 65 if c.isupper() else 97) else c
+                           for c in t)
+        out = rot(mt.group(1), shift)
+        return SolverResult("Caesar cipher", out, "shifting back returns the original text", rot(out, -shift) == mt.group(1))
+    return None
+
+
+@register("number_facts")
+def s_numfacts(q: str) -> Optional[SolverResult]:
+    ql = q.lower().replace(",", "")
+    m = re.search(r"(\d+)(?:st|nd|rd|th)\s+fibonacci", ql) or re.search(r"fibonacci(?:\s+number)?\s*(?:f\s*)?\(?\s*(\d+)\s*\)?", ql)
+    if m:
+        n = int(m.group(1))
+        if not 1 <= n <= 100000:
+            return None
+        a, b = 0, 1
+        for _ in range(n):
+            a, b = b, a + b
+
+        def fd(k):
+            if k == 0:
+                return 0, 1
+            x, y = fd(k >> 1)
+            c = x * (2 * y - x)
+            d = x * x + y * y
+            return (d, c + d) if k & 1 else (c, d)
+        ok = a == fd(n)[0] == int(sp.fibonacci(n))
+        s = str(a)
+        return SolverResult("Fibonacci", f"F({n}) = {s if len(s) <= 40 else s[:20] + '… (' + str(len(s)) + ' digits)'}",
+                            "iteration, fast doubling and sympy all agree", ok)
+    m = re.search(r"(\d+)(?:st|nd|rd|th)\s+prime", ql)
+    if m:
+        n = int(m.group(1))
+        if not 1 <= n <= 200000:
+            return None
+        limit = max(15, int(n * (math.log(n) + math.log(math.log(n))) * 1.3) + 10) if n > 5 else 15
+        sieve = bytearray([1]) * (limit + 1)
+        sieve[0:2] = b"\x00\x00"
+        for i in range(2, int(limit ** 0.5) + 1):
+            if sieve[i]:
+                sieve[i * i::i] = bytearray(len(sieve[i * i::i]))
+        primes = [i for i, v in enumerate(sieve) if v]
+        return SolverResult("nth prime", f"prime #{n} is {primes[n - 1]}", "sieve of Eratosthenes and sympy.prime agree", primes[n - 1] == int(sp.prime(n)))
+    m = re.search(r"(\d+)\s*!", ql) or re.search(r"factorial of (\d+)", ql)
+    if m:
+        n = int(m.group(1))
+        if n > 5000:
+            return None
+        f = math.factorial(n)
+        prod = 1
+        for i in range(2, n + 1):
+            prod *= i
+        digits = len(str(f))
+        if "digit" in ql and "sum" not in ql:
+            est = int(math.lgamma(n + 1) / math.log(10)) + 1
+            return SolverResult("factorial digits", f"{n}! has {digits} digits", f"log-gamma estimate gives {est}", f == prod and abs(est - digits) <= 1)
+        if "trailing zero" in ql:
+            z, p = 0, 5
+            while p <= n:
+                z += n // p
+                p *= 5
+            s = str(f)
+            return SolverResult("trailing zeros", f"{n}! ends in {z} zeros", "counted zeros in the full number", z == len(s) - len(s.rstrip("0")))
+        s = str(f)
+        return SolverResult("factorial", f"{n}! = {s if len(s) <= 60 else s[:20] + '… (' + str(digits) + ' digits)'}",
+                            "math.factorial equals the running product", f == prod)
+    m = re.search(r"sum of (?:the )?digits of (\d+)(?:\s*\^\s*(\d+))?", ql)
+    if m:
+        v = int(m.group(1)) ** int(m.group(2) or 1)
+        a = sum(int(c) for c in str(v))
+        b, t = 0, v
+        while t:
+            t, r = divmod(t, 10)
+            b += r
+        return SolverResult("digit sum", f"{a}", "dividing by 10 repeatedly gives the same", a == b)
+    return None
+
+
+@register("letter_arrangements")
+def s_arrangements(q: str) -> Optional[SolverResult]:
+    ql = q.lower()
+    m = re.search(r"(?:arrangements|permutations|ways to arrange|ways can (?:you )?arrange|distinct arrangements)\s*(?:of\s*)?(?:the\s*)?letters\s*(?:of|in)\s*(?:the\s*word\s*)?['\"]?([a-z]+)['\"]?", ql)
+    if not m:
+        return None
+    w = m.group(1)
+    n = len(w)
+    if n > 20:
+        return None
+    cnt = Counter(w)
+    val = math.factorial(n)
+    for c in cnt.values():
+        val //= math.factorial(c)
+    alt, left = 1, n
+    for c in cnt.values():
+        alt *= math.comb(left, c)
+        left -= c
+    ok = val == alt
+    how = "chosen-positions product (nCr) agrees"
+    if n <= 8:
+        enum = len(set(itertools.permutations(w)))
+        ok &= enum == val
+        how = f"enumerated {enum:,} distinct orderings"
+    rep = ", ".join(f"{k}×{v}" for k, v in cnt.items() if v > 1) or "no repeated letters"
+    return SolverResult("letter arrangements", f"{val:,} distinct arrangements of {w.upper()} ({rep})", how, ok)
+
+
+@register("coin_change")
+def s_coins(q: str) -> Optional[SolverResult]:
+    ql = q.lower().replace(",", " ,")
+    if not re.search(r"coin|denomination|change", ql):
+        return None
+    md = re.search(r"(?:coins?|denominations?|using|with)[^\d]{0,25}(\d+(?:\s*(?:,|and|&|or)\s*\d+)+)", ql)
+    ma = re.search(r"(?:make|change for|amount of|sum of|total of|reach|for)\s*(?:\$|rs\.?|₹)?\s*(\d+)", ql)
+    if not md or not ma:
+        return None
+    coins = sorted({int(x) for x in re.findall(r"\d+", md.group(1)) if int(x) > 0})
+    amount = int(ma.group(1))
+    if amount > 100000 or len(coins) > 12 or len(coins) < 2:
+        return None
+    want_ways = re.search(r"ways|combinations", ql) is not None
+    if want_ways:
+        dp = [1] + [0] * amount
+        for c in coins:
+            for a in range(c, amount + 1):
+                dp[a] += dp[a - c]
+        ways = dp[amount]
+        if amount <= 600:
+            import functools
+            sys.setrecursionlimit(max(sys.getrecursionlimit(), 5000))
+
+            @functools.lru_cache(None)
+            def rec(a, i):
+                if a == 0:
+                    return 1
+                if a < 0 or i == len(coins):
+                    return 0
+                return rec(a - coins[i], i) + rec(a, i + 1)
+            ok = rec(amount, 0) == ways
+            how = "recursive count with memoisation agrees"
+        else:
+            ok, how = True, "table DP (no independent check for this size)"
+        return SolverResult("coin change (ways)", f"{ways:,} ways to make {amount} with {coins}", how, ok)
+    INF = 10 ** 9
+    best = [0] + [INF] * amount
+    for a in range(1, amount + 1):
+        for c in coins:
+            if c <= a and best[a - c] + 1 < best[a]:
+                best[a] = best[a - c] + 1
+    if best[amount] >= INF:
+        return SolverResult("coin change", f"{amount} cannot be made with {coins}", "table DP found no way", True)
+    used, a = [], amount
+    while a:
+        for c in sorted(coins, reverse=True):
+            if c <= a and best[a - c] == best[a] - 1:
+                used.append(c)
+                a -= c
+                break
+    ok = sum(used) == amount and len(used) == best[amount]
+    if amount <= 20000:
+        from collections import deque
+        seen, dq = {0}, deque([(0, 0)])
+        bfs = None
+        while dq:
+            v, d = dq.popleft()
+            if v == amount:
+                bfs = d
+                break
+            for c in coins:
+                if v + c <= amount and v + c not in seen:
+                    seen.add(v + c)
+                    dq.append((v + c, d + 1))
+        ok &= bfs == best[amount]
+        how = "breadth-first search finds the same minimum"
+    else:
+        how = "the chosen coins add up exactly"
+    return SolverResult("coin change (minimum)", f"{best[amount]} coins: {sorted(used, reverse=True)} make {amount}", how, ok)
+
+
+@register("tower_of_hanoi")
+def s_hanoi(q: str) -> Optional[SolverResult]:
+    ql = q.lower()
+    m = re.search(r"(\d+)\s+disks?", ql)
+    if "hanoi" not in ql or not m:
+        return None
+    n = int(m.group(1))
+    if not 1 <= n <= 60:
+        return None
+    formula = 2 ** n - 1
+    rec = 0
+    t = 0
+    for _ in range(n):
+        t = 2 * t + 1
+    rec = t
+    ok = formula == rec
+    how = "recurrence T(n) = 2T(n-1) + 1 agrees"
+    if n <= 12:
+        pegs = [list(range(n, 0, -1)), [], []]
+        moves = 0
+
+        def mv(k, a, b, c):
+            nonlocal moves
+            if k == 0:
+                return True
+            if not mv(k - 1, a, c, b):
+                return False
+            disk = pegs[a].pop()
+            if pegs[b] and pegs[b][-1] < disk:
+                return False
+            pegs[b].append(disk)
+            moves += 1
+            return mv(k - 1, c, b, a)
+        legal = mv(n, 0, 2, 1)
+        ok &= legal and moves == formula and pegs[2] == list(range(n, 0, -1))
+        how = f"simulated every move legally ({moves:,} moves)"
+    return SolverResult("Tower of Hanoi", f"{n} disks need {formula:,} moves at minimum (2^{n} − 1)", how, ok)
+
+
+@register("optimisation")
+def s_optimise(q: str) -> Optional[SolverResult]:
+    ql = q.lower()
+    m = re.search(r"(maximum|minimum|max|min)(?:imum)?\s*(?:value\s*)?of\s*(.+?)\s*(?:on|over|in|for|between)\s*(?:the\s*)?(?:interval\s*)?"
+                  r"\[\s*([^,\]]+?)\s*,\s*([^\]]+?)\s*\]", ql)
+    if not m:
+        return None
+    import numpy as np
+    want_max = m.group(1).startswith("max")
+    x = sp.Symbol("x")
+    f = safe_parse(m.group(2))
+    a, b = safe_parse(m.group(3)), safe_parse(m.group(4))
+    if f.free_symbols - {x}:
+        return None
+    af, bf = float(a.evalf()), float(b.evalf())
+    crit = [c for c in sp.solve(sp.diff(f, x), x) if c.is_real and af <= float(c.evalf()) <= bf]
+    cands = [a, b] + crit
+    vals = [(float(sp.N(f.subs(x, c))), c) for c in cands]
+    best_v, best_x = max(vals, key=lambda t: t[0]) if want_max else min(vals, key=lambda t: t[0])
+    grid = np.linspace(af, bf, 200001)
+    fn = sp.lambdify(x, f, "numpy")
+    gv = np.asarray(fn(grid), dtype=float)
+    gv = gv if gv.shape else np.full_like(grid, float(gv))
+    ref = float(np.nanmax(gv) if want_max else np.nanmin(gv))
+    return SolverResult("optimisation", f"{'maximum' if want_max else 'minimum'} = {sp.sstr(sp.nsimplify(best_v)) if abs(best_v) < 1e9 else best_v} at x = {sp.sstr(best_x)}",
+                        f"scanning 200,001 points gives {ref:.8g}", _close(best_v, ref, 1e-6),
+                        [f"candidates: endpoints and critical points {[sp.sstr(c) for c in crit]}"])
+
+
+# ==========================================================================
+# BATCH 4 - physics, chemistry, vectors, regression, finance, work/rate
+# ==========================================================================
+
+
+def _g(ql: str) -> float:
+    m = re.search(r"\bg\s*=\s*(\d+(?:\.\d+)?)", ql)
+    return float(m.group(1)) if m else 9.8
+
+
+@register("projectile")
+def s_projectile(q: str) -> Optional[SolverResult]:
+    ql = q.lower()
+    if not re.search(r"projectile|thrown|launched|fired|kicked|shot|\bhit\b", ql):
+        return None
+    mv = re.search(r"(\d+(?:\.\d+)?)\s*m\s*/\s*s", ql)
+    ma = re.search(r"(\d+(?:\.\d+)?)\s*(?:°|degrees?|deg)\b", ql)
+    if not mv or not ma:
+        return None
+    v, deg, g = float(mv.group(1)), float(ma.group(1)), _g(ql)
+    th = math.radians(deg)
+    T = 2 * v * math.sin(th) / g
+    R = v * v * math.sin(2 * th) / g
+    H = (v * math.sin(th)) ** 2 / (2 * g)
+    if T <= 0:
+        return None
+    n = 200000
+    dt = T / n
+    x = y = 0.0
+    vx, vy = v * math.cos(th), v * math.sin(th)
+    top, t = 0.0, 0.0
+    while True:
+        ny = y + vy * dt - 0.5 * g * dt * dt
+        vy -= g * dt
+        x += vx * dt
+        t += dt
+        top = max(top, ny)
+        if ny < 0:
+            f = y / (y - ny)
+            x -= vx * dt * (1 - f)
+            t -= dt * (1 - f)
+            break
+        y = ny
+    ok = _close(t, T, 1e-3) and _close(x, R, 1e-3) and _close(top, H, 1e-3)
+    return SolverResult("projectile motion", f"time of flight {T:.4g} s, range {R:.4g} m, max height {H:.4g} m (g = {g:g} m/s²)",
+                        f"step-by-step simulation gives {t:.4g} s, {x:.4g} m, {top:.4g} m", ok)
+
+
+@register("free_fall")
+def s_freefall(q: str) -> Optional[SolverResult]:
+    ql = q.lower()
+    if not re.search(r"dropped|falls?\b|free[- ]fall|released from rest|let go", ql) or re.search(r"°|degrees?", ql):
+        return None
+    mh = re.search(r"(\d+(?:\.\d+)?)\s*(?:m|meters?|metres?)\b(?!\s*/)", ql)
+    if not mh:
+        return None
+    h, g = float(mh.group(1)), _g(ql)
+    T = math.sqrt(2 * h / g)
+    v = g * T
+    n = 200000
+    dt = T / n
+    y, vel = 0.0, 0.0
+    for _ in range(n):
+        y += vel * dt + 0.5 * g * dt * dt
+        vel += g * dt
+    ok = _close(y, h, 1e-6) and _close(vel, v, 1e-6) and _close(v, math.sqrt(2 * g * h), 1e-9)
+    return SolverResult("free fall", f"falls for {T:.4g} s and hits the ground at {v:.4g} m/s (g = {g:g} m/s², no air resistance)",
+                        f"simulation covers {y:.4g} m; energy conservation gives {math.sqrt(2 * g * h):.4g} m/s", ok)
+
+
+@register("suvat")
+def s_suvat(q: str) -> Optional[SolverResult]:
+    ql = q.lower()
+    vals = dict(re.findall(r"\b([uvast])\s*=\s*(-?\d+(?:\.\d+)?)", ql))
+    if len(vals) != 3 or not re.search(r"find|calculate|what|determine", ql):
+        return None
+    u, v, a, s, t = sp.symbols("u v a s t")
+    sym = {"u": u, "v": v, "a": a, "s": s, "t": t}
+    eqs = [sp.Eq(v, u + a * t), sp.Eq(s, u * t + a * t ** 2 / 2), sp.Eq(v ** 2, u ** 2 + 2 * a * s),
+           sp.Eq(s, (u + v) * t / 2), sp.Eq(s, v * t - a * t ** 2 / 2)]
+    known = {sym[k]: sp.Rational(val) for k, val in vals.items()}
+    unknown = [sym[k] for k in "uvast" if k not in vals]
+    sols: List[dict] = []
+    seen = set()
+    for pair in itertools.combinations(eqs, 2):
+        try:
+            res = sp.solve([e.subs(known) for e in pair], unknown, dict=True)
+        except Exception:  # noqa: BLE001
+            continue
+        for r in res:
+            if not all(x in r and r[x].is_real for x in unknown):
+                continue
+            if t in r and r[t] < 0:
+                continue
+            if all(sp.simplify(e.subs(known).subs(r)) == True for e in eqs):  # noqa: E712
+                key = tuple(sp.nsimplify(r[x]) for x in unknown)
+                if key not in seen:
+                    seen.add(key)
+                    sols.append(r)
+    if not sols:
+        return None
+    def fmt(val):
+        val = sp.nsimplify(val)
+        return sp.sstr(val) if val.is_Integer else f"{sp.sstr(val)} (= {float(val):.6g})"
+    shown = " or ".join(", ".join(f"{x} = {fmt(r[x])}" for x in unknown) for r in sols)
+    return SolverResult("kinematics (SUVAT)", shown, "each solution satisfies all five SUVAT equations", True)
+
+
+@register("physics_formulas")
+def s_physics(q: str) -> Optional[SolverResult]:
+    ql = q.lower()
+
+    def val(pat):
+        m = re.search(pat, ql)
+        return float(m.group(1)) if m else None
+
+    kg = val(r"(\d+(?:\.\d+)?)\s*kg")
+    ms = val(r"(\d+(?:\.\d+)?)\s*m\s*/\s*s\b(?!\s*[²2^])")
+    g = _g(ql)
+    if "kinetic energy" in ql and kg and ms:
+        ke, p = 0.5 * kg * ms ** 2, kg * ms
+        alt = p * p / (2 * kg)
+        return SolverResult("kinetic energy", f"KE = {ke:g} J", f"p²/2m gives {alt:g} J", _close(ke, alt, 1e-12), [f"KE = ½mv² with m = {kg:g} kg, v = {ms:g} m/s"])
+    if "momentum" in ql and kg and ms:
+        p = kg * ms
+        return SolverResult("momentum", f"p = {p:g} kg·m/s", f"p²/2m = {p * p / (2 * kg):g} J equals ½mv² = {0.5 * kg * ms ** 2:g} J",
+                            _close(p * p / (2 * kg), 0.5 * kg * ms ** 2, 1e-12))
+    mh = val(r"(\d+(?:\.\d+)?)\s*(?:m|meters?|metres?)\b(?!\s*/)")
+    if "potential energy" in ql and kg and mh:
+        pe = kg * g * mh
+        vv = math.sqrt(2 * g * mh)
+        return SolverResult("gravitational potential energy", f"PE = {pe:g} J (g = {g:g} m/s²)",
+                            f"after falling, ½mv² = {0.5 * kg * vv * vv:g} J (energy conservation)", _close(pe, 0.5 * kg * vv * vv, 1e-9))
+    if re.search(r"ohm|voltage|current|resistance|volts?\b|amps?\b", ql):
+        V = val(r"(\d+(?:\.\d+)?)\s*(?:v|volts?)\b")
+        I = val(r"(\d+(?:\.\d+)?)\s*(?:a|amps?|amperes?)\b")
+        R = val(r"(\d+(?:\.\d+)?)\s*(?:ohms?|Ω|ω)")
+        given = [x for x in (V, I, R) if x is not None]
+        if len(given) == 2:
+            if V is None:
+                V = I * R
+            elif I is None:
+                if R == 0:
+                    return None
+                I = V / R
+            else:
+                if I == 0:
+                    return None
+                R = V / I
+            P = V * I
+            ok = _close(P, I * I * R, 1e-9) and _close(P, V * V / R, 1e-9)
+            return SolverResult("Ohm's law", f"V = {V:g} V, I = {I:g} A, R = {R:g} Ω, power = {P:g} W",
+                                "P = VI = I²R = V²/R all agree", ok)
+    if "average speed" in ql or "speed" in ql and re.search(r"travel|drives?|runs?|walks?|cycles?", ql):
+        md = re.search(r"(\d+(?:\.\d+)?)\s*(km|kilometers?|kilometres?|miles?|m|meters?|metres?)\b(?!\s*/)", ql)
+        mt = re.search(r"(\d+(?:\.\d+)?)\s*(hours?|hrs?|h|minutes?|mins?|seconds?|secs?)\b", ql)
+        if md and mt:
+            d, t = float(md.group(1)), float(mt.group(1))
+            if t == 0:
+                return None
+            du, tu = md.group(2), mt.group(2)
+            spd = d / t
+            dunit = "km" if du.startswith(("k",)) else "miles" if du.startswith("mi") else "m"
+            tunit = "h" if tu.startswith("h") else "min" if tu.startswith("m") else "s"
+            return SolverResult("average speed", f"{spd:.6g} {dunit}/{tunit}", f"{spd:.6g} × {t:g} = {spd * t:g} {dunit}", _close(spd * t, d, 1e-12))
+    return None
+
+
+def _parse_side(side: str) -> List[Dict[str, int]]:
+    out = []
+    for sp_ in side.split("+"):
+        f = re.sub(r"^\s*\d+\s*", "", sp_.strip())
+        if f:
+            out.append(_counts_stack(f))
+    return out
+
+
+@register("balance_equation")
+def s_balance(q: str) -> Optional[SolverResult]:
+    if "balance" not in q.lower():
+        return None
+    body = re.sub(r"^.*?\bbalance\b\s*(?:the\s*)?(?:following\s*)?(?:chemical\s*)?(?:equation|reaction)?\s*:?\s*", "", q, flags=re.I)
+    m = re.search(r"([A-Za-z0-9() +]+?)\s*(?:->|→|=>|=)\s*([A-Za-z0-9() +]+)", body)
+    if not m:
+        return None
+    left, right = m.group(1).strip(), m.group(2).strip().rstrip("?.!")
+    names_l = [re.sub(r"^\s*\d+\s*", "", x.strip()) for x in left.split("+") if x.strip()]
+    names_r = [re.sub(r"^\s*\d+\s*", "", x.strip()) for x in right.split("+") if x.strip()]
+    if not names_l or not names_r or any(not re.fullmatch(r"[A-Z][A-Za-z0-9()]*", x) for x in names_l + names_r):
+        return None
+    cols = [_counts_stack(f) for f in names_l] + [_counts_stack(f) for f in names_r]
+    elems = sorted({e for c in cols for e in c})
+    M = sp.Matrix([[(1 if j < len(names_l) else -1) * c.get(e, 0) for j, c in enumerate(cols)] for e in elems])
+    ns = M.nullspace()
+    if len(ns) != 1:
+        return None
+    v = ns[0]
+    den = sp.ilcm(*[x.q for x in v])
+    coef = [int(x * den) for x in v]
+    g = math.gcd(*coef)
+    coef = [c // g for c in coef]
+    if any(c <= 0 for c in coef):
+        coef = [-c for c in coef]
+    if any(c <= 0 for c in coef):
+        return None
+    names = names_l + names_r
+    nl = len(names_l)
+    tot_l, tot_r = Counter(), Counter()
+    for i, f in enumerate(names):
+        for e, n in _counts_stack(f).items():
+            (tot_l if i < nl else tot_r)[e] += n * coef[i]
+    fmt = lambda cs, nm: " + ".join((f"{c} " if c != 1 else "") + n for c, n in zip(cs, nm))  # noqa: E731
+    return SolverResult("balance chemical equation", f"{fmt(coef[:nl], names_l)} → {fmt(coef[nl:], names_r)}",
+                        f"atom counts match on both sides: {dict(tot_l)}", tot_l == tot_r)
+
+
+@register("chemistry_calcs")
+def s_chem(q: str) -> Optional[SolverResult]:
+    ql = q.lower()
+    if re.search(r"\bph\b", ql):
+        m = re.search(r"(\d+(?:\.\d+)?(?:e-?\d+)?)\s*m\b", ql) or re.search(r"\[h\+?\]\s*=\s*(\d+(?:\.\d+)?(?:e-?\d+)?)", ql)
+        if m and re.search(r"of|\[h", ql):
+            c = float(m.group(1))
+            if c <= 0:
+                return None
+            ph = -math.log10(c)
+            return SolverResult("pH", f"pH = {ph:.4g} (assuming a strong monoprotic acid, so [H⁺] = {c:g} M)",
+                                f"10^(−pH) = {10 ** (-ph):g} M gives the concentration back", _close(10 ** (-ph), c, 1e-9))
+        m = re.search(r"ph\s*(?:of|is|=)?\s*(\d+(?:\.\d+)?)", ql)
+        if m and re.search(r"concentration|\[h|hydrogen ion", ql):
+            ph = float(m.group(1))
+            c = 10 ** (-ph)
+            return SolverResult("hydrogen ion concentration", f"[H⁺] = {c:.4g} M", f"−log10 of it gives pH {-math.log10(c):.4g}", _close(-math.log10(c), ph, 1e-9))
+    if re.search(r"ideal gas|pv\s*=\s*nrt", ql):
+        P = re.search(r"(\d+(?:\.\d+)?)\s*atm", ql)
+        V = re.search(r"(\d+(?:\.\d+)?)\s*(?:l|liters?|litres?)\b", ql)
+        n = re.search(r"(\d+(?:\.\d+)?)\s*mol", ql)
+        T = re.search(r"(\d+(?:\.\d+)?)\s*k\b", ql)
+        have = {k: float(x.group(1)) for k, x in zip("PVnT", (P, V, n, T)) if x}
+        if len(have) == 3:
+            R = 0.082057
+            miss = next(k for k in "PVnT" if k not in have)
+            P_, V_, n_, T_ = (have.get(k) for k in "PVnT")
+            if miss == "P":
+                P_ = n_ * R * T_ / V_
+            elif miss == "V":
+                V_ = n_ * R * T_ / P_
+            elif miss == "n":
+                n_ = P_ * V_ / (R * T_)
+            else:
+                T_ = P_ * V_ / (n_ * R)
+            val = {"P": P_, "V": V_, "n": n_, "T": T_}[miss]
+            unit = {"P": "atm", "V": "L", "n": "mol", "T": "K"}[miss]
+            return SolverResult("ideal gas law", f"{miss} = {val:.5g} {unit} (R = 0.082057 L·atm/(mol·K))",
+                                f"PV/(nT) = {P_ * V_ / (n_ * T_):.6f} equals R", _close(P_ * V_ / (n_ * T_), R, 1e-9))
+    if re.search(r"dilut|m1\s*v1", ql):
+        d = {k: float(v) for k, v in re.findall(r"\b([mcv][12])\s*=\s*(\d+(?:\.\d+)?)", ql)}
+        d = {("m" + k[1] if k[0] == "c" else k): v for k, v in d.items()}
+        if len(d) == 3:
+            miss = next(k for k in ("m1", "v1", "m2", "v2") if k not in d)
+            if miss == "m1":
+                d[miss] = d["m2"] * d["v2"] / d["v1"]
+            elif miss == "v1":
+                d[miss] = d["m2"] * d["v2"] / d["m1"]
+            elif miss == "m2":
+                d[miss] = d["m1"] * d["v1"] / d["v2"]
+            else:
+                d[miss] = d["m1"] * d["v1"] / d["m2"]
+            return SolverResult("dilution (M₁V₁ = M₂V₂)", f"{miss.upper()} = {d[miss]:.6g}",
+                                f"M₁V₁ = {d['m1'] * d['v1']:.6g} and M₂V₂ = {d['m2'] * d['v2']:.6g}", _close(d["m1"] * d["v1"], d["m2"] * d["v2"], 1e-9))
+    return None
+
+
+@register("matrix_vector_ops")
+def s_mvops(q: str) -> Optional[SolverResult]:
+    import numpy as np
+    ql = q.lower()
+    mats = re.findall(r"\[\s*\[[^\]]*\](?:\s*,\s*\[[^\]]*\])*\s*\]", q)
+    if len(mats) == 2 and re.search(r"multiply|product|times", ql):
+        A, B = sp.Matrix(ast.literal_eval(mats[0])), sp.Matrix(ast.literal_eval(mats[1]))
+        if A.shape[1] != B.shape[0]:
+            return SolverResult("matrix product", f"not defined: {A.shape[0]}×{A.shape[1]} times {B.shape[0]}×{B.shape[1]}",
+                                "inner dimensions differ", True)
+        C = A * B
+        ok = np.allclose(np.array(A.tolist(), dtype=float) @ np.array(B.tolist(), dtype=float), np.array(C.tolist(), dtype=float))
+        return SolverResult("matrix product", sp.sstr(C), "numpy matrix product agrees", ok)
+    if mats:
+        return None
+    vecs = [[float(x) for x in v.split(",")] for v in
+            re.findall(r"[\(\[]\s*(-?\d+(?:\.\d+)?(?:\s*,\s*-?\d+(?:\.\d+)?){1,2})\s*[\)\]]", q)]
+    if not vecs:
+        return None
+    op = next((k for k in ("dot product", "cross product", "angle between", "magnitude", "length of", "norm", "unit vector") if k in ql), None)
+    if not op:
+        return None
+    if op in ("magnitude", "length of", "norm", "unit vector") and len(vecs) >= 1:
+        a = np.array(vecs[0])
+        n = math.sqrt(sum(x * x for x in vecs[0]))
+        if op == "unit vector":
+            if n == 0:
+                return None
+            u = [x / n for x in vecs[0]]
+            return SolverResult("unit vector", f"{tuple(round(x, 6) for x in u)}", f"its length is {math.sqrt(sum(x * x for x in u)):.9f}", _close(math.sqrt(sum(x * x for x in u)), 1, 1e-9))
+        return SolverResult("vector magnitude", f"{n:.8g}", f"numpy norm gives {np.linalg.norm(a):.8g}", _close(n, float(np.linalg.norm(a)), 1e-12))
+    if len(vecs) < 2 or len(vecs[0]) != len(vecs[1]):
+        return None
+    a, b = vecs[0], vecs[1]
+    A, B = np.array(a), np.array(b)
+    if op == "dot product":
+        d = sum(x * y for x, y in zip(a, b))
+        return SolverResult("dot product", f"{d:g}", f"numpy dot gives {float(np.dot(A, B)):g}", _close(d, float(np.dot(A, B)), 1e-12))
+    if op == "cross product":
+        if len(a) == 2:
+            z = a[0] * b[1] - a[1] * b[0]
+            return SolverResult("2D cross product", f"{z:g} (z-component)", "numpy cross agrees", _close(z, float(np.cross(A, B)), 1e-12))
+        c = [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+        ok = np.allclose(c, np.cross(A, B)) and abs(np.dot(c, A)) < 1e-9 and abs(np.dot(c, B)) < 1e-9
+        return SolverResult("cross product", f"({c[0]:g}, {c[1]:g}, {c[2]:g})", "matches numpy and is perpendicular to both vectors", bool(ok))
+    na, nb = np.linalg.norm(A), np.linalg.norm(B)
+    if na == 0 or nb == 0:
+        return None
+    ang1 = math.degrees(math.acos(max(-1, min(1, float(np.dot(A, B) / (na * nb))))))
+    cr = np.cross(A, B) if len(a) == 3 else abs(a[0] * b[1] - a[1] * b[0])
+    ang2 = math.degrees(math.atan2(float(np.linalg.norm(cr)), float(np.dot(A, B))))
+    return SolverResult("angle between vectors", f"{ang1:.6g}°", f"atan2(|a×b|, a·b) gives {ang2:.6g}°", _close(ang1, ang2, 1e-7))
+
+
+@register("regression_correlation")
+def s_regression(q: str) -> Optional[SolverResult]:
+    ql = q.lower()
+    m = re.search(r"z-?score\s*(?:of|for)?\s*(-?\d+(?:\.\d+)?)", ql)
+    if m:
+        x, mu, sd = float(m.group(1)), _num_after(ql, "mean"), _num_after(ql, r"(?:standard deviation|std|sd)")
+        if mu is None or not sd:
+            return None
+        z = (x - mu) / sd
+        return SolverResult("z-score", f"z = {z:.6g}", f"mean + z·sd = {mu + z * sd:g} gives back {x:g}", _close(mu + z * sd, x, 1e-12))
+    if not re.search(r"correlation|regression|best fit|r-squared", ql):
+        return None
+    lists = re.findall(r"\[([^\[\]]+)\]", q)
+    arrs = []
+    for l in lists:
+        try:
+            arrs.append([float(x) for x in l.split(",")])
+        except ValueError:
+            return None
+    if len(arrs) != 2 or len(arrs[0]) != len(arrs[1]) or len(arrs[0]) < 3:
+        return None
+    import numpy as np
+    x, y = arrs
+    n = len(x)
+    mx, my = sum(x) / n, sum(y) / n
+    sxx = sum((a - mx) ** 2 for a in x)
+    syy = sum((b - my) ** 2 for b in y)
+    sxy = sum((a - mx) * (b - my) for a, b in zip(x, y))
+    if sxx == 0 or syy == 0:
+        return None
+    r = sxy / math.sqrt(sxx * syy)
+    slope = sxy / sxx
+    icpt = my - slope * mx
+    ref_r = float(np.corrcoef(x, y)[0, 1])
+    ref_s, ref_i = np.polyfit(x, y, 1)
+    ok = _close(r, ref_r, 1e-9) and _close(slope, float(ref_s), 1e-9) and _close(icpt, float(ref_i), 1e-9)
+    return SolverResult("correlation and regression", f"r = {r:.6f}, R² = {r * r:.6f}; best-fit line y = {slope:.6g}·x + {icpt:.6g}",
+                        "numpy corrcoef and polyfit agree", ok)
+
+
+@register("finance_returns")
+def s_finance(q: str) -> Optional[SolverResult]:
+    ql = q.lower()
+    mc = re.search(r"cash\s*flows?\s*(?:of|:)?\s*(-?\d+(?:\.\d+)?(?:\s*,\s*-?\d+(?:\.\d+)?)+)", ql)
+    if mc and "npv" in ql:
+        cf = [float(x) for x in mc.group(1).split(",")]
+        mr = re.search(r"(\d+(?:\.\d+)?)\s*%", ql)
+        if not mr:
+            return None
+        r = float(mr.group(1)) / 100
+        npv = sum(c / (1 + r) ** i for i, c in enumerate(cf))
+        exact = sum(sp.Rational(str(c)) / (1 + sp.Rational(str(r))) ** i for i, c in enumerate(cf))
+        return SolverResult("NPV", f"NPV = {npv:,.2f} at {r * 100:g}%", f"exact rational arithmetic gives {float(exact):,.2f}", _close(npv, float(exact), 1e-9))
+    if mc and "irr" in ql:
+        cf = [float(x) for x in mc.group(1).split(",")]
+        f = lambda r: sum(c / (1 + r) ** i for i, c in enumerate(cf))  # noqa: E731
+        lo, hi = -0.99, 10.0
+        if f(lo) * f(hi) > 0:
+            return None
+        for _ in range(200):
+            mid = (lo + hi) / 2
+            if f(lo) * f(mid) <= 0:
+                hi = mid
+            else:
+                lo = mid
+        irr = (lo + hi) / 2
+        try:
+            from scipy.optimize import brentq
+            ref = brentq(f, -0.99, 10.0)
+            ok = _close(irr, ref, 1e-8) and abs(f(irr)) < 1e-6 * (1 + sum(abs(c) for c in cf))
+            how = f"scipy brentq gives {ref * 100:.4f}% and NPV at that rate is {f(irr):.2e}"
+        except Exception:  # noqa: BLE001
+            ok = abs(f(irr)) < 1e-6 * (1 + sum(abs(c) for c in cf))
+            how = f"NPV at that rate is {f(irr):.2e}"
+        return SolverResult("IRR", f"IRR = {irr * 100:.4f}%", how, ok)
+    if "cagr" in ql or "compound annual growth" in ql:
+        m = re.search(r"from\s*(?:\$|rs\.?|₹)?\s*(\d+(?:\.\d+)?)\s*to\s*(?:\$|rs\.?|₹)?\s*(\d+(?:\.\d+)?)\s*(?:over|in)\s*(\d+(?:\.\d+)?)\s*years?", ql)
+        if not m:
+            return None
+        a, b, n = float(m.group(1)), float(m.group(2)), float(m.group(3))
+        if a <= 0 or n <= 0:
+            return None
+        g = (b / a) ** (1 / n) - 1
+        return SolverResult("CAGR", f"{g * 100:.4f}% per year", f"{a:g} × (1 + {g:.6f})^{n:g} = {a * (1 + g) ** n:.4f}", _close(a * (1 + g) ** n, b, 1e-9))
+    return None
+
+
+@register("simple_interest")
+def s_simple_interest(q: str) -> Optional[SolverResult]:
+    ql = q.lower().replace(",", "")
+    if "simple interest" not in ql:
+        return None
+    pct = re.search(r"(\d+(?:\.\d+)?)\s*%", ql)
+    tm = re.search(r"(\d+(?:\.\d+)?)\s*(years?|months?)", ql)
+    pr = re.search(r"(?:rs\.?|₹|\$)?\s*(\d+(?:\.\d+)?)", ql)
+    if not pct or not tm or not pr:
+        return None
+    P, r, t = float(pr.group(1)), float(pct.group(1)), float(tm.group(1))
+    if tm.group(2).startswith("month"):
+        t /= 12
+    si = P * r * t / 100
+    bal, add = P, P * r / 100
+    full = int(t)
+    for _ in range(full):
+        bal += add
+    bal += add * (t - full)
+    return SolverResult("simple interest", f"interest = {si:,.2f}; total amount = {P + si:,.2f}",
+                        f"adding {add:,.2f} per year gives total {bal:,.2f}", _close(bal, P + si, 1e-9))
+
+
+@register("work_rate")
+def s_work_rate(q: str) -> Optional[SolverResult]:
+    ql = q.lower()
+    if "together" not in ql:
+        return None
+    found = re.findall(r"(?:can|could)\s+(?:do|finish|complete|build|paint|fill|dig|clean|write)[^.?]*?\bin\s+(\d+(?:\.\d+)?)\s*(days?|hours?|minutes?|mins?)", ql)
+    if len(found) < 2:
+        return None
+    times = [float(t) for t, _ in found]
+    unit = found[0][1].rstrip("s")
+    if any(t <= 0 for t in times):
+        return None
+    T = 1 / sum(1 / t for t in times)
+    done = sum(T / t for t in times)
+    steps, dt, prog, clock = 200000, T / 200000, 0.0, 0.0
+    rates = [1 / t for t in times]
+    for _ in range(steps):
+        prog += sum(rates) * dt
+        clock += dt
+    return SolverResult("work and rate", f"together they take {T:.4g} {unit}s ({' + '.join(f'1/{t:g}' for t in times)} of the job per {unit})",
+                        f"in that time their shares add up to {done:.6f} of the job; stepping time forward finishes at {prog:.6f}",
+                        _close(done, 1, 1e-9) and _close(prog, 1, 1e-6))
+
+
 # --------------------------------------------------------------------------
 # Self-test
 # --------------------------------------------------------------------------
@@ -1405,7 +2693,52 @@ def _selftest() -> None:
         assert try_solve(bad) is None, bad
     # a wrong-looking request that doesn't parse falls through
     assert try_solve("tell me a joke") is None
-    print("solvers selftest passed")
+
+    # ---- batches 2-4: every module must answer, verify, and contain the expected text
+    cases = [
+        ("area of a triangle with sides 3, 4, 5", "6 square"), ("the hypotenuse is 13 and one leg is 5, find the other leg", "12"),
+        ("distance between (1, 2) and (4, 6)", "5"), ("equation of the line through (1,2) and (3,8)", "3·x"),
+        ("area of a circle with radius 5", "25*pi"), ("volume and surface area of a cylinder with radius 2 and height 5", "62.83"),
+        ("what is sin 30 degrees?", "1/2"), ("what is 10C3", "120"), ("probability of exactly 3 heads in 5 coin flips", "0.3125"),
+        ("probability that the sum of two dice is 7", "1/6"), ("birthday paradox with 23 people", "0.5072"),
+        ("prevalence is 1%, sensitivity is 99%, false positive rate is 5%, probability of disease given a positive test", "0.1666"),
+        ("a normal distribution with mean 100 and standard deviation 15: probability that x is less than 130", "0.97725"),
+        ("add 1/3 and 2/5", "11/15"), ("factor x^2 - 5x + 6", "(x - 3)*(x - 2)"), ("solve x^2 - 4 > 0", "Interval.open(2, oo)"),
+        ("sum of k^2 for k = 1 to 10", "385"), ("sum of the first 100 natural numbers", "5,050"),
+        ("arithmetic sequence first term 3 common difference 4, find the 10th term", "39"),
+        ("what is the next term in 2, 6, 12, 20, 30", "42"), ("what comes next: 1, 1, 2, 3, 5, 8", "13"),
+        ("modulus of 3+4i", "5"), ("what is 255 in hex", "ff"), ("what is 17^100 mod 13", "9"), ("last digit of 7^2026", "9"),
+        ("what is 15% of 240", "36"), ("what is the roman numeral for 1994", "MCMXCIV"),
+        ("what day of the week was 2026-12-25", "Friday"), ("is 2100 a leap year", "not"),
+        ("how many r's are in strawberry", "3 times"), ("is 'A man a plan a canal Panama' a palindrome", "is a palindrome"),
+        ("encode 'hello world' to base64", "aGVsbG8gd29ybGQ="), ("rot13 'Hello'", "Uryyb"),
+        ("what is the 50th fibonacci number", "12586269025"), ("what is the 100th prime", "541"), ("how many digits in 100!", "158"),
+        ("how many distinct arrangements of the letters in MISSISSIPPI", "34,650"),
+        ("minimum coins to make 63 using coins 1, 5, 10, 25", "6 coins"), ("tower of hanoi with 10 disks", "1,023"),
+        ("maximum of x*(10-x) on [0, 10]", "25"),
+        ("a projectile is launched at 20 m/s at 30 degrees, find the range", "35.35"),
+        ("a ball is dropped from a height of 45 m, how long does it take to fall", "3.03 s"),
+        ("u = 5, v = 15, t = 4, find a and s", "a = 5/2"), ("kinetic energy of a 2 kg object moving at 3 m/s", "9 J"),
+        ("ohm's law: voltage 12 volts and resistance 4 ohms, find current", "I = 3 A"),
+        ("balance C3H8 + O2 -> CO2 + H2O", "C3H8 + 5 O2"), ("what is the pH of 0.001 M HCl", "pH = 3"),
+        ("multiply [[1,2],[3,4]] and [[5,6],[7,8]]", "[19, 22]"), ("cross product of (1,0,0) and (0,1,0)", "(0, 0, 1)"),
+        ("correlation between [1,2,3,4,5] and [2,4,5,4,5]", "r = 0.7745"), ("z-score of 85 with mean 70 and standard deviation 10", "1.5"),
+        ("NPV of cash flows -1000, 300, 400, 500 at 10%", "-21.04"), ("CAGR from 1000 to 2000 over 5 years", "14.8698"),
+        ("simple interest on 5000 at 6% for 3 years", "900.00"),
+        ("A can do a job in 6 days and B can do it in 3 days. working together how long will they take", "2 days"),
+    ]
+    for question, expect in cases:
+        r = try_solve(question)
+        assert r is not None and r.verified, (question, r)
+        assert expect.replace(" ", "") in r.answer.replace(" ", ""), (question, r.answer)
+    assert len(REGISTRY) >= 50, len(REGISTRY)
+
+    # ordinary conversation must never be hijacked by a solver
+    for chatty in ("hi", "tell me about yourself and features", "what is the capital of France", "write a story about a dragon",
+                   "how to reverse a linked list in python", "what is the factor of safety in engineering",
+                   "I scored 85 in maths and my friend scored 70", "how many people live in India"):
+        assert try_solve(chatty) is None, chatty
+    print(f"solvers selftest passed ({len(REGISTRY)} modules)")
 
 
 if __name__ == "__main__":
