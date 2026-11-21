@@ -30,6 +30,11 @@ What happens to each message:
   4. Normal conversation gets full-depth, human replies: loops removed, cut-off answers
      continued, thin one-liners expanded.
 
+Limits: reply length, continuations (40), panel size, workers (64), debate size and the multi-part
+cap (40) are all parameters of ReasoningEngine / build_engine, and timeouts and the token ceiling are
+environment variables (see providers.py). Two limits are deliberately kept: the sandbox around
+model-written code (blocked imports, CPU/memory/file caps) and the input checks in solvers.py.
+
 Run `python reasoning_layer.py --selftest` for the offline tests.
 """
 from __future__ import annotations
@@ -600,6 +605,17 @@ user actually asked, ignore it and answer normally.
 
 {block}"""
 
+VISION_NOTE = ("The user has attached an image. Read it carefully first and transcribe any problem text "
+               "exactly in your head, then answer what they ask. If part of the image is unclear or cut off, "
+               "say exactly what you could not read instead of guessing.")
+
+VISION_REVIEW_PROMPT = """Re-read the problem in the attached image carefully, then check the draft answer below line by
+line: your reading of the problem, every step and every claim. Fix any error or gap. If the draft is correct,
+restate it cleanly. Do not mention that you were given a draft. Natural, human tone.
+
+Draft:
+{draft}"""
+
 REFUSAL_TEXT = "I can't help with that one, but I'm happy to help with something close to it."
 
 
@@ -638,18 +654,20 @@ class ReasoningEngine:
         self,
         call_model: Callable,
         samples: int = 3,
-        max_continuations: int = 10,
+        max_continuations: int = 40,
         run_code: bool = True,
         code_timeout: int = 20,
         system_prompt: str = HUMAN_SYSTEM_PROMPT,
         workers: int = 8,
         min_words: int = 90,
-        max_tokens: int = 8000,
+        max_tokens: int = 16000,
         agents: Optional[List[Agent]] = None,
         use_solvers: bool = True,
         chat_effort: str = "medium",
         solve_effort: str = "high",
         debate_rounds: int = 1,
+        vision_call: Optional[Callable] = None,
+        debate_agents: int = 4,
     ):
         self.call_model = call_model
         self.samples = max(1, samples)
@@ -665,6 +683,8 @@ class ReasoningEngine:
         self.chat_effort = chat_effort
         self.solve_effort = solve_effort
         self.debate_rounds = debate_rounds
+        self.vision_call = vision_call
+        self.debate_agents = max(1, debate_agents)
 
     # ---- model plumbing ---------------------------------------------------
     def _call(self, messages, **opts) -> Tuple[str, str]:
@@ -808,7 +828,7 @@ class ReasoningEngine:
             f"...{candidates[max(g, key=lambda i: len(candidates[i]))][-700:]}"
             for n, g in enumerate(groups[:4]))
         prompt = DEBATE_PROMPT.format(question=question, positions=positions)
-        pool = (self.agents[:4] if self.agents else [(None, 1, "lead")] * 2)
+        pool = (self.agents[:self.debate_agents] if self.agents else [(None, 1, "lead")] * 2)
         outs: List[str] = []
         ws: List[int] = []
 
@@ -820,7 +840,7 @@ class ReasoningEngine:
                 opts["_fn"] = fn
             return self.generate_complete(msgs, **opts)
 
-        with cf.ThreadPoolExecutor(max_workers=min(4, len(pool))) as ex:
+        with cf.ThreadPoolExecutor(max_workers=max(1, len(pool))) as ex:
             futs = [(ex.submit(run, a), a) for a in pool]
             for f, a in futs:
                 try:
@@ -961,10 +981,40 @@ class ReasoningEngine:
         notes = [f"part {i}: {n}" for i, r in enumerate(replies, 1) for n in r.notes]
         return Reply(text, conf, "multi", notes)
 
-    def respond(self, history, user_message: str) -> Reply:
+    def _respond_vision(self, history, user_message: str, images) -> Reply:
+        from providers import normalize_images
         try:
+            imgs = normalize_images(images)
+        except ValueError as e:
+            return Reply(f"I couldn't use that image: {e}.", "n/a", "error", [str(e)])
+        if not self.vision_call:
+            return Reply("I can't look at pictures right now because no image-capable model is connected "
+                         "(an Anthropic, OpenAI or Gemini key is needed).", "n/a", "error", ["no vision provider"])
+        question = user_message.strip() or "Describe this image and answer anything it asks."
+        msgs = self._build(history, question, extra="\n\n" + VISION_NOTE)
+        msgs[-1]["images"] = imgs
+        opts = dict(temperature=0.4, max_tokens=self.max_tokens, effort=self.solve_effort, _fn=self.vision_call)
+        text = self.generate_complete(msgs, **opts)
+        notes = [f"vision: read {len(imgs)} image(s)"]
+        if re.search(r"\b(prove|show that|solve|find|calculate|evaluate|simplify|verify|derive|answer)\b", question, re.I) \
+                or needs_verification(question):
+            review = [{"role": "system", "content": self.system_prompt},
+                      {"role": "user", "content": VISION_REVIEW_PROMPT.format(draft=strip_final_line(text)),
+                       "images": imgs}]
+            checked = self.generate_complete(review, **opts)
+            if checked.strip():
+                text = checked
+                notes.append("review pass: re-read the image and re-checked every step")
+        text = dedupe_sentences(clean_formatting(strip_final_line(text)))
+        return Reply(text, "n/a", "vision", notes)
+
+    def respond(self, history, user_message: str, images=None) -> Reply:
+        """images: optional list of data-URL strings or {"media_type", "data"(base64)} dicts."""
+        try:
+            if images:
+                return self._respond_vision(history, user_message, images)
             sp = split_parts(user_message)
-            if sp and len(sp[1]) <= 12:
+            if sp and len(sp[1]) <= 40:
                 return self._respond_parts(history, *sp)
             return self._respond_single(history, user_message)
         except Exception as e:  # noqa: BLE001  (never show a stack trace to a user)
@@ -984,8 +1034,8 @@ def build_engine(panel_agents: int = 7, strong_agents: int = 4, **kwargs) -> Rea
     from providers import ProviderPool
     pool = ProviderPool()
     agents = pool.agents(panel_agents, strong_agents) if panel_agents else None
-    return ReasoningEngine(pool.lead_call(), agents=agents,
-                           workers=min(16, max(4, panel_agents)), **kwargs)
+    kwargs.setdefault("workers", min(64, max(4, panel_agents)))
+    return ReasoningEngine(pool.lead_call(), agents=agents, vision_call=pool.vision_call(), **kwargs)
 
 
 # --------------------------------------------------------------------------
@@ -1140,6 +1190,26 @@ def _selftest() -> None:
     nodeb = ReasoningEngine(lead2, agents=split, debate_rounds=0).respond([], "Which statement is correct? A) x B) y C) z D) w for this equation")
     assert not any("debate" in n for n in nodeb.notes)
 
+    # 15. pictures: routed to the vision model, reviewed, and handled politely when impossible
+    seen_msgs = []
+
+    def vision_model(messages, **opts):
+        seen_msgs.append(messages)
+        has_img = any(m.get("images") for m in messages)
+        assert has_img, "every vision call must carry the image"
+        return "Proof: both bounds follow from the AM-GM inequality." if len(seen_msgs) == 1 else "Checked proof: it holds."
+
+    png = {"media_type": "image/png", "data": "QUJD"}
+    ve = ReasoningEngine(lambda m, **o: "x", vision_call=vision_model)
+    vr = ve.respond([], "prove this", images=[png])
+    assert vr.mode == "vision" and vr.text == "Checked proof: it holds." and len(seen_msgs) == 2, (vr, len(seen_msgs))
+    seen_msgs.clear()
+    vr2 = ve.respond([], "what is in this picture?", images=["data:image/png;base64,QUJD"])
+    assert vr2.mode == "vision" and len(seen_msgs) == 1                      # no review for plain description
+    no_vis = ReasoningEngine(lambda m, **o: "x").respond([], "prove this", images=[png])
+    assert no_vis.mode == "error" and "image-capable" in no_vis.text
+    bad = ve.respond([], "look", images=[{"media_type": "image/bmp", "data": "QUJD"}])
+    assert bad.mode == "error" and "PNG" in bad.text
     print("selftest passed")
 
 
