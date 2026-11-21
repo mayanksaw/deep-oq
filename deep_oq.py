@@ -6063,7 +6063,7 @@ def _vision(prompt, image, temperature=0.3):
         except Exception as e:
             last = e
             print("gemini vision failed:", str(e)[:160])
-              if OPENAI_KEY:
+    if OPENAI_KEY:
         try:
             t = _openai_vision(prompt, image)
             if t:
