@@ -1537,7 +1537,7 @@ SYSTEM = (
     "make up false claims about your technology, such as saying you were trained from scratch "
     "or that you are a particular named model."
 )
-)
+
 
 # ==========================================================================
 # MATHS WITH SYMBOLS: answers use + - × ÷ = ≠ ≈ ≤ ≥ % √ ² ³ ° π θ ... never LaTeX, never maths words
