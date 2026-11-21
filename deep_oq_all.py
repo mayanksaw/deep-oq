@@ -263,10 +263,9 @@ def run_python(code: str, timeout: float = 8.0, mem_mb: int = 1024, max_output: 
             popen_kwargs = {}
         else:
             env["PATH"] = "/usr/bin:/bin"
-            popen_kwargs = {"preexec_fn": _limits(mem_mb, int(timeout) + 2)}
-        try:
-            p = subprocess.run([sys.executable, "-I", path], capture_output=True, text=True, timeout=timeout,
-                               cwd=d, env=env, **popen_kwargs)
+           popen_kwargs = {} if os.name == "nt" else {"preexec_fn": _limits(mem_mb, int(timeout) + 2)}
+p = subprocess.run([sys.executable, "-I", path], capture_output=True, text=True, timeout=timeout,
+                   cwd=d, env=env, **popen_kwargs)
         except subprocess.TimeoutExpired as e:
             return ExecResult(False, stdout=(e.stdout or b"").decode(errors="ignore")[:max_output] if isinstance(e.stdout, bytes) else (e.stdout or ""),
                               timed_out=True, seconds=time.time() - t0)
