@@ -5,6 +5,11 @@ Set whichever API keys you have as environment variables (on Render: Environment
 
     ANTHROPIC_API_KEY   OPENAI_API_KEY   GEMINI_API_KEY (or GOOGLE_API_KEY)   GROQ_API_KEY
 
+Optional extra providers (OpenAI-compatible; each needs its key AND a model name):
+    OPENROUTER_API_KEY + OPENROUTER_MODEL   (one OpenRouter key reaches hundreds of models)
+    MISTRAL, XAI, DEEPSEEK, TOGETHER, FIREWORKS, CEREBRAS, PERPLEXITY, SAMBANOVA, NVIDIA:
+    <NAME>_API_KEY + <NAME>_MODEL (and optionally <NAME>_FAST_MODEL)
+
 Optional overrides:
     ANTHROPIC_MODEL / OPENAI_MODEL / GEMINI_MODEL / GROQ_MODEL   pin an exact model ID
     DEEP_OQ_LEAD=anthropic,openai,gemini,groq                    order tried for the lead model
@@ -124,9 +129,10 @@ class Provider:
     default_effort = "high"
 
     def __init__(self, api_key: str, tier: str = "strong", model: Optional[str] = None):
+        # `model` pins an exact model ID. ProviderPool passes it from your environment variables.
         self.api_key = api_key
         self.tier = tier
-        self.override = model or os.environ.get(self.env_model, "").strip() or None
+        self.override = model
         self._available: Optional[List[str]] = None
         self._good: Optional[str] = None
 
@@ -348,6 +354,51 @@ class GeminiProvider(Provider):
 PROVIDER_CLASSES = [AnthropicProvider, OpenAIProvider, GeminiProvider, GroqProvider]
 
 
+class OpenAICompatProvider(Provider):
+    """Any service that speaks OpenAI's /chat/completions format. There is no built-in model
+    guess for these: set <NAME>_MODEL (and optionally <NAME>_FAST_MODEL) or the provider stays off."""
+    base = ""
+    token_floor = 4000
+    token_cap = 30000
+
+    def _headers(self) -> dict:
+        return {"authorization": f"Bearer {self.api_key}"}
+
+    def list_models(self) -> List[str]:
+        out = http_json("GET", f"{self.base}/models", self._headers(), timeout=30, retries=2)
+        return [m["id"] for m in out.get("data", [])]
+
+    def _request(self, model, messages, max_tokens, effort, minimal):
+        system, turns = to_turns(messages)
+        msgs = ([{"role": "system", "content": system}] if system else []) + turns
+        body: dict = {"model": model, "messages": msgs, "max_tokens": max_tokens}
+        return GroqProvider.parse(http_json("POST", f"{self.base}/chat/completions", self._headers(), body))
+
+
+# name, API-key variable, base URL. All of these are optional extras.
+COMPAT_SPECS = [
+    ("openrouter", "OPENROUTER_API_KEY", "https://openrouter.ai/api/v1"),   # one key, hundreds of models
+    ("mistral", "MISTRAL_API_KEY", "https://api.mistral.ai/v1"),
+    ("xai", "XAI_API_KEY", "https://api.x.ai/v1"),
+    ("deepseek", "DEEPSEEK_API_KEY", "https://api.deepseek.com/v1"),
+    ("together", "TOGETHER_API_KEY", "https://api.together.xyz/v1"),
+    ("fireworks", "FIREWORKS_API_KEY", "https://api.fireworks.ai/inference/v1"),
+    ("cerebras", "CEREBRAS_API_KEY", "https://api.cerebras.ai/v1"),
+    ("perplexity", "PERPLEXITY_API_KEY", "https://api.perplexity.ai"),
+    ("sambanova", "SAMBANOVA_API_KEY", "https://api.sambanova.ai/v1"),
+    ("nvidia", "NVIDIA_API_KEY", "https://integrate.api.nvidia.com/v1"),
+]
+
+
+def _make_compat(name: str, env_key: str, base: str):
+    return type(f"{name.title()}Provider", (OpenAICompatProvider,),
+                {"name": name, "env_keys": (env_key,), "env_model": f"{name.upper()}_MODEL", "base": base})
+
+
+COMPAT_CLASSES = [_make_compat(*spec) for spec in COMPAT_SPECS]
+ALL_CLASSES = PROVIDER_CLASSES + COMPAT_CLASSES
+
+
 # --------------------------------------------------------------------------
 # Pool: lead model with failover + a panel of agents spread over providers
 # --------------------------------------------------------------------------
@@ -358,13 +409,18 @@ class ProviderPool:
         env = env if env is not None else os.environ
         self.strong: Dict[str, Provider] = {}
         self.fast: Dict[str, Provider] = {}
-        for cls in PROVIDER_CLASSES:
+        for cls in ALL_CLASSES:
             key = next((env[k].strip() for k in cls.env_keys if env.get(k, "").strip()), "")
-            if key:
-                self.strong[cls.name] = cls(key, "strong")
-                self.fast[cls.name] = cls(key, "fast")
+            if not key:
+                continue
+            pinned = env.get(cls.env_model, "").strip() or None
+            fast_pinned = env.get(f"{cls.name.upper()}_FAST_MODEL", "").strip() or None
+            if issubclass(cls, OpenAICompatProvider) and not pinned:
+                continue                      # extras need an explicit model name
+            self.strong[cls.name] = cls(key, "strong", model=pinned)
+            self.fast[cls.name] = cls(key, "fast", model=fast_pinned or (pinned if issubclass(cls, OpenAICompatProvider) else None))
         order = [x.strip() for x in env.get("DEEP_OQ_LEAD", "").split(",") if x.strip()]
-        default = [c.name for c in PROVIDER_CLASSES]
+        default = [c.name for c in ALL_CLASSES]
         self.order = [n for n in order + default if n in self.strong]
         self.order = list(dict.fromkeys(self.order))
 
@@ -474,7 +530,30 @@ def _selftest() -> None:
     ag = pool.agents(6, strong_agents=3)
     assert len(ag) == 6 and ag[0][1] == 2 and ag[5][1] == 1
     assert ProviderPool({}).available() == []
-    print("providers selftest passed")
+
+    # optional OpenAI-compatible extras: need a key AND an explicit model
+    p2 = ProviderPool({"OPENROUTER_API_KEY": "k", "MISTRAL_API_KEY": "k2", "OPENROUTER_MODEL": "some/model"})
+    assert p2.available() == ["openrouter"], p2.available()
+    assert p2.agents(3)[0][2].startswith("openrouter")
+    assert len(ALL_CLASSES) >= 14
+    pinned = ProviderPool({"ANTHROPIC_API_KEY": "a", "ANTHROPIC_MODEL": "claude-opus-5-5"})
+    assert pinned.strong["anthropic"].ordered_models()[0] == "claude-opus-5-5"
+
+    captured: List[Tuple[str, dict]] = []
+
+    def fake_http2(method, url, headers=None, body=None, timeout=300, retries=3):
+        captured.append((url, body or {}))
+        return {"choices": [{"message": {"content": "hi"}, "finish_reason": "length"}]}
+
+    http_json = fake_http2
+    try:
+        out = p2.strong["openrouter"].call([{"role": "system", "content": "s"}, {"role": "user", "content": "q"}], max_tokens=10)
+    finally:
+        http_json = real
+    assert out["text"] == "hi" and out["finish_reason"] == "length" and out["model"] == "some/model"
+    assert captured[-1][0] == "https://openrouter.ai/api/v1/chat/completions"
+    assert captured[-1][1]["messages"][0]["role"] == "system" and captured[-1][1]["max_tokens"] == 4000
+    print(f"providers selftest passed ({len(ALL_CLASSES)} providers)")
 
 
 def _check() -> None:
