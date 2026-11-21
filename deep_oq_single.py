@@ -22,6 +22,18 @@ RUN
   python deep_oq_single.py --chat --debug                       # interactive
   python deep_oq_single.py --models | --list | --selftest | --test | --scaffold
   from deep_oq_single import ask   ->   await ask("8 queens")   # library
+
+ADD TO AN EXISTING SITE (do not replace your own app; it has your login, Photo, Video, Admin, Memory)
+  from deep_oq_single import install
+  install(app, prefix="/api/v2")       # new endpoints: POST /api/v2/chat, /api/v2/chat/stream, /api/v2/solve
+  # then point your frontend's chat call at /api/v2/chat, or call the engine from your existing chat route
+  # (see the docstring of deep_oq.integrate below).
+
+ADD TO AN EXISTING SITE (do not replace your own app; it has your login, Photo, Video, Admin, Memory)
+  from deep_oq_single import install
+  install(app, prefix="/api/v2")       # new endpoints: POST /api/v2/chat, /api/v2/chat/stream, /api/v2/solve
+  # then point your frontend's chat call at /api/v2/chat, or call the engine from your existing chat route
+  # (see the docstring of deep_oq.integrate below).
 """
 import importlib.abc
 import importlib.util
@@ -591,7 +603,8 @@ class DeepOQEngine:
                 warnings.append(f"retry {attempt + 1}: " + ", ".join(issues + (["loop"] if looping else [])))
             note = ("\n\nYOUR PREVIOUS ATTEMPT WAS REJECTED (" + ", ".join(issues + (["it repeated itself"] if looping else [])) +
                     "). Write it again from scratch: no repetition, close every $, code block and bracket, and finish the last sentence.")
-        return trim_to_last_sentence(best), prov
+        trimmed = trim_to_last_sentence(best)
+        return (trimmed if len(trimmed) >= 0.7 * len(best) else best), prov
 
     # ---- agents ---------------------------------------------------------------
     async def _candidates(self, q: str, domains: list[str], facts_txt: str, history: list[dict], budget: Budget, ledger: Ledger,
@@ -886,6 +899,11 @@ def completeness_issues(text: str, truncated: bool = False) -> list[str]:
         last_word = re.findall(r"[A-Za-z']+$", last_line)
         if last_line.endswith((",", ";", ":", "—", "-", "(")) or (last_word and last_word[0].lower() in _TRAILING):
             issues.append("ends mid-sentence")
+    if not t.endswith("```"):                                    # cut-off in ANY script (Hindi, Hinglish, Spanish, ...)
+        words = last_line.split()
+        plain_prose = not re.search(r"[$=\d`|<>{}\[\]]", last_line) and not re.match(r"^\s*([#>*\-+]|\d+[.)])\s", last_line)
+        if len(words) >= 4 and plain_prose and last_line[-1].isalpha() and last_line[-1] not in "।":
+            issues.append("ends without punctuation (looks cut off)")
     lines = t.splitlines()
     for i, ln in enumerate(lines):
         if re.match(r"^\s{0,3}#{1,6}\s*\S*\s*$", ln):
@@ -998,6 +1016,193 @@ def humanize(text: str) -> str:
     for pat in _ROBOT:
         text = re.sub(pat, "", text, flags=re.I)
     return text.strip()
+''', False)
+
+# ===== MODULE deep_oq.integrate =====
+_SOURCES['deep_oq.integrate'] = (r'''
+"""Glue for EXISTING apps and frontends.
+
+Your site already has its own FastAPI app (login, Photo, Video, Admin, Memory...). Do not replace it.
+Plug the engine in instead:
+
+    from deep_oq_single import install
+    install(app, prefix="/api/v2")          # adds POST /api/v2/chat, /api/v2/chat/stream, /api/v2/solve ...
+
+or call the engine from your existing chat route:
+
+    from deep_oq_single import DeepOQEngine, get_conversation, extract_text, extract_session, public_response
+    ENGINE, CONVS = DeepOQEngine(), {}
+    @app.post("/your/existing/chat/route")
+    async def chat(request: Request):
+        payload = await request.json()
+        conv = get_conversation(CONVS, extract_session(payload), payload)
+        ans = await ENGINE.ask(extract_text(payload), conv)
+        return public_response(ans, conv.id)       # carries reply/response/message/answer/text/content
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import re
+from typing import Any, Optional
+
+TEXT_KEYS = ("message", "prompt", "query", "text", "content", "input", "question", "user_message", "msg")
+SID_KEYS = ("session_id", "conversation_id", "chat_id", "thread_id", "sessionId", "conversationId", "chatId", "id")
+BOT_ROLES = {"assistant", "bot", "ai", "model", "deepoq", "system_reply"}
+MAX_CONVS = 2000
+
+
+def _flatten(v: Any) -> str:
+    if isinstance(v, str):
+        return v
+    if isinstance(v, list):
+        return " ".join(_flatten(x) for x in v if x)
+    if isinstance(v, dict):
+        return _flatten(v.get("text") or v.get("content") or v.get("message") or "")
+    return "" if v is None else str(v)
+
+
+def extract_text(payload: dict) -> str:
+    """The user's message, whatever the frontend calls it."""
+    for k in TEXT_KEYS:
+        t = _flatten(payload.get(k)).strip()
+        if t:
+            return t
+    for key in ("messages", "history", "conversation"):
+        msgs = payload.get(key)
+        if isinstance(msgs, list):
+            for m in reversed(msgs):
+                if isinstance(m, dict) and m.get("role", "user") not in BOT_ROLES:
+                    t = _flatten(m.get("content") or m.get("text") or m.get("message")).strip()
+                    if t:
+                        return t
+    return ""
+
+
+def extract_session(payload: dict) -> Optional[str]:
+    for k in SID_KEYS:
+        v = payload.get(k)
+        if v not in (None, "") and not isinstance(v, (dict, list)):
+            return str(v)
+    return None
+
+
+def history_from(payload: dict) -> list[dict]:
+    """Earlier turns sent by a stateless frontend, without the current question."""
+    out: list[dict] = []
+    for key in ("messages", "history", "conversation"):
+        msgs = payload.get(key)
+        if not isinstance(msgs, list):
+            continue
+        for m in msgs:
+            if isinstance(m, dict):
+                role = "assistant" if str(m.get("role", "user")).lower() in BOT_ROLES else "user"
+                txt = _flatten(m.get("content") or m.get("text") or m.get("message")).strip()
+                if txt:
+                    out.append({"role": role, "content": txt})
+        break
+    if out and out[-1]["role"] == "user":
+        out.pop()                                    # that is the question being asked right now
+    return out[-40:]
+
+
+def get_conversation(convs: dict, sid: Optional[str], payload: Optional[dict] = None):
+    from .engine import Conversation
+    if sid and sid in convs:
+        return convs[sid]
+    if len(convs) >= MAX_CONVS:
+        convs.pop(next(iter(convs)))
+    c = Conversation()
+    if sid:
+        c.id = sid
+    if payload:
+        c.messages = history_from(payload)
+    convs[c.id] = c
+    return c
+
+
+def public_response(ans, conv_id: str) -> dict:
+    """One JSON body that works with most frontends: the reply under every common key."""
+    return {"session_id": conv_id, "conversation_id": conv_id, "reply": ans.text, "response": ans.text, "message": ans.text,
+            "answer": ans.text, "text": ans.text, "content": ans.text, "intent": ans.intent, "confidence": ans.confidence,
+            "agents": ans.agents, "calls": ans.calls, "warnings": ans.warnings, "parts": ans.parts, "seconds": round(ans.elapsed, 2)}
+
+
+def make_router(engine, convs: Optional[dict] = None):
+    from fastapi import APIRouter, HTTPException, Request
+    from fastapi.responses import StreamingResponse
+    from . import agent_count, solver_count
+    from .agents import AGENTS
+    from .registry import SOLVERS, run_solver
+
+    convs = convs if convs is not None else {}
+    router = APIRouter()
+
+    async def _payload(request: Request) -> dict:
+        try:
+            data = await request.json()
+        except Exception:  # noqa: BLE001
+            raise HTTPException(400, "send a JSON body, e.g. {\"message\": \"hi\"}")
+        if not isinstance(data, dict):
+            raise HTTPException(400, "JSON body must be an object")
+        return data
+
+    @router.post("/chat")
+    async def chat(request: Request):
+        p = await _payload(request)
+        text = extract_text(p)
+        if not text:
+            raise HTTPException(422, "no message found (looked for: " + ", ".join(TEXT_KEYS) + ", messages[])")
+        conv = get_conversation(convs, extract_session(p), p)
+        return public_response(await engine.ask(text, conv), conv.id)
+
+    @router.post("/chat/stream")
+    async def chat_stream(request: Request):
+        p = await _payload(request)
+        text = extract_text(p)
+        if not text:
+            raise HTTPException(422, "no message found")
+        conv = get_conversation(convs, extract_session(p), p)
+        ans = await engine.ask(text, conv)
+
+        async def gen():
+            for tok in re.findall(r"\S+\s*", ans.text):
+                yield f"data: {json.dumps({'t': tok, 'token': tok, 'delta': tok})}\n\n"
+                await asyncio.sleep(0.006)
+            yield f"data: {json.dumps({'done': True, 'session_id': conv.id, 'confidence': ans.confidence})}\n\n"
+        return StreamingResponse(gen(), media_type="text/event-stream")
+
+    @router.post("/solve")
+    async def solve(request: Request):
+        p = await _payload(request)
+        res = await asyncio.to_thread(run_solver, str(p.get("domain", "")), **(p.get("args") or {}))
+        return {"ok": res.ok, "verified": res.verified, "answer": res.answer, "steps": res.steps, "checks": res.checks, "reason": res.reason}
+
+    @router.get("/solvers")
+    def list_solvers():
+        return {"count": solver_count(), "solvers": sorted(SOLVERS)}
+
+    @router.get("/agents")
+    def list_agents():
+        return {"count": agent_count(), "agents": sorted(AGENTS)}
+
+    @router.get("/models")
+    async def models():
+        return await engine.pool.discover()
+
+    @router.get("/health")
+    def health():
+        return {"ok": True, "providers": engine.pool.available, "agents": agent_count(), "solvers": solver_count()}
+
+    return router
+
+
+def install(app, prefix: str = "/deepoq", engine=None):
+    """Add the Deep OQ endpoints to an existing FastAPI app (nothing of yours is replaced)."""
+    from .engine import DeepOQEngine
+    engine = engine or DeepOQEngine()
+    app.include_router(make_router(engine), prefix=prefix)
+    return engine
 ''', False)
 
 # ===== MODULE deep_oq.nlp =====
@@ -1197,6 +1402,10 @@ VOICE
   example, and one useful extra thought they did not ask for.
 - Flowing paragraphs. A short list only when steps or options truly need it.
 - Match their language and mood (Hinglish in, Hinglish out; playful in, playful back; upset in, gentle back).
+- If they ask for a language ("in hindi", "hindi me bolo", "reply in Spanish"), switch completely and stay in it until they
+  change it. Hindi goes in Devanagari unless they are typing Hinglish in Roman letters, then answer in Roman Hinglish.
+  Finish every sentence properly (Hindi sentences end with "।", "?" or "!"). Never stop mid-word.
+- Small talk ("tum kaise ho", "kya kar rahe ho") deserves a real, friendly, 2-4 sentence reply with a question back, never a fragment.
 - End most replies with ONE natural follow-up (a question, an offer, a next step). Never "How can I help you today?".
 - Never open with a label like "Answer" or "Step-by-Step". Never say "As an AI language model".
 
@@ -1233,7 +1442,7 @@ GUIDE: dict[str, str] = {
 }
 
 TEMPS = {"greeting": 0.9, "about_me": 0.85, "emotional": 0.8, "math": 0.3, "code": 0.4, "puzzle": 0.5, "casual": 0.9, "question": 0.7}
-MIN_WORDS = {"greeting": 25, "about_me": 120, "emotional": 70, "math": 110, "code": 90, "puzzle": 90, "casual": 45, "question": 130}
+MIN_WORDS = {"greeting": 20, "about_me": 120, "emotional": 60, "math": 110, "code": 90, "puzzle": 90, "casual": 25, "question": 130}
 
 CRISIS_NOTE = ("If you are in immediate danger or thinking about ending your life, please contact your local emergency number or a crisis line right now "
                "(in India, Tele-MANAS is free and open 24x7 on 14416), and tell someone you trust where you are.")
@@ -1815,102 +2024,25 @@ def _ledger_with(kind: str):
 
 # ===== MODULE deep_oq.server =====
 _SOURCES['deep_oq.server'] = (r'''
-"""FastAPI server.   uvicorn deep_oq.server:app --host 0.0.0.0 --port $PORT"""
+"""Standalone FastAPI server.   uvicorn deep_oq.server:app --host 0.0.0.0 --port $PORT
+(To add Deep OQ to an EXISTING app instead, use deep_oq.integrate.install(app).)"""
 from __future__ import annotations
 
-import asyncio
-import json
-import re
-from typing import Optional
-
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
 
-from . import __version__, agent_count, solver_count
-from .agents import AGENTS, DOMAINS
-from .engine import Conversation, DeepOQEngine
-from .registry import SOLVERS, run_solver
-from . import solvers  # noqa: F401
+from . import __version__
+from .engine import DeepOQEngine
+from .integrate import make_router
+
+ENGINE = DeepOQEngine()
+CONVS: dict = {}
+_router = make_router(ENGINE, CONVS)
 
 app = FastAPI(title="Deep OQ", version=__version__)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
-ENGINE = DeepOQEngine()
-CONVS: dict[str, Conversation] = {}
-MAX_CONVS = 2000
-
-
-class ChatIn(BaseModel):
-    message: str
-    session_id: Optional[str] = None
-
-
-class SolveIn(BaseModel):
-    domain: str
-    args: dict = {}
-
-
-def _conv(sid: Optional[str]) -> Conversation:
-    if sid and sid in CONVS:
-        return CONVS[sid]
-    if len(CONVS) >= MAX_CONVS:
-        CONVS.pop(next(iter(CONVS)))
-    c = Conversation()
-    CONVS[c.id] = c
-    return c
-
-
-@app.on_event("startup")
-async def _startup() -> None:
-    await ENGINE.pool.discover()
-
-
-@app.post("/chat")
-async def chat(body: ChatIn):
-    conv = _conv(body.session_id)
-    a = await ENGINE.ask(body.message, conv)
-    return {"session_id": conv.id, "reply": a.text, "intent": a.intent, "confidence": a.confidence,
-            "agents": a.agents, "calls": a.calls, "warnings": a.warnings, "parts": a.parts, "seconds": round(a.elapsed, 2)}
-
-
-@app.post("/chat/stream")
-async def chat_stream(body: ChatIn):
-    conv = _conv(body.session_id)
-    a = await ENGINE.ask(body.message, conv)
-
-    async def gen():
-        for tok in re.findall(r"\S+\s*", a.text):
-            yield f"data: {json.dumps({'t': tok})}\n\n"
-            await asyncio.sleep(0.006)
-        yield f"data: {json.dumps({'done': True, 'session_id': conv.id, 'confidence': a.confidence})}\n\n"
-    return StreamingResponse(gen(), media_type="text/event-stream")
-
-
-@app.post("/solve")
-async def solve(body: SolveIn):
-    res = await asyncio.to_thread(run_solver, body.domain, **body.args)
-    return {"ok": res.ok, "verified": res.verified, "answer": res.answer, "steps": res.steps, "checks": res.checks, "reason": res.reason}
-
-
-@app.get("/solvers")
-def list_solvers():
-    return {"count": solver_count(), "solvers": sorted(SOLVERS)}
-
-
-@app.get("/agents")
-def list_agents():
-    return {"count": agent_count(), "domains": len(DOMAINS), "agents": sorted(AGENTS)}
-
-
-@app.get("/models")
-async def models():
-    return await ENGINE.pool.discover()
-
-
-@app.get("/health")
-def health():
-    return {"ok": True, "version": __version__, "providers": ENGINE.pool.available, "agents": agent_count(), "solvers": solver_count()}
+app.include_router(_router)                  # /chat, /chat/stream, /solve, /health ...
+app.include_router(_router, prefix="/api")   # same routes under /api/... for frontends that expect it
 ''', False)
 
 # ===== MODULE deep_oq.sympy_tool =====
@@ -2242,6 +2374,56 @@ def test_unverified_analytic_answer_gets_confidence_note():
     assert "honesty note" in a.text.lower(), a.confidence
 
 
+def test_cut_off_replies_from_the_screenshots_are_detected_in_hindi_and_hinglish():
+    from deep_oq.guards import completeness_issues
+    assert completeness_issues("नमस्ते! मैं Deep OQ ह"), "Devanagari cut-off must be flagged"
+    assert completeness_issues("Main toh aapki madad karne"), "Hinglish cut-off must be flagged"
+    assert not completeness_issues("नमस्ते! मैं Deep OQ हूँ और आपकी मदद के लिए यहाँ हूँ।")
+    assert not completeness_issues("Main bilkul theek hoon, aap batao kya chal raha hai?")
+    assert not completeness_issues("Here are the steps:\n1. Install it\n2. Run it\n- Fast and simple")
+    assert not completeness_issues("Therefore x = 5")
+
+
+def test_cut_off_hindi_reply_is_retried_and_fixed():
+    state = {"n": 0}
+
+    def h(role, **k):
+        state["n"] += 1
+        if state["n"] == 1:
+            return "नमस्ते! मैं Deep OQ ह"
+        return "नमस्ते! मैं Deep OQ हूँ। आज मैं आपकी हर तरह की मदद के लिए तैयार हूँ, चाहे गणित हो या कोड। आप क्या कर रहे हैं?"
+    a = run(DeepOQEngine(FakePool(h)).ask("hi in hindi"))
+    assert a.text.endswith("?") and "ह" != a.text[-1:], a.text
+
+
+def test_trim_fallback_never_deletes_most_of_an_answer():
+    def h(role, **k):
+        return "A long and useful opening sentence that carries real content for the reader. " * 1 + "And then the answer stops because of"
+    a = run(DeepOQEngine(FakePool(h)).ask("tell me about you"))
+    assert len(a.text) > 40
+
+
+def test_frontend_payload_shapes_are_understood():
+    from deep_oq.integrate import extract_session, extract_text, get_conversation, history_from
+    assert extract_text({"message": "hi"}) == "hi"
+    assert extract_text({"prompt": "yo"}) == "yo"
+    assert extract_text({"messages": [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}, {"role": "user", "content": [{"type": "text", "text": "c"}]}]}) == "c"
+    assert extract_text({"message": {"role": "user", "content": "nested"}}) == "nested"
+    assert extract_session({"chatId": 7}) == "7" and extract_session({}) is None
+    p = {"messages": [{"role": "user", "content": "q1"}, {"role": "bot", "content": "a1"}, {"role": "user", "content": "q2"}]}
+    assert history_from(p) == [{"role": "user", "content": "q1"}, {"role": "assistant", "content": "a1"}]
+    convs = {}
+    c = get_conversation(convs, "abc", p)
+    assert c.id == "abc" and len(c.messages) == 2 and get_conversation(convs, "abc", p) is c
+
+
+def test_public_response_carries_reply_under_every_common_key():
+    from deep_oq.engine import Answer
+    from deep_oq.integrate import public_response
+    r = public_response(Answer("hello there"), "s1")
+    assert all(r[k] == "hello there" for k in ("reply", "response", "message", "answer", "text", "content"))
+
+
 def run_all() -> int:
     fails = 0
     for name, fn in sorted(globals().items()):
@@ -2289,7 +2471,7 @@ def run_python(code: str, timeout: int | None = None) -> tuple[bool, str]:
     def limits() -> None:
         try:
             import resource
-            resource.setrlimit(resource.RLIMIT_CPU, (timeout, timeout))
+            resource.setrlimit(resource.RLIMIT_CPU, (timeout + 2, timeout + 3))   # backstop; the wall-clock timeout fires first
             mem = SETTINGS.sandbox_memory_mb * 1024 * 1024
             resource.setrlimit(resource.RLIMIT_AS, (mem, mem))
             resource.setrlimit(resource.RLIMIT_NPROC, (64, 64))
@@ -2306,6 +2488,13 @@ def run_python(code: str, timeout: int | None = None) -> tuple[bool, str]:
                                timeout=timeout, env=env, preexec_fn=limits if os.name == "posix" else None)
         except subprocess.TimeoutExpired:
             return False, f"timed out after {timeout}s"
+    if p.returncode < 0:                                   # killed by a signal: CPU limit, memory limit, or crash
+        import signal
+        try:
+            sig = signal.Signals(-p.returncode).name
+        except ValueError:
+            sig = str(-p.returncode)
+        return False, f"stopped by the sandbox ({sig}): exceeded the CPU time or memory limit"
     out = (p.stdout or "")[-20000:]
     err = (p.stderr or "")[-4000:]
     return p.returncode == 0, (out + (f"\n[stderr]\n{err}" if err else "")) or "(no output)"
@@ -4357,6 +4546,8 @@ except Exception:                       # noqa: BLE001
     app = None
 
 from deep_oq.engine import ask, DeepOQEngine, Conversation  # noqa: E402,F401
+from deep_oq.integrate import (install, get_conversation, extract_text, extract_session,  # noqa: E402,F401
+                               history_from, public_response, make_router)
 from deep_oq import agent_count, solver_count  # noqa: E402,F401
 
 if __name__ == "__main__":
