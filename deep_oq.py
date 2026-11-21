@@ -11,16 +11,29 @@ WHAT IT DOES
   Video  trim, speed, resize, rotate, looks, MP4 / GIF / MP3 output (needs ffmpeg, see below)
 
 RUN ON YOUR COMPUTER
-  pip install flask groq gunicorn pypdf ddgs imageio-ffmpeg
+  pip install flask groq gunicorn pypdf ddgs imageio-ffmpeg anthropic sympy openai
   set GROQ_API_KEY=your_key            (Windows)   export GROQ_API_KEY=your_key   (Mac/Linux)
   python deep_oq.py                    -> http://localhost:5000
   python deep_oq.py ingest my_folder   (optional: add your notes and code docs to the database)
 
 RUN ON RENDER (Web Service, language Python 3)
-  Build command : pip install flask groq gunicorn pypdf ddgs imageio-ffmpeg
+  Build command : pip install flask groq gunicorn pypdf ddgs imageio-ffmpeg anthropic sympy openai
   Start command : gunicorn deep_oq:app --workers 1 --threads 4 --timeout 300
   Environment   : GROQ_API_KEY (required), SECRET_KEY (login cookie secret), ACCESS_KEY (optional password), PYTHON_VERSION 3.12.3
   Optional      : DEEP_OQ_MODEL, DEEP_OQ_SMART_MODEL, DEEP_OQ_DB, MAX_VIDEO_MB, MAX_VIDEO_SECONDS
+
+CLAUDE ENGINE (merged from deep_oq_v2). Set ANTHROPIC_API_KEY and Claude answers first; Groq becomes the backup.
+  ANTHROPIC_API_KEY             your key (GROQ_API_KEY is then optional, but voice input still needs it)
+  DEEP_OQ_MODEL_FAST / _SMART / _MAX / _TINY   claude-sonnet-5-5 / claude-opus-5-5 / claude-fable-5-2 / claude-haiku-5-5
+  DEEP_OQ_THINKING_BUDGET       default 16000 extended-thinking tokens on hard questions (0 = off)
+  DEEP_OQ_MAX_TOKENS            default 32000 most tokens in one reply
+  DEEP_OQ_MAX_CONCURRENT        default 100 answers at once; the rest wait in line
+  DEEP_OQ_MAX_CONCURRENT_MAXMODE default 10 at once for the Research (max) model; extras use Opus
+  DEEP_OQ_QUEUE_TIMEOUT         default 60 seconds a person waits in line
+  DEEP_OQ_DAILY_MAX_LIMIT       default 20 Research answers per person per day (0 = unlimited)
+  OPENAI_API_KEY                optional backup if Claude fails (DEEP_OQ_OPENAI_MODEL, DEEP_OQ_OPENAI_MODEL_ALT,
+                                DEEP_OQ_OPENAI_REASONING)
+  Health check URL for Render: /health
 
 POSTGRESQL (optional, instead of the SQLite file)
   pip install "psycopg[binary,pool]"
@@ -1440,7 +1453,7 @@ for _m in ([x.strip() for x in os.environ.get("DEEP_OQ_SMART_MODELS", "").replac
         SMART_CANDIDATES.append(_m)
 _smart = {"model": None}
 # Several free Groq keys add their limits together. Put them in GROQ_API_KEYS separated by commas.
-_KEYS = [k.strip() for k in (os.environ.get("GROQ_API_KEYS", "") + "," + os.environ["GROQ_API_KEY"]).split(",") if k.strip()]
+_KEYS = [k.strip() for k in (os.environ.get("GROQ_API_KEYS", "") + "," + os.environ.get("GROQ_API_KEY", "")).split(",") if k.strip()]
 _KEYS = list(dict.fromkeys(_KEYS))
 _groqs = [Groq(api_key=k) for k in _KEYS]
 _key_state = {"i": 0}
@@ -1459,6 +1472,8 @@ class _Transcriptions:
 
 def _rotate(part, kw):
         n = len(_groqs)
+        if not n:
+            raise RuntimeError("No Groq key is set")
         model = kw.get("model")
         last = None
         now = time.time()
@@ -1515,12 +1530,10 @@ SYSTEM = (
     "date they are from when it matters, and never invent facts, numbers, links, quotes or sources; "
     "if you are not sure, say so and say how to check. Ask one short clarifying question only when "
     "the request cannot be answered without it. Match the length to the question. "
-    "If asked what model, engine, technology or company is behind you, or how you were built, "
-    "answer briefly and kindly: you are Deep OQ, powered by the Deep OQ team, and you do not "
-    "share technical details about your internal setup. Do not name any underlying model or "
-    "provider. If someone directly asks whether you were trained entirely from scratch or use "
-    "no outside technology, never say yes: say you cannot share details about the technology "
-    "behind Deep OQ."
+    "If someone sincerely asks what model, engine or company is behind you, answer honestly and "
+    "briefly: you are Deep OQ, an AI assistant built by Mayank Kumar Saw on top of third-party AI "
+    "models, including Anthropic's Claude. You are an AI, never claim to be human, and never claim "
+    "to have been trained entirely from scratch."
 )
 
 # ==========================================================================
@@ -1792,7 +1805,7 @@ def plain_math(text):
 
 
 def deep_oq(session, question, force_exam=False, emit=None):
-    return plain_math(_deep_oq_raw(session, question, force_exam, emit))
+    return plain_math(collapse_repeats(_deep_oq_raw(session, question, force_exam, emit)))
 
 
 HARD_HINTS = ("code", "function", "bug", "prove", "calculate", "solve", "why",
@@ -1855,6 +1868,11 @@ def _call(model, messages, temperature, max_tokens, effort=None):
 
 def chat_stream(messages, temperature, max_tokens, on_text):
     """Like chat(), but calls on_text(answer_so_far) while the model is still writing."""
+    if CLAUDE_ON:
+        try:
+            return _claude_chat(messages, temperature, max_tokens, False, on_text=on_text)
+        except Exception as e:
+            print("claude stream failed:", str(e)[:160])
     order = FAST_CANDIDATES[:]
     if _working["model"] in order:
         order.remove(_working["model"])
@@ -1956,7 +1974,574 @@ def _extra_chat(messages, temperature, max_tokens, only=None):
     raise last or RuntimeError("no backup provider")
 
 
+# ==========================================================================
+# CLAUDE ENGINE (merged from deep_oq_v2.py)
+# Anthropic models answer first. If they fail: OpenAI backup, then the Groq models below.
+#   - "smart" calls use Claude Opus with extended thinking and real tools (calculator, SymPy)
+#   - everyday calls use Claude Sonnet; tiny helper calls use Claude Haiku
+#   - the Research button turns on "max mode" (Claude Fable), limited per person per day
+#   - runaway repetition is cut, cut-off answers are continued, big queues wait their turn
+# ==========================================================================
+def _env_num(name, default):
+    """Like _env_int, but 0 is allowed (0 switches a limit off)."""
+    try:
+        return int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+_tl = threading.local()  # per-request flags (max mode)
+CLAUDE_KEY = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+CLAUDE_ON = bool(CLAUDE_KEY)
+CLAUDE_FAST = os.environ.get("DEEP_OQ_MODEL_FAST", "claude-sonnet-5-5")
+CLAUDE_SMART = os.environ.get("DEEP_OQ_MODEL_SMART", "claude-opus-5-5")
+CLAUDE_MAX = os.environ.get("DEEP_OQ_MODEL_MAX", "claude-fable-5-2")
+CLAUDE_TINY = os.environ.get("DEEP_OQ_MODEL_TINY", "claude-haiku-5-5")
+CLAUDE_THINK = _env_num("DEEP_OQ_THINKING_BUDGET", 16000)      # 0 = no extended thinking
+CLAUDE_MAX_TOKENS = _env_num("DEEP_OQ_MAX_TOKENS", 32000)
+CLAUDE_QUEUE_TIMEOUT = _env_num("DEEP_OQ_QUEUE_TIMEOUT", 60)    # seconds a person waits in line
+DAILY_MAX_LIMIT = _env_num("DEEP_OQ_DAILY_MAX_LIMIT", 20)       # max-mode answers per person per day, 0 = no limit
+CLAUDE_SLOTS = threading.BoundedSemaphore(max(1, _env_num("DEEP_OQ_MAX_CONCURRENT", 100)))
+CLAUDE_MAX_SLOTS = threading.BoundedSemaphore(max(1, _env_num("DEEP_OQ_MAX_CONCURRENT_MAXMODE", 10)))
+OPENAI_KEY = os.environ.get("OPENAI_API_KEY", "").strip()
+OPENAI_MODELS = [m for m in dict.fromkeys([os.environ.get("DEEP_OQ_OPENAI_MODEL", "gpt-6.2-astra"),
+                                           os.environ.get("DEEP_OQ_OPENAI_MODEL_ALT", "gpt-6.2-sol")]) if m]
+OPENAI_REASONING = os.environ.get("DEEP_OQ_OPENAI_REASONING", "high")
+print("Claude engine:", ("ON (%s / %s / %s)" % (CLAUDE_FAST, CLAUDE_SMART, CLAUDE_MAX)) if CLAUDE_ON
+      else "off (set ANTHROPIC_API_KEY to switch it on)", "| OpenAI backup:", "ON" if OPENAI_KEY else "off")
+
+
+# ---------- guards against repetition and unfinished answers ----------
+_FENCE_RE = re.compile(r"(```.*?```)", re.S)
+
+
+def detect_loop(text, tail_len=60, repeats=3):
+    """True if the last tail_len characters have already appeared `repeats` or more times (a stuck model)."""
+    if len(text) < tail_len * repeats:
+        return False
+    tail = text[-tail_len:]
+    if not tail.strip() or len(set(tail)) < 6:  # whitespace, dashes and so on are not loops
+        return False
+    return text.count(tail) >= repeats
+
+
+def trim_loop(text, tail_len=60):
+    """Cut a runaway repetition back to its first occurrence."""
+    if len(text) < tail_len * 2:
+        return text
+    tail = text[-tail_len:]
+    first = text.find(tail)
+    if first == -1 or first >= len(text) - tail_len:
+        return text
+    return text[: first + tail_len].rstrip()
+
+
+def _rnorm(s):
+    return re.sub(r"\W+", " ", s.lower()).strip()
+
+
+def _dedupe_prose(chunk):
+    prev = None
+    while prev != chunk:  # stutter: "Answer Answer", "You can X. You can X."
+        prev = chunk
+        chunk = re.sub(r"(\b[\w$\\{}^_()\-.,:;' ]{12,200}?)(\s+)\1(?=\s|$|[.!?])", r"\1", chunk)
+    paras = re.split(r"(\n\s*\n)", chunk)
+    seen_paras, out = [], []
+    for p in paras:
+        if not p.strip():
+            out.append(p)
+            continue
+        key = _rnorm(p)
+        if key and key in seen_paras[-6:]:
+            continue
+        seen_paras.append(key)
+        kept, recent = [], []
+        for s in re.split(r"(?<=[.!?])\s+", p):
+            k = _rnorm(s)
+            if len(k) > 12 and k in recent[-8:]:
+                continue
+            recent.append(k)
+            kept.append(s)
+        out.append(" ".join(kept))
+    return "".join(out)
+
+
+def collapse_repeats(text):
+    """Remove accidental repetition without touching fenced code blocks."""
+    if not isinstance(text, str) or not text:
+        return text
+    cleaned = [pc if pc.startswith("```") else _dedupe_prose(pc) for pc in _FENCE_RE.split(text)]
+    return re.sub(r"\n{3,}", "\n\n", "".join(cleaned)).strip()
+
+
+# ---------- tools Claude can really run: exact calculator and SymPy ----------
+class ToolError(ValueError):
+    pass
+
+
+_V2_FUNCS = {n: getattr(math, n) for n in (
+    "sin cos tan asin acos atan atan2 sinh cosh tanh asinh acosh atanh exp log log2 log10 sqrt floor ceil "
+    "factorial comb perm gcd lcm degrees radians hypot fabs isqrt erf gamma lgamma").split()}
+_V2_FUNCS.update({"abs": abs, "round": round, "min": min, "max": max, "ln": math.log})
+_V2_CONSTS = {"pi": math.pi, "e": math.e, "tau": math.tau, "inf": math.inf}
+
+
+def _prep_expr(expr):
+    expr = expr.strip().replace("^", "**").replace("×", "*").replace("÷", "/").replace("−", "-").replace("π", "pi")
+    if len(expr) > 2000:
+        raise ToolError("expression too long")
+    return expr
+
+
+def calc_v2(expr):
+    """Exact arithmetic with a whitelist of syntax (no eval). Richer than safe_calc."""
+    tree = ast.parse(_prep_expr(expr), mode="eval")
+
+    def ev(n):
+        if isinstance(n, ast.Expression):
+            return ev(n.body)
+        if isinstance(n, ast.Constant) and isinstance(n.value, (int, float)) and not isinstance(n.value, bool):
+            return n.value
+        if isinstance(n, ast.Name):
+            if n.id in _V2_CONSTS:
+                return _V2_CONSTS[n.id]
+            raise ToolError("unknown name: " + n.id)
+        if isinstance(n, ast.UnaryOp) and isinstance(n.op, (ast.UAdd, ast.USub)):
+            v = ev(n.operand)
+            return +v if isinstance(n.op, ast.UAdd) else -v
+        if isinstance(n, ast.BinOp):
+            a, b, op = ev(n.left), ev(n.right), n.op
+            if isinstance(op, ast.Add):
+                return a + b
+            if isinstance(op, ast.Sub):
+                return a - b
+            if isinstance(op, ast.Mult):
+                return a * b
+            if isinstance(op, ast.Div):
+                return a / b
+            if isinstance(op, ast.FloorDiv):
+                return a // b
+            if isinstance(op, ast.Mod):
+                return a % b
+            if isinstance(op, ast.Pow):
+                if isinstance(a, int) and isinstance(b, int) and abs(a) > 1 and b > 0:
+                    if b * math.log2(abs(a)) > 200_000:
+                        raise ToolError("result would be astronomically large")
+                return a ** b
+            raise ToolError("operator not allowed")
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in _V2_FUNCS:
+            if n.keywords:
+                raise ToolError("keyword arguments not allowed")
+            args = [ev(x) for x in n.args]
+            if n.func.id == "factorial" and args and args[0] > 5000:
+                raise ToolError("factorial argument too large")
+            return _V2_FUNCS[n.func.id](*args)
+        raise ToolError("unsupported syntax: " + type(n).__name__)
+
+    return ev(tree)
+
+
+def symbolic_math(operation, expression, variable="x", point=None, lower=None, upper=None, order=6):
+    """simplify | expand | factor | diff | integrate | solve | limit | series | evaluate  (needs: pip install sympy)"""
+    try:
+        import sympy as sp
+    except ImportError as exc:
+        raise ToolError("sympy is not installed on the server (pip install sympy)") from exc
+    funcs = {"sin": sp.sin, "cos": sp.cos, "tan": sp.tan, "cot": sp.cot, "sec": sp.sec, "csc": sp.csc,
+             "asin": sp.asin, "acos": sp.acos, "atan": sp.atan, "sinh": sp.sinh, "cosh": sp.cosh,
+             "tanh": sp.tanh, "exp": sp.exp, "log": sp.log, "ln": sp.log, "sqrt": sp.sqrt, "Abs": sp.Abs,
+             "abs": sp.Abs, "factorial": sp.factorial, "binomial": sp.binomial, "floor": sp.floor,
+             "ceiling": sp.ceiling, "sign": sp.sign, "gamma": sp.gamma}
+    consts = {"pi": sp.pi, "E": sp.E, "e": sp.E, "I": sp.I, "i": sp.I, "oo": sp.oo, "inf": sp.oo}
+    symbols = {}
+
+    def sym(name):
+        if name not in symbols:
+            symbols[name] = sp.Symbol(name)
+        return symbols[name]
+
+    def ev(n):
+        if isinstance(n, ast.Expression):
+            return ev(n.body)
+        if isinstance(n, ast.Constant) and isinstance(n.value, (int, float)) and not isinstance(n.value, bool):
+            return sp.Integer(n.value) if isinstance(n.value, int) else sp.Rational(str(n.value))
+        if isinstance(n, ast.Name):
+            if n.id in consts:
+                return consts[n.id]
+            if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,15}", n.id) and n.id not in funcs:
+                return sym(n.id)
+            raise ToolError("bad name: " + n.id)
+        if isinstance(n, ast.UnaryOp) and isinstance(n.op, (ast.UAdd, ast.USub)):
+            v = ev(n.operand)
+            return v if isinstance(n.op, ast.UAdd) else -v
+        if isinstance(n, ast.BinOp):
+            a, b = ev(n.left), ev(n.right)
+            if isinstance(n.op, ast.Add):
+                return a + b
+            if isinstance(n.op, ast.Sub):
+                return a - b
+            if isinstance(n.op, ast.Mult):
+                return a * b
+            if isinstance(n.op, ast.Div):
+                return a / b
+            if isinstance(n.op, ast.Pow):
+                return a ** b
+            raise ToolError("operator not allowed")
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in funcs and not n.keywords:
+            return funcs[n.func.id](*[ev(x) for x in n.args])
+        raise ToolError("unsupported syntax: " + type(n).__name__)
+
+    def parse(s):
+        s = _prep_expr(s)
+        s = re.sub(r"(?<=\d)(?=[A-Za-z(])", "*", s)                # 2x -> 2*x
+        s = re.sub(r"(?<=[A-Za-z0-9)])\s+(?=[A-Za-z(])", "*", s)   # x sin(x) -> x*sin(x)
+        s = re.sub(r"\)\s*\(", ")*(", s)
+        return ev(ast.parse(s, mode="eval"))
+
+    op, expr_s, var = operation.strip().lower(), expression.strip(), sym(variable)
+    if "=" in expr_s and not re.search(r"[<>!=]=|==", expr_s):
+        lhs, rhs = expr_s.split("=", 1)
+        target = parse(lhs) - parse(rhs)
+    else:
+        target = parse(expr_s)
+    if op == "simplify":
+        res = sp.simplify(target)
+    elif op == "expand":
+        res = sp.expand(target)
+    elif op == "factor":
+        res = sp.factor(target)
+    elif op in ("diff", "derivative"):
+        res = sp.diff(target, var)
+    elif op == "integrate":
+        res = sp.integrate(target, var) if not (lower and upper) else sp.integrate(target, (var, parse(lower), parse(upper)))
+    elif op == "solve":
+        res = sp.solve(target, var)
+    elif op == "limit":
+        res = sp.limit(target, var, parse(point if point is not None else "0"))
+    elif op == "series":
+        res = sp.series(target, var, parse(point if point is not None else "0"), int(order))
+    elif op in ("evaluate", "numeric", "n"):
+        res = sp.N(target, 30)
+    else:
+        raise ToolError("operation must be one of simplify, expand, factor, diff, integrate, solve, limit, series, evaluate")
+    return sp.sstr(res) + "\nLaTeX: " + sp.latex(res)
+
+
+CLAUDE_TOOLS = [
+    {"name": "calculator",
+     "description": "Exact, safe arithmetic. Supports + - * / // % ** ^, parentheses, pi, e, and functions like sqrt, "
+                    "sin, cos, tan, log, ln, exp, factorial, comb, perm, gcd, lcm. Use it for any non-trivial "
+                    "number crunching instead of mental arithmetic.",
+     "input_schema": {"type": "object", "properties": {"expression": {"type": "string"}}, "required": ["expression"]}},
+    {"name": "symbolic_math",
+     "description": "Computer algebra via SymPy. operation is one of: simplify, expand, factor, diff, integrate "
+                    "(optionally with lower/upper bounds), solve (use '=' for equations), limit (give point), series "
+                    "(give point and order), evaluate (30-digit numeric).",
+     "input_schema": {"type": "object", "properties": {
+         "operation": {"type": "string"}, "expression": {"type": "string"},
+         "variable": {"type": "string", "description": "default x"}, "point": {"type": "string"},
+         "lower": {"type": "string"}, "upper": {"type": "string"}, "order": {"type": "integer"}},
+         "required": ["operation", "expression"]}},
+    {"name": "current_time", "description": "Get the server's current date and time.",
+     "input_schema": {"type": "object", "properties": {}}},
+]
+
+
+def _claude_tool(name, args):
+    """Returns (text, is_error)."""
+    try:
+        if name == "calculator":
+            v = calc_v2(str(args.get("expression", "")))
+            return (repr(v) if isinstance(v, float) else str(v)), False
+        if name == "symbolic_math":
+            return symbolic_math(str(args.get("operation", "")), str(args.get("expression", "")),
+                                 str(args.get("variable") or "x"), args.get("point"), args.get("lower"),
+                                 args.get("upper"), int(args.get("order") or 6)), False
+        if name == "current_time":
+            return time.strftime("%A, %d %B %Y, %H:%M:%S %Z"), False
+        return "unknown tool: " + str(name), True
+    except ToolError as e:
+        return "tool error: %s" % e, True
+    except ZeroDivisionError:
+        return "tool error: division by zero", True
+    except Exception as e:
+        return "tool error: %s: %s" % (type(e).__name__, e), True
+
+
+# ---------- talking to Claude ----------
+_claude_client = None
+
+
+def _claude():
+    global _claude_client
+    if _claude_client is None:
+        try:
+            import anthropic
+        except ImportError as exc:
+            raise RuntimeError("Missing dependency: pip install anthropic") from exc
+        _claude_client = anthropic.Anthropic(api_key=CLAUDE_KEY, max_retries=2, timeout=600.0)
+    return _claude_client
+
+
+def _to_claude_msgs(messages):
+    """Groq-style message list -> (system text, alternating user/assistant list starting with a user turn)."""
+    system, out = [], []
+    for m in messages:
+        c = m.get("content")
+        if isinstance(c, list):
+            c = "\n".join(p.get("text", "") for p in c if isinstance(p, dict) and p.get("type") == "text")
+        c = str(c or "")
+        if m.get("role") == "system":
+            if c.strip():
+                system.append(c)
+            continue
+        role = "assistant" if m.get("role") == "assistant" else "user"
+        if not c.strip():
+            continue
+        if out and out[-1]["role"] == role:
+            out[-1]["content"] += "\n\n" + c
+        else:
+            out.append({"role": role, "content": c})
+    while out and out[0]["role"] != "user":
+        out.pop(0)
+    return "\n\n".join(system), out or [{"role": "user", "content": "Hello"}]
+
+
+def _claude_models(smart, tiny):
+    if smart:
+        order = ([CLAUDE_MAX] if getattr(_tl, "max", False) else []) + [CLAUDE_SMART, CLAUDE_FAST]
+    elif tiny:
+        order = [CLAUDE_TINY, CLAUDE_FAST]
+    else:
+        order = [CLAUDE_FAST]
+    return list(dict.fromkeys(order))
+
+
+def _blocks(content):
+    out = []
+    for b in content:
+        try:
+            out.append(b.model_dump(exclude_none=True))
+        except Exception:
+            out.append(b)
+    return out
+
+
+def _claude_attempt(kwargs, on_text):
+    """One streamed conversation with one parameter set: handles tool calls, cut-off answers and loops."""
+    got, conts = "", 0
+    for _ in range(12 + OQ_CONT + 1):
+        seg, looped, final = [], False, None
+        with _claude().messages.stream(**kwargs) as stream:
+            for piece in stream.text_stream:
+                seg.append(piece)
+                got += piece
+                if on_text:
+                    on_text(got)
+                if len(seg) % 8 == 0 and detect_loop(got[-400:]):
+                    looped = True
+                    break
+            if not looped:
+                final = stream.get_final_message()
+        if looped:
+            return trim_loop(got)
+        if final is None:
+            break
+        stop = getattr(final, "stop_reason", "")
+        if stop == "refusal" and not got.strip():
+            raise RuntimeError("the model declined this request")
+        msgs = kwargs["messages"]
+        if stop == "tool_use":
+            msgs.append({"role": "assistant", "content": _blocks(final.content)})
+            results = []
+            for b in final.content:
+                if getattr(b, "type", "") == "tool_use":
+                    out, bad = _claude_tool(b.name, dict(b.input or {}))
+                    results.append({"type": "tool_result", "tool_use_id": b.id, "content": out, "is_error": bad})
+            msgs.append({"role": "user", "content": results})
+            continue
+        if stop == "max_tokens" and conts < OQ_CONT:
+            conts += 1
+            msgs.append({"role": "assistant", "content": _blocks(final.content)})
+            msgs.append({"role": "user", "content": "Continue exactly where you stopped. Do not repeat anything you already wrote."})
+            continue
+        break
+    return got
+
+
+def _claude_run(model, system, msgs, temperature, max_tokens, smart, use_tools, on_text):
+    import anthropic
+    mt = min(CLAUDE_MAX_TOKENS, max(max_tokens, OQ_OUT)) if smart else max(256, min(max_tokens, CLAUDE_MAX_TOKENS))
+    base = dict(model=model, max_tokens=mt)
+    if system:
+        base["system"] = system
+    if use_tools:
+        base["tools"] = CLAUDE_TOOLS
+    attempts = []
+    if smart and CLAUDE_THINK >= 1024 and model != CLAUDE_TINY:
+        attempts.append(dict(base, max_tokens=max(mt, CLAUDE_THINK + 4096),
+                             thinking={"type": "enabled", "budget_tokens": CLAUDE_THINK}))
+    attempts.append(dict(base, temperature=temperature))
+    attempts.append(dict(base))
+    attempts.append(dict(base, max_tokens=min(mt, 16000)))
+    last = None
+    for kw in attempts:
+        kw["messages"] = [dict(m) for m in msgs]  # a fresh list each time: tool rounds add to it
+        try:
+            return _claude_attempt(kw, on_text)
+        except anthropic.BadRequestError as e:    # a parameter this model does not accept: try simpler settings
+            last = e
+            continue
+    raise last
+
+
+def _claude_chat(messages, temperature=0.3, max_tokens=4096, smart=False, on_text=None):
+    system, msgs = _to_claude_msgs(messages)
+    tiny = (not smart) and max_tokens <= 600 and on_text is None
+    use_tools = smart and on_text is None
+    last = None
+    for model in _claude_models(smart, tiny):
+        lane = None
+        if model == CLAUDE_MAX:  # the expensive model has its own small lane; if it is full, use the next model
+            if not CLAUDE_MAX_SLOTS.acquire(blocking=False):
+                continue
+            lane = CLAUDE_MAX_SLOTS
+        if not CLAUDE_SLOTS.acquire(timeout=CLAUDE_QUEUE_TIMEOUT):
+            if lane:
+                lane.release()
+            raise RuntimeError("Deep OQ is very busy right now. Please try again in a few seconds.")
+        try:
+            text = _clean_think(_claude_run(model, system, msgs, temperature, max_tokens, smart, use_tools, on_text))
+            if text.strip():
+                return trim_loop(text)
+        except Exception as e:
+            last = e
+            print("claude model", model, "failed:", str(e)[:200])
+        finally:
+            CLAUDE_SLOTS.release()
+            if lane:
+                lane.release()
+    raise last or RuntimeError("Claude returned no answer")
+
+
+# ---------- OpenAI backup (only used when Claude fails) ----------
+def _openai_chat(messages, max_tokens=4096):
+    try:
+        from openai import OpenAI
+    except ImportError as exc:
+        raise RuntimeError("Missing dependency for the OpenAI backup: pip install openai") from exc
+    system, msgs = _to_claude_msgs(messages)
+    system += ("\n\nBACKUP MODE: you have no tools in this reply. Do calculations carefully by hand, double-check "
+               "them, and never claim you ran code or a tool.")
+    client = OpenAI(api_key=OPENAI_KEY, max_retries=3, timeout=600.0)
+    last = None
+    for model in OPENAI_MODELS:
+        base = dict(model=model, instructions=system, input=msgs, max_output_tokens=min(max(max_tokens, 4096), 16000))
+        tries = ([dict(base, reasoning={"effort": OPENAI_REASONING})] if OPENAI_REASONING else []) + [base]
+        for kw in tries:
+            try:
+                text = (client.responses.create(**kw).output_text or "").strip()
+                if text:
+                    print("OpenAI backup answered:", model)
+                    return text
+            except Exception as e:
+                last = e
+                print("openai", model, "failed:", str(e)[:160])
+    raise last or RuntimeError("OpenAI returned no answer")
+
+
+def _is_diverse(prefer):
+    """The second-opinion calls (checker, tie-breaker) stay on the Groq models, so a different model family
+    reviews Claude's work."""
+    return bool(_groqs) and prefer in (EXAM_CHECK_MODEL, EXAM_THIRD_MODEL)
+
+
+def _premium_chat(messages, temperature, max_tokens, smart, prefer, force=False):
+    """Claude, then OpenAI. Returns None when neither is set up or both fail (the caller then uses Groq)."""
+    if _is_diverse(prefer) and not force:
+        return None
+    if CLAUDE_ON:
+        try:
+            t = _claude_chat(messages, temperature, max_tokens, smart)
+            if t:
+                return t
+        except Exception as e:
+            print("Claude failed:", str(e)[:200])
+    if OPENAI_KEY and (smart or max_tokens > 600):
+        try:
+            return _openai_chat(messages, max_tokens)
+        except Exception as e:
+            print("OpenAI backup failed:", str(e)[:200])
+    return None
+
+
+# ---------- daily limit for max mode (the Research button) ----------
+if USE_PG:
+    _pg("CREATE TABLE IF NOT EXISTS oq_usage(username TEXT NOT NULL, day TEXT NOT NULL, kind TEXT NOT NULL, "
+        "n INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(username, day, kind))")
+else:
+    with DB:
+        DB.execute("CREATE TABLE IF NOT EXISTS usage(username TEXT NOT NULL, day TEXT NOT NULL, kind TEXT NOT NULL, "
+                   "n INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(username, day, kind))")
+
+
+def usage_bump(username, kind="max"):
+    day = time.strftime("%Y-%m-%d", time.gmtime())
+    if USE_PG:
+        row = _pg("INSERT INTO oq_usage(username,day,kind,n) VALUES(%s,%s,%s,1) "
+                  "ON CONFLICT (username,day,kind) DO UPDATE SET n=oq_usage.n+1 RETURNING n",
+                  (username, day, kind), "one")
+        return int(row[0])
+    with DB:
+        DB.execute("INSERT INTO usage(username,day,kind,n) VALUES(?,?,?,1) "
+                   "ON CONFLICT(username,day,kind) DO UPDATE SET n=n+1", (username, day, kind))
+        return int(DB.execute("SELECT n FROM usage WHERE username=? AND day=? AND kind=?",
+                              (username, day, kind)).fetchone()[0])
+
+
+def _max_allowed(username):
+    """True when this person may use the most powerful model right now (counts one use)."""
+    if not CLAUDE_ON:
+        return False
+    if DAILY_MAX_LIMIT <= 0:
+        return True
+    try:
+        return usage_bump(username or "guest", "max") <= DAILY_MAX_LIMIT
+    except Exception as e:
+        print("usage count failed:", e)
+        return False
+
+
+@app.get("/health")
+def health_route():
+    return jsonify(ok=True, claude=CLAUDE_ON, openai_backup=bool(OPENAI_KEY), groq_keys=len(_groqs),
+                   database="postgres" if USE_PG else "sqlite")
+
+
+def _selftest_v2():
+    """python deep_oq.py selftest   (no API key or network needed)"""
+    assert detect_loop("Problem: Let $f: " * 12), "loop detector missed a repetition"
+    assert collapse_repeats("Answer Answer You can use heat. You can use heat.").count("heat") == 1
+    assert "```\nx\nx\n```" in collapse_repeats("Hi.\n\n```\nx\nx\n```")
+    assert calc_v2("2^10 + sqrt(16)") == 1028 and abs(calc_v2("sin(pi/2)") - 1) < 1e-12
+    for bad in ("__import__('os').system('ls')", "(1).__class__", "9**9**9", "open('x')"):
+        try:
+            calc_v2(bad)
+            raise AssertionError("should have rejected " + bad)
+        except (ToolError, SyntaxError, TypeError):
+            pass
+    s, m = _to_claude_msgs([{"role": "system", "content": "S"}, {"role": "assistant", "content": "a"},
+                            {"role": "user", "content": "u1"}, {"role": "user", "content": "u2"}])
+    assert s == "S" and m == [{"role": "user", "content": "u1\n\nu2"}], (s, m)
+    assert _claude_models(True, False)[0] == CLAUDE_SMART and _claude_models(False, True)[0] == CLAUDE_TINY
+    print("selftest OK")
+
+
 def chat(messages, temperature=0.3, max_tokens=4096, smart=False, prefer=None):
+    if CLAUDE_ON or OPENAI_KEY:  # Claude first, then the OpenAI backup, then the Groq models below
+        _r = _premium_chat(messages, temperature, max_tokens, smart, prefer)
+        if _r:
+            return _r
     if smart:
         order = SMART_CANDIDATES[:]
         if _smart["model"] in order:  # start with the model that worked last time
@@ -1992,6 +2577,10 @@ def chat(messages, temperature=0.3, max_tokens=4096, smart=False, prefer=None):
             return _extra_chat(messages, temperature, max_tokens)
         except Exception as e:
             last = e
+    if (CLAUDE_ON or OPENAI_KEY) and _is_diverse(prefer):  # the Groq checker failed: let Claude do the check
+        _r = _premium_chat(messages, temperature, max_tokens, smart, prefer, force=True)
+        if _r:
+            return _r
     raise last or RuntimeError("no model returned an answer")
 
 
@@ -2335,8 +2924,9 @@ def _start_login(name, remember):
 
 @app.before_request
 def require_login():
+    _tl.max = False
     p = request.path
-    if p in ("/login", "/logout", "/favicon.ico") or p.startswith(("/api/login", "/api/register", "/api/google", "/vr")):
+    if p in ("/login", "/logout", "/favicon.ico", "/health") or p.startswith(("/api/login", "/api/register", "/api/google", "/vr")):
         return None
     if login_session.get("user"):
         return None
@@ -2737,6 +3327,7 @@ def ask():
     session = (login_session.get("user") or "guest") + ":" + str(data.get("session") or "default")
     try:
         kb_drop_last(session, data.get("drop"))
+        _tl.max = _max_allowed(_session_user(session)) if data.get("research") else False
         answer = (research_answer(session, data["q"]) if data.get("research") else None) or deep_oq(session, data["q"])
         kb_save_msg(session, "user", data["q"])
         kb_save_msg(session, "assistant", answer)
@@ -2807,8 +3398,9 @@ def ask_stream():
     def work():
         try:
             kb_drop_last(session, data.get("drop"))
+            _tl.max = _max_allowed(_session_user(session)) if data.get("research") else False
             answer = (research_answer(session, q, emit) if data.get("research") else None)
-            answer = plain_math(answer if answer else _deep_oq_raw(session, q, False, emit))
+            answer = plain_math(answer if answer else collapse_repeats(_deep_oq_raw(session, q, False, emit)))
             kb_save_msg(session, "user", q)
             kb_save_msg(session, "assistant", answer)
             mem_learn(_session_user(session), q)
@@ -8199,5 +8791,7 @@ if __name__ == "__main__":
         ingest(sys.argv[2:])
     elif len(sys.argv) > 1 and sys.argv[1] == "migrate":
         migrate_sqlite_to_pg(sys.argv[2] if len(sys.argv) > 2 else None)
+    elif len(sys.argv) > 1 and sys.argv[1] == "selftest":
+        _selftest_v2()
     else:
         app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
