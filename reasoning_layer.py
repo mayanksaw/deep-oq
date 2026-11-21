@@ -21,10 +21,12 @@ What happens to each message:
   2. If a deterministic solver recognises the problem and its independent check passes, a real
      computed result is handed to the lead model, which explains it in a human voice.
      (If the check fails, the result is thrown away.)
-  3. Other maths / logic / science questions go to the agent panel: agents on different
-     providers solve independently with different roles, answers are weight-voted, a program
-     is run as a cross-check, and the lead model acts as judge. Disagreement lowers the
-     confidence and the reply says so honestly.
+  3. Other maths / logic / science questions go to the agent panel. There are 65 agent roles
+     (12 generalists + 53 domain specialists: calculus analyst, organic chemist, debugger,
+     economist, Hindi communicator ...). A router picks the specialists that fit the question,
+     agents on different providers solve independently, answers are weight-voted, a split vote
+     triggers a debate round, a program is run as a cross-check, and the lead model judges.
+     Disagreement lowers the confidence and the reply says so honestly.
   4. Normal conversation gets full-depth, human replies: loops removed, cut-off answers
      continued, thin one-liners expanded.
 
@@ -34,6 +36,7 @@ from __future__ import annotations
 
 import collections
 import concurrent.futures as cf
+import itertools
 import math
 import os
 import re
@@ -422,11 +425,178 @@ AGENT_ROLES = [
     "Programmer: reason as if you were writing the algorithm, and trace it by hand.",
 ]
 
+@dataclass(frozen=True)
+class Specialist:
+    name: str
+    tags: Tuple[str, ...]
+    prompt: str
+
+
+def _sp(name, tags, prompt):
+    return Specialist(name, tuple(tags.split()), prompt)
+
+
+# 53 domain specialists. Each is a prompt persona; the router below picks the ones that fit the question.
+SPECIALISTS: List[Specialist] = [
+    # --- mathematics (16)
+    _sp("Algebraist", "math algebra", "Manipulate expressions and equations exactly; check every sign and every domain restriction."),
+    _sp("Calculus analyst", "math calculus", "Differentiate, integrate and take limits carefully; name each rule and verify by differentiating back."),
+    _sp("Linear algebraist", "math linear_algebra", "Think in vector spaces, ranks and eigenstructure; verify with a small numeric example."),
+    _sp("Number theorist", "math number_theory", "Use divisibility, modular arithmetic and prime structure; test small cases to confirm."),
+    _sp("Combinatorialist", "math combinatorics probability", "Count carefully: define the sample space, avoid double counting, verify with a smaller case."),
+    _sp("Probabilist", "math probability statistics", "Define events precisely, use conditional probability, and sanity-check that probabilities sum to 1."),
+    _sp("Statistician", "statistics probability math", "Identify the right estimator or test, state assumptions, and interpret the result in plain words."),
+    _sp("Geometer", "math geometry trig", "Draw the figure mentally, label every length and angle, and use coordinates to double-check."),
+    _sp("Trigonometry specialist", "math trig geometry", "Use identities and exact values; check the quadrant and the range of each function."),
+    _sp("Discrete-maths and graph theorist", "math discrete algorithms puzzle", "Model the problem as a graph, recurrence or invariant; look for a pigeonhole or parity argument."),
+    _sp("Proof writer", "math proof logic", "Prove each claim step by step, state what is assumed, and look for the gap a sceptic would find."),
+    _sp("Inequality and olympiad expert", "math exam algebra", "Try AM-GM, Cauchy-Schwarz, substitution and symmetry; check equality cases."),
+    _sp("Differential-equations specialist", "math ode calculus physics", "Classify the equation, pick the right method, and substitute the solution back to verify."),
+    _sp("Mathematical modeller", "math physics finance", "Translate the words into equations, state the assumptions, solve, and interpret the units."),
+    _sp("JEE/NEET exam coach", "exam math physics chemistry", "Solve the way a top exam candidate would: identify the concept being tested and the common trap, then eliminate options."),
+    _sp("Competitive-programming mathematician", "math code algorithms", "Find the clean closed form or the efficient algorithm; reason about complexity and edge cases."),
+    # --- physics (7)
+    _sp("Mechanics specialist", "physics mechanics", "Draw a free-body diagram, choose axes, and use conservation laws where they simplify the problem."),
+    _sp("Electromagnetism specialist", "physics em", "Track fields, charges and circuits carefully; check signs, directions and units."),
+    _sp("Thermodynamics specialist", "physics thermo chemistry", "Identify the process and the system, apply the first and second laws, and keep temperature in kelvin."),
+    _sp("Waves and optics specialist", "physics waves", "Use wave relations and ray or interference geometry; check limiting cases."),
+    _sp("Modern-physics specialist", "physics modern", "Apply quantum, relativity and nuclear relations with correct constants and units."),
+    _sp("Fluid-dynamics specialist", "physics fluids", "Use continuity, Bernoulli and pressure relations; check that the units balance."),
+    _sp("Dimensional-analysis and units checker", "physics units", "Check the dimensions of every formula and convert units explicitly; flag any mismatch."),
+    # --- chemistry (4)
+    _sp("Physical chemist", "chemistry physchem", "Use equilibrium, kinetics and thermodynamic relations; keep track of units and significant figures."),
+    _sp("Organic chemist", "chemistry organic", "Reason about functional groups, mechanisms and stereochemistry before naming products."),
+    _sp("Inorganic chemist", "chemistry inorganic", "Use periodic trends, oxidation states and coordination chemistry; check charge balance."),
+    _sp("Stoichiometry and analytical chemist", "chemistry stoich", "Balance first, convert to moles, find the limiting reagent, then compute; check mass balance."),
+    # --- life science and medicine (2)
+    _sp("Biology tutor", "biology", "Explain the mechanism from first principles and connect it to the bigger system."),
+    _sp("Medical-information explainer", "medicine biology", "Give general educational information, be clear about uncertainty, and say when a professional should be consulted."),
+    # --- computing (8)
+    _sp("Algorithm designer", "code algorithms", "Choose the data structure, state the complexity, and test the idea on a tiny input by hand."),
+    _sp("Debugger", "code debugging", "Reproduce the failure mentally, form hypotheses, find the root cause, and propose the smallest safe fix."),
+    _sp("Software architect", "code systems", "Weigh trade-offs, keep the design simple, and name the failure modes."),
+    _sp("Security reviewer (defensive)", "code security", "Look for the weaknesses a careful defender must close and explain how to fix them; do not write attack tools."),
+    _sp("SQL and database expert", "code database", "Think in sets and indexes; check joins, nulls and edge cases."),
+    _sp("Web and API engineer", "code web", "Consider HTTP semantics, validation, errors, and deployment realities."),
+    _sp("Data scientist", "code ml statistics", "Check data quality, leakage and evaluation before trusting a model."),
+    _sp("Code verifier", "code debugging algorithms", "Write test cases, including edge cases, and trace the code against them."),
+    # --- money (3)
+    _sp("Quantitative analyst", "finance math", "Use the right time-value or risk formula and check the result by an independent calculation."),
+    _sp("Accountant", "finance accounting", "Keep the books balanced; state each assumption about treatment and period."),
+    _sp("Economist", "finance economics", "Separate positive from normative claims; use marginal reasoning and note the assumptions."),
+    # --- language (5)
+    _sp("Editor", "writing", "Tighten the prose, fix structure, and keep the author's voice."),
+    _sp("Translator", "translation writing", "Preserve meaning, tone and idiom, and note where a literal translation would mislead."),
+    _sp("Storyteller", "story writing", "Build vivid scenes with a clear arc, concrete detail and a distinct voice."),
+    _sp("Summariser", "summary writing", "Capture the core argument faithfully and briefly, without adding claims."),
+    _sp("Hindi and Hinglish communicator", "hindi writing", "Answer naturally in the user's mix of Hindi and English, in the script they used."),
+    # --- general thinking (8)
+    _sp("Fact-checker", "research factcheck", "Separate what is well established from what is uncertain; flag claims that need a source."),
+    _sp("Historian", "history research", "Give context and causes, and distinguish evidence from legend."),
+    _sp("Geographer", "geography research", "Use places, scale and physical and human geography to ground the answer."),
+    _sp("Philosopher and ethicist", "philosophy logic", "Lay out the strongest positions fairly and test each against objections."),
+    _sp("Planner", "planning", "Break the goal into steps with order, dependencies, risks and a first action."),
+    _sp("Devil's advocate", "critique logic", "Argue against the leading answer as hard as honesty allows, then say whether it survives."),
+    _sp("Plain-language teacher", "teaching", "Explain as to a bright beginner: simple words, one good example, then the precise statement."),
+    _sp("Synthesiser", "research planning", "Combine the strongest points from different views into one coherent answer."),
+]
+
+_DOMAIN_PATTERNS = {
+    "math": r"\b(solve|prove|calculate|compute|equation|integral|derivative|limit|matrix|probability|theorem|polynomial|sequence|series|modulo|prime|geometry|algebra|trigonometr)\w*",
+    "algebra": r"\b(equation|polynomial|inequality|quadratic|factor|simplify|expand|roots?)\b",
+    "calculus": r"\b(derivative|differentiate|integral|integrate|limit|taylor|maxima|minima|d/dx)\b|∫",
+    "linear_algebra": r"\b(matrix|matrices|eigen\w*|determinant|vector|rank|linear (system|map)|basis)\b",
+    "number_theory": r"\b(prime|gcd|lcm|modulo|mod|divisib\w*|congruen\w*|remainder|diophantine)\b",
+    "combinatorics": r"\b(permutations?|combinations?|arrangements?|ways to|choose|binomial|counting)\b",
+    "probability": r"\b(probabilit\w*|expected|dice|coin|cards?|random|odds|bayes)\b",
+    "statistics": r"\b(mean|median|variance|standard deviation|regression|correlation|hypothesis|p-value|distribution|sample)\b",
+    "geometry": r"\b(triangle|circle|angle|polygon|area|volume|perimeter|radius|sphere|cone|cylinder)\b",
+    "trig": r"\b(sin|cos|tan|sec|csc|cot|trigonometr\w*|radians?)\b",
+    "discrete": r"\b(graph|tree|node|edge|path|pigeonhole|recurrence|induction|invariant)\b",
+    "proof": r"\b(prove|proof|show that|demonstrate|hence)\b",
+    "ode": r"\b(ode|differential equation|y'|dy/dx)\b",
+    "exam": r"\b(jee|neet|olympiad|imo|gate|cat|upsc|exam|which statement|mcq)\b|\b[A-D]\)\s",
+    "physics": r"\b(force|velocity|acceleration|energy|momentum|torque|circuit|voltage|current|wave|photon|gravity|pressure|physics)\b",
+    "mechanics": r"\b(force|velocity|acceleration|momentum|torque|friction|projectile|collision|pendulum)\b",
+    "em": r"\b(electric|magnetic|charge|capacitor|inductor|circuit|voltage|current|resistance|ohm)\b",
+    "thermo": r"\b(heat|temperature|entropy|enthalpy|thermodynamic\w*|gas law|carnot)\b",
+    "waves": r"\b(wave|frequency|wavelength|refraction|diffraction|interference|lens|mirror|optics)\b",
+    "modern": r"\b(quantum|relativity|photon|nucleus|nuclear|radioactive|half-life|electron)\b",
+    "fluids": r"\b(fluid|bernoulli|viscosity|buoyan\w*|flow rate|streamline)\b",
+    "units": r"\b(units?|convert|dimension\w*|si )\b",
+    "chemistry": r"\b(chemical|molecule|molar|mole|acid|base|reaction|compound|element|ph\b|bond|oxidation)\b",
+    "physchem": r"\b(equilibrium|rate law|kinetics|gibbs|enthalpy|electrochem\w*)\b",
+    "organic": r"\b(organic|alkane|alkene|alcohol|ketone|aldehyde|benzene|polymer|isomer)\b",
+    "inorganic": r"\b(periodic table|coordination|ionic|lattice|oxidation state|transition metal)\b",
+    "stoich": r"\b(balance|stoichiometr\w*|limiting reagent|molarity|yield|mole)\b",
+    "biology": r"\b(cell|dna|rna|protein|gene|evolution|species|organism|photosynthesis|enzyme)\b",
+    "medicine": r"\b(symptom|disease|diagnos\w*|medicine|drug|dose|treatment|infection)\b",
+    "code": r"\b(code|function|python|javascript|java|c\+\+|sql|bug|error|compile|api|algorithm|class|loop|script)\b",
+    "algorithms": r"\b(algorithm|complexity|sort|search|dynamic programming|recursion|big o|graph)\b",
+    "debugging": r"\b(bug|error|exception|traceback|crash|fix|not working|fails?)\b",
+    "systems": r"\b(architecture|scalab\w*|microservice|deploy\w*|server|latency|database design|system design)\b",
+    "security": r"\b(security|vulnerab\w*|encrypt\w*|password|auth\w*|injection|xss|csrf)\b",
+    "database": r"\b(sql|query|database|postgres\w*|index|join|table|schema)\b",
+    "web": r"\b(html|css|react|flask|django|http|rest|endpoint|frontend|backend|website)\b",
+    "ml": r"\b(machine learning|neural|model|training|dataset|classifier|llm|embedding)\b",
+    "finance": r"\b(interest|loan|emi|invest\w*|stock|bond|npv|irr|return|portfolio|profit|loss|tax)\b",
+    "accounting": r"\b(balance sheet|ledger|depreciation|revenue|expense|accounting|gst|invoice)\b",
+    "economics": r"\b(inflation|gdp|demand|supply|market|economy|monetary|fiscal|elasticity)\b",
+    "writing": r"\b(write|essay|email|letter|story|poem|blog|rewrite|edit|proofread|paragraph)\b",
+    "translation": r"\b(translate|translation|in (hindi|french|spanish|german|tamil|urdu)|meaning of)\b",
+    "story": r"\b(story|novel|character|plot|poem|screenplay)\b",
+    "summary": r"\b(summar\w*|tl;dr|key points|brief)\b",
+    "hindi": r"[\u0900-\u097F]|\b(kya|kaise|kyun|hai|nahi|batao|samjhao|mujhe)\b",
+    "research": r"\b(research|compare|difference between|pros and cons|history of|explain)\b",
+    "factcheck": r"\b(is it true|true or false|fact.?check|really|myth)\b",
+    "history": r"\b(history|ancient|medieval|empire|war|dynasty|independence|century)\b",
+    "geography": r"\b(country|capital|river|mountain|continent|climate|map|population)\b",
+    "philosophy": r"\b(ethic\w*|moral|philosoph\w*|meaning of life|free will|consciousness)\b",
+    "planning": r"\b(plan|schedule|roadmap|steps to|strategy|how do i start|study plan)\b",
+    "critique": r"\b(review|critique|feedback|what's wrong|weakness|flaw)\b",
+    "teaching": r"\b(explain|teach|eli5|simple terms|beginner|understand)\b",
+    "logic": r"\b(logic|puzzle|riddle|paradox|if and only if|syllogism|truth table|deduce)\b",
+    "puzzle": r"\b(puzzle|riddle|brain ?teaser|trick question|switches|jugs?|river crossing)\b",
+}
+_DOMAIN_RE = {k: re.compile(v, re.I) for k, v in _DOMAIN_PATTERNS.items()}
+
+
+def detect_domains(question: str) -> set:
+    return {k for k, rx in _DOMAIN_RE.items() if rx.search(question)}
+
+
+def pick_roles(question: str, n: int) -> List[str]:
+    """n role prompts for n agents: a careful generalist first, then specialists that match the
+    question's domains interleaved with generalists, then everyone else as filler."""
+    tags = detect_domains(question)
+    scored = sorted(((len(tags & set(sp_.tags)), i, sp_) for i, sp_ in enumerate(SPECIALISTS)),
+                    key=lambda t: (-t[0], t[1]))
+    matched = [f"{sp_.name}: {sp_.prompt}" for sc, _, sp_ in scored if sc > 0]
+    rest = [f"{sp_.name}: {sp_.prompt}" for sc, _, sp_ in scored if sc == 0]
+    general = list(AGENT_ROLES)
+    order = [general[0]]
+    for a, b in itertools.zip_longest(matched, general[1:]):
+        order += [x for x in (a, b) if x]
+    order += rest
+    return [order[i % len(order)] for i in range(max(0, n))]
+
+
+DEBATE_PROMPT = """Question:
+{question}
+
+Positions from other solvers (each followed by an excerpt of its reasoning):
+{positions}
+
+Examine every position critically. Find the actual error in the wrong ones, decide which answer is
+correct (or find a better one), and solve the problem again properly. End with: FINAL: <result>"""
+
+
 SOLVER_NOTE = """A trusted program just computed and independently verified the following. Explain it to
 the user in your own natural voice: say what the result is, walk through the key idea in plain
 language, and keep every number, expression and grid exactly as given (put grids or boards in a
 code block). You may say it was computed and cross-checked by running code, because that is true.
-Do not add facts that contradict it.
+Do not add facts that contradict it. If the computed result clearly does not answer what the
+user actually asked, ignore it and answer normally.
 
 {block}"""
 
@@ -479,6 +649,7 @@ class ReasoningEngine:
         use_solvers: bool = True,
         chat_effort: str = "medium",
         solve_effort: str = "high",
+        debate_rounds: int = 1,
     ):
         self.call_model = call_model
         self.samples = max(1, samples)
@@ -493,6 +664,7 @@ class ReasoningEngine:
         self.use_solvers = use_solvers and solvers is not None
         self.chat_effort = chat_effort
         self.solve_effort = solve_effort
+        self.debate_rounds = debate_rounds
 
     # ---- model plumbing ---------------------------------------------------
     def _call(self, messages, **opts) -> Tuple[str, str]:
@@ -558,10 +730,11 @@ class ReasoningEngine:
     # ---- 2. the agent panel ------------------------------------------------
     def _attempts(self, history, question):
         if self.agents:
-            jobs = [(fn, w, label, AGENT_ROLES[i % len(AGENT_ROLES)])
-                    for i, (fn, w, label) in enumerate(self.agents)]
+            roles = pick_roles(question, len(self.agents))
+            jobs = [(fn, w, label, roles[i]) for i, (fn, w, label) in enumerate(self.agents)]
         else:
-            jobs = [(None, 1, "lead", AGENT_ROLES[i % len(AGENT_ROLES)]) for i in range(self.samples)]
+            roles = pick_roles(question, self.samples)
+            jobs = [(None, 1, "lead", roles[i]) for i in range(self.samples)]
 
         def run(job):
             fn, _w, _label, role = job
@@ -614,6 +787,51 @@ class ReasoningEngine:
         alts = "; ".join(f"{finals[g[0]]} (weight {wt(g)})" for g in ranked[1:4]) or "none"
         return candidates[pick], wt(best), total, alts
 
+    def _debate(self, question: str, candidates: List[str]):
+        """Show the strongest competing answers to a few agents and let them re-solve."""
+        finals = [extract_final(c) for c in candidates]
+        groups: List[List[int]] = []
+        for i, f in enumerate(finals):
+            if f is None:
+                continue
+            for g in groups:
+                if answers_match(f, finals[g[0]]):
+                    g.append(i)
+                    break
+            else:
+                groups.append([i])
+        if len(groups) < 2:
+            return [], []
+        groups.sort(key=len, reverse=True)
+        positions = "\n\n".join(
+            f"Position {chr(65 + n)} (answer: {finals[g[0]]}; {len(g)} solver(s)):\n"
+            f"...{candidates[max(g, key=lambda i: len(candidates[i]))][-700:]}"
+            for n, g in enumerate(groups[:4]))
+        prompt = DEBATE_PROMPT.format(question=question, positions=positions)
+        pool = (self.agents[:4] if self.agents else [(None, 1, "lead")] * 2)
+        outs: List[str] = []
+        ws: List[int] = []
+
+        def run(a):
+            fn = a[0]
+            msgs = [{"role": "system", "content": self.system_prompt}, {"role": "user", "content": prompt}]
+            opts = dict(temperature=0.5, max_tokens=self.max_tokens, effort=self.solve_effort)
+            if fn:
+                opts["_fn"] = fn
+            return self.generate_complete(msgs, **opts)
+
+        with cf.ThreadPoolExecutor(max_workers=min(4, len(pool))) as ex:
+            futs = [(ex.submit(run, a), a) for a in pool]
+            for f, a in futs:
+                try:
+                    t = f.result()
+                except Exception:  # noqa: BLE001
+                    continue
+                if extract_final(t):
+                    outs.append(t)
+                    ws.append(a[1])
+        return outs, ws
+
     def _code_cross_check(self, question: str, notes: List[str]) -> Optional[str]:
         if not self.run_code:
             return None
@@ -659,6 +877,16 @@ class ReasoningEngine:
                          "low", "solve", notes + ["no candidates"])
         draft, votes, total, alts = self._vote(candidates, weights)
         notes.append(f"panel: {len(candidates)} agents answered; weighted vote {votes}/{total}")
+        roles_used = [r.split(":", 1)[0] for r in pick_roles(question, min(6, len(candidates)))]
+        notes.append("roles: " + ", ".join(roles_used))
+        for _ in range(self.debate_rounds):
+            if total and votes / total < 0.66 and len(candidates) >= 3:
+                extra, extra_w = self._debate(question, candidates)
+                if not extra:
+                    break
+                candidates, weights = candidates + extra, weights + extra_w
+                draft, votes, total, alts = self._vote(candidates, weights)
+                notes.append(f"debate round: {len(extra)} agents re-solved; weighted vote now {votes}/{total}")
 
         code_result = self._code_cross_check(question, notes)
 
@@ -882,6 +1110,35 @@ def _selftest() -> None:
 
     down = ReasoningEngine(boom).respond([], "tell me about quantum computing in detail")
     assert down.mode == "error" and "try again" in down.text
+
+    # 14. 50+ specialists, routed by domain; a split vote triggers a debate round
+    assert len(SPECIALISTS) >= 50 and len({sp_.name for sp_ in SPECIALISTS}) == len(SPECIALISTS)
+    assert len(SPECIALISTS) + len(AGENT_ROLES) >= 60
+    assert "Calculus analyst" in " ".join(pick_roles("find the limit and the derivative of this function", 8))
+    assert "Debugger" in " ".join(pick_roles("my python code throws an error and crashes", 8))
+    assert "Stoichiometry" in " ".join(pick_roles("balance this chemical reaction and find the limiting reagent", 8))
+    assert len(pick_roles("anything", 200)) == 200 and pick_roles("anything", 3)[0].startswith("Careful")
+    assert "hindi" in detect_domains("mujhe samjhao kaise hota hai")
+
+    def debater(own):
+        def fn(m, **o):
+            if "Positions from other solvers" in m[-1]["content"]:
+                return {"text": "Re-checking each position... the second is right.\nFINAL: C", "finish_reason": "stop"}
+            return {"text": f"Working...\nFINAL: {own}", "finish_reason": "stop"}
+        return fn
+
+    split = [(debater("C"), 1, "a"), (debater("C"), 1, "b"), (debater("B"), 1, "c"), (debater("B"), 1, "d")]
+
+    def lead2(messages, **opts):
+        last = messages[-1]["content"]
+        if "Write a short, self-contained Python program" in last:
+            return "```python\nprint('RESULT: C')\n```"
+        return "Settled.\nFINAL: C"
+
+    deb = ReasoningEngine(lead2, agents=split).respond([], "Which statement is correct? A) x B) y C) z D) w for this equation")
+    assert any("debate round" in n for n in deb.notes) and deb.confidence == "high", deb.notes
+    nodeb = ReasoningEngine(lead2, agents=split, debate_rounds=0).respond([], "Which statement is correct? A) x B) y C) z D) w for this equation")
+    assert not any("debate" in n for n in nodeb.notes)
 
     print("selftest passed")
 
