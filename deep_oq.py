@@ -8171,6 +8171,7 @@ LOGIN_PAGE = r"""<!DOCTYPE html>
       <p class="switch" id="switch">New here? <a id="toggle">Create an account</a></p>
 
       <p class="sub" style="font-size:12px;text-align:center;margin:14px 0 0;min-height:0">Chats are saved to your account and the site owner can access them.</p>
+      <a href="/terms" style="color:#00d4ff">Terms</a> and <a href="/privacy" style="color:#00d4ff">Privacy</a>
 
       <div class="ok" id="ok">
         <svg viewBox="0 0 100 100"><circle cx="50" cy="50" r="41"/><path d="M30 52 L45 66 L71 36"/></svg>
