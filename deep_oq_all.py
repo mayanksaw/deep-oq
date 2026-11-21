@@ -92,7 +92,7 @@ HOW THIS SINGLE FILE WORKS
 USAGE
   python deep_oq_all.py "integrate x^2 from 0 to 3"   solve one problem
   python deep_oq_all.py                                interactive prompt
-  python deep_oq_all.py test                           run all tests (108)
+  python deep_oq_all.py test                           run all tests (109)
   python deep_oq_all.py serve [port]                   HTTP API (needs fastapi + uvicorn)
   python deep_oq_all.py providers                      show models + which API keys are set
   python deep_oq_all.py ping                           send one tiny real request to each provider (checks keys/billing)
@@ -162,7 +162,7 @@ __version__ = "2.0.0"
 ''')
 
 # ====================================================================================================
-# MODULE: deep_oq.codeexec    (deep_oq/codeexec.py, 95 lines)
+# MODULE: deep_oq.codeexec    (deep_oq/codeexec.py, 110 lines)
 # ====================================================================================================
 _register('deep_oq.codeexec', False, 'deep_oq/codeexec.py', r'''"""Best-effort sandboxed Python runner, so 'I ran the code' claims can be REAL.
 
@@ -174,14 +174,15 @@ from __future__ import annotations
 
 import ast
 import os
-try:
-    import resource
-except ImportError:
-    resource = None
 import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
+
+try:                                  # POSIX only: on Windows the sandbox falls back to AST checks + timeout only
+    import resource
+except ImportError:                   # pragma: no cover
+    resource = None
 
 ALLOWED_IMPORTS = {"math", "cmath", "fractions", "decimal", "itertools", "functools", "collections", "random",
                    "statistics", "sympy", "numpy", "scipy", "heapq", "bisect", "re", "string", "json", "datetime",
@@ -234,15 +235,26 @@ def static_check(code: str) -> str:
 
 
 def _limits(mem_mb: int, cpu_s: int):
+    if resource is None:
+        return None
+
     def apply():
-        if resource is not None:
-            resource.setrlimit(resource.RLIMIT_AS, (mem_mb * 1024 * 1024, mem_mb * 1024 * 1024))
-            resource.setrlimit(resource.RLIMIT_CPU, (cpu_s, cpu_s))
-            resource.setrlimit(resource.RLIMIT_FSIZE, (1_000_000, 1_000_000))
-            resource.setrlimit(resource.RLIMIT_NOFILE, (32, 32))
-        if hasattr(os, "setsid"):
-            os.setsid()
+        resource.setrlimit(resource.RLIMIT_AS, (mem_mb * 1024 * 1024, mem_mb * 1024 * 1024))
+        resource.setrlimit(resource.RLIMIT_CPU, (cpu_s, cpu_s))
+        resource.setrlimit(resource.RLIMIT_FSIZE, (1_000_000, 1_000_000))
+        resource.setrlimit(resource.RLIMIT_NOFILE, (32, 32))
+        os.setsid()
     return apply
+
+
+def _clean_env() -> dict:
+    env = {"PYTHONHASHSEED": "0", "OMP_NUM_THREADS": "1"}
+    if os.name == "nt":                       # Windows needs these to start Python at all
+        env.update({k: os.environ[k] for k in ("SYSTEMROOT", "PATH", "TEMP", "TMP") if k in os.environ})
+    else:
+        env["PATH"] = "/usr/bin:/bin"
+    return env
+
 
 def run_python(code: str, timeout: float = 8.0, mem_mb: int = 1024, max_output: int = 20_000) -> ExecResult:
     import time
@@ -252,24 +264,17 @@ def run_python(code: str, timeout: float = 8.0, mem_mb: int = 1024, max_output: 
     t0 = time.time()
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, "snippet.py")
-        with open(path, "w", encoding="utf-8") as fh:
+        with open(path, "w") as fh:
             fh.write(code)
-        env = {"PYTHONHASHSEED": "0", "OMP_NUM_THREADS": "1"}
-        if os.name == "nt":
-            if os.environ.get("SystemRoot"):
-                env["SystemRoot"] = os.environ["SystemRoot"]
-            if os.environ.get("PATH"):
-                env["PATH"] = os.environ["PATH"]
-            popen_kwargs = {}
-        else:
-            env["PATH"] = "/usr/bin:/bin"
-           popen_kwargs = {} if os.name == "nt" else {"preexec_fn": _limits(mem_mb, int(timeout) + 2)}
-p = subprocess.run([sys.executable, "-I", path], capture_output=True, text=True, timeout=timeout,
-                   cwd=d, env=env, **popen_kwargs)
+        try:
+            p = subprocess.run([sys.executable, "-I", path], capture_output=True, text=True, timeout=timeout,
+                               cwd=d, env=_clean_env(), preexec_fn=_limits(mem_mb, int(timeout) + 2))
         except subprocess.TimeoutExpired as e:
             return ExecResult(False, stdout=(e.stdout or b"").decode(errors="ignore")[:max_output] if isinstance(e.stdout, bytes) else (e.stdout or ""),
                               timed_out=True, seconds=time.time() - t0)
     return ExecResult(p.returncode == 0, p.stdout[:max_output], p.stderr[:max_output], seconds=time.time() - t0)
+''')
+
 # ====================================================================================================
 # MODULE: deep_oq.engine    (deep_oq/engine.py, 163 lines)
 # ====================================================================================================
@@ -4168,7 +4173,7 @@ def solve(text: str) -> Solution:
 ''')
 
 # ====================================================================================================
-# MODULE: deep_oq.tests.test_bridge    (deep_oq/tests/test_bridge.py, 112 lines)
+# MODULE: deep_oq.tests.test_bridge    (deep_oq/tests/test_bridge.py, 118 lines)
 # ====================================================================================================
 _register('deep_oq.tests.test_bridge', False, 'deep_oq/tests/test_bridge.py', r'''"""Tests the LLM bridge with a mock model that misbehaves exactly like the screenshots."""
 import asyncio
@@ -4267,6 +4272,12 @@ class Sandbox(unittest.TestCase):
     def test_blocks(self):
         for code in ["import os", "import subprocess", "open('/etc/passwd')", "().__class__.__bases__", "__import__('os')", "eval('1')"]:
             self.assertTrue(codeexec.run_python(code).blocked, code)
+
+    def test_works_without_resource_module(self):      # simulates Windows
+        from unittest import mock
+        with mock.patch.object(codeexec, "resource", None):
+            self.assertEqual(codeexec.run_python("print(6*7)").summary(), "42")
+            self.assertTrue(codeexec.run_python("import os").blocked)
 
     def test_allows_math(self): self.assertEqual(codeexec.run_python("import math\nprint(math.factorial(10))").summary(), "3628800")
     def test_timeout(self): self.assertTrue(codeexec.run_python("while True: pass", timeout=1.5).timed_out)
@@ -4720,7 +4731,7 @@ class EngineBehaviour(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
+''')
 
 import deep_oq                                               # noqa: E402  (loaded from the embedded sources above)
 from deep_oq import solve, Engine, Solution, Step            # noqa: E402,F401
