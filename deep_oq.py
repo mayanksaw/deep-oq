@@ -2044,7 +2044,7 @@ def _dedupe_prose(chunk):
     prev = None
     while prev != chunk:  # stutter: "Answer Answer", "You can X. You can X."
         prev = chunk
-        chunk = re.sub(r"(\b[\w$\\{}^_()\-.,:;' ]{12,200}?)(\s+)\1(?=\s|$|[.!?])", r"\1", chunk)
+        chunk = re.sub(r"(\b[\w$\\{}^_()\-.,:;' ]{12,200}?)([ \t]+)\1(?=\s|$|[.!?])", r"\1", chunk)
     paras = re.split(r"(\n\s*\n)", chunk)
     seen_paras, out = [], []
     for p in paras:
@@ -2055,14 +2055,17 @@ def _dedupe_prose(chunk):
         if key and key in seen_paras[-6:]:
             continue
         seen_paras.append(key)
-        kept, recent = [], []
-        for s in re.split(r"(?<=[.!?])\s+", p):
-            k = _rnorm(s)
-            if len(k) > 12 and k in recent[-8:]:
-                continue
-            recent.append(k)
-            kept.append(s)
-        out.append(" ".join(kept))
+        recent, lines = [], []
+        for ln in p.split("\n"):  # work line by line so lists, tables and headings keep their line breaks
+            kept = []
+            for s in re.split(r"(?<=[.!?])[ \t]+", ln):
+                k = _rnorm(s)
+                if len(k) > 12 and k in recent[-8:]:
+                    continue
+                recent.append(k)
+                kept.append(s)
+            lines.append(" ".join(kept))
+        out.append("\n".join(lines))
     return "".join(out)
 
 
@@ -2332,17 +2335,34 @@ def _claude_attempt(kwargs, on_text):
     got, conts = "", 0
     for _ in range(12 + OQ_CONT + 1):
         seg, looped, final = [], False, None
-        with _claude().messages.stream(**kwargs) as stream:
-            for piece in stream.text_stream:
-                seg.append(piece)
-                got += piece
-                if on_text:
-                    on_text(got)
-                if len(seg) % 8 == 0 and detect_loop(got[-400:]):
-                    looped = True
-                    break
-            if not looped:
-                final = stream.get_final_message()
+        try:
+            with _claude().messages.stream(**kwargs) as stream:
+                for piece in stream.text_stream:
+                    seg.append(piece)
+                    got += piece
+                    if on_text:
+                        on_text(got)
+                    if len(seg) % 8 == 0 and detect_loop(got[-400:]):
+                        looped = True
+                        break
+                if not looped:
+                    final = stream.get_final_message()
+        except Exception as e:
+            # the connection dropped mid-answer: never hand back half an answer, ask the model to carry on
+            if not got.strip():
+                raise
+            conts += 1
+            print("claude stream broke after", len(got), "chars, continuing:", str(e)[:120])
+            if conts > OQ_CONT:
+                return got
+            msgs = kwargs["messages"]
+            if msgs and msgs[-1]["role"] == "assistant":
+                msgs.pop()
+            msgs.append({"role": "assistant", "content": got.rstrip()})
+            msgs.append({"role": "user", "content": "Continue exactly where you stopped. Do not repeat anything you already wrote."})
+            kwargs.pop("thinking", None)
+            kwargs["max_tokens"] = min(kwargs.get("max_tokens", 4096), 16000)
+            continue
         if looped:
             return trim_loop(got)
         if final is None:
