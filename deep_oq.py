@@ -2950,7 +2950,7 @@ def _start_login(name, remember):
 def require_login():
     _tl.max = False
     p = request.path
-    if p in ("/login", "/logout", "/favicon.ico", "/health") or p.startswith(("/api/login", "/api/register", "/api/google", "/vr")):
+    if p in ("/login", "/logout", "/favicon.ico", "/health", "/vr", "/terms", "/privacy") or p.startswith(("/api/login", "/api/register", "/api/google")):
         return None
     if login_session.get("user"):
         return None
@@ -3342,7 +3342,16 @@ def api_memory_clear():
     mem_clear(login_session.get("user") or "guest")
     return jsonify(ok=True)
 
+FREE_DAILY = _env_num("DEEP_OQ_FREE_DAILY", 40)  # 0 = unlimited
 
+
+def quota_ok(username):
+    if FREE_DAILY <= 0 or is_admin():
+        return True
+    try:
+        return usage_bump(username or "guest", "chat") <= FREE_DAILY
+    except Exception:
+        return True
 @app.post("/ask")
 def ask():
     if denied():
@@ -3400,6 +3409,8 @@ def api_transcribe():
 def ask_stream():
     """Same as /ask, but sends the answer piece by piece (server-sent events)."""
     if denied():
+        if not quota_ok(login_session.get("user") or "guest"):
+        return jsonify(error="Daily free limit reached. Come back tomorrow."), 429
         return jsonify(error="locked"), 401
     data = request.get_json(silent=True) or {}
     q = str(data.get("q") or "").strip()
@@ -8810,6 +8821,25 @@ def music_ia_file():
     if not mp3:
         return jsonify(error="That item has no MP3. Try another."), 404
     return jsonify(url="https://archive.org/download/%s/%s" % (ident, urllib.parse.quote(mp3[0]["name"])))
+  def _legal(title, body):
+    return ("<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
+            "<title>%s</title><body style='font:16px system-ui;max-width:720px;margin:40px auto;padding:0 16px;line-height:1.6'>"
+            "<h1>%s</h1>%s<p><a href='/'>Back to Deep OQ</a></p>" % (title, title, body))
+
+
+@app.get("/terms")
+def terms_page():
+    return _legal("Terms of Use", "<p>Deep OQ is an AI assistant. Answers can be wrong, so check important "
+                  "facts, exam answers, and medical, legal or financial advice. Do not use it for anything illegal "
+                  "or harmful. The service may change or stop at any time.</p>")
+
+
+@app.get("/privacy")
+def privacy_page():
+    return _legal("Privacy Policy", "<p>We store your username, your chats and the facts saved in Memory so the "
+                  "service works. The site owner can read chats to run and improve the service. Messages are sent "
+                  "to third-party AI providers to produce answers. You can delete chats and Memory inside the app. "
+                  "Contact the owner to delete your account.</p>")
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "ingest":
         ingest(sys.argv[2:])
