@@ -252,18 +252,25 @@ def run_python(code: str, timeout: float = 8.0, mem_mb: int = 1024, max_output: 
     t0 = time.time()
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, "snippet.py")
-        with open(path, "w") as fh:
+        with open(path, "w", encoding="utf-8") as fh:
             fh.write(code)
+        env = {"PYTHONHASHSEED": "0", "OMP_NUM_THREADS": "1"}
+        if os.name == "nt":
+            if os.environ.get("SystemRoot"):
+                env["SystemRoot"] = os.environ["SystemRoot"]
+            if os.environ.get("PATH"):
+                env["PATH"] = os.environ["PATH"]
+            popen_kwargs = {}
+        else:
+            env["PATH"] = "/usr/bin:/bin"
+            popen_kwargs = {"preexec_fn": _limits(mem_mb, int(timeout) + 2)}
         try:
             p = subprocess.run([sys.executable, "-I", path], capture_output=True, text=True, timeout=timeout,
-                               cwd=d, env={"PATH": "/usr/bin:/bin", "PYTHONHASHSEED": "0", "OMP_NUM_THREADS": "1"},
-                               preexec_fn=_limits(mem_mb, int(timeout) + 2))
+                               cwd=d, env=env, **popen_kwargs)
         except subprocess.TimeoutExpired as e:
             return ExecResult(False, stdout=(e.stdout or b"").decode(errors="ignore")[:max_output] if isinstance(e.stdout, bytes) else (e.stdout or ""),
                               timed_out=True, seconds=time.time() - t0)
     return ExecResult(p.returncode == 0, p.stdout[:max_output], p.stderr[:max_output], seconds=time.time() - t0)
-''')
-
 # ====================================================================================================
 # MODULE: deep_oq.engine    (deep_oq/engine.py, 163 lines)
 # ====================================================================================================
