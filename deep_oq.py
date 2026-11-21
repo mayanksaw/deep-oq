@@ -762,15 +762,19 @@ def _run_tools_inner(question, fast_chat):
         "Use empty lists/strings when a tool is not needed. calc may only use numbers, "
         "+ - * / ** %, parentheses, sqrt, sin, cos, tan, log, log10, exp, factorial, "
         "pi, e.\n\nQUESTION:\n" + question)
-    try:
-        raw = fast_chat([{"role": "user", "content": prompt}], 0.0, 300)
-        m = re.search(r"\{.*\}", raw, re.S)
-        plan = json.loads(m.group(0)) if m else {}
-    except Exception as e:
-        print("router failed:", e)
-        nc = news_context(question) if _NEWSQ.search(question) else ""
-        return (nc, ["news"]) if nc else ("", [])
-
+    schema = {"type": "object", "additionalProperties": False, "required": ["calc", "count", "search"],
+              "properties": {"calc": {"type": "array", "items": {"type": "string"}},
+                             "count": {"type": "string"}, "search": {"type": "string"}}}
+    plan = openai_json(prompt, schema, "tool_plan")
+    if plan is None:
+        try:
+            raw = fast_chat([{"role": "user", "content": prompt}], 0.0, 300)
+            m = re.search(r"\{.*\}", raw, re.S)
+            plan = json.loads(m.group(0)) if m else {}
+        except Exception as e:
+            print("router failed:", e)
+            nc = news_context(question) if _NEWSQ.search(question) else ""
+            return (nc, ["news"]) if nc else ("", [])
     if not plan.get("search") and _ROLE.search(question):
         plan["search"] = question[:100]  # who holds a job today can change, so always look it up
     out, used = [], []
@@ -1880,7 +1884,6 @@ def _call(model, messages, temperature, max_tokens, effort=None):
         text += more if text.endswith(("\n", " ")) or more.startswith(("\n", " ")) else " " + more
     return text
 
-
 def chat_stream(messages, temperature, max_tokens, on_text):
     """Like chat(), but calls on_text(answer_so_far) while the model is still writing."""
     if CLAUDE_ON:
@@ -1888,6 +1891,11 @@ def chat_stream(messages, temperature, max_tokens, on_text):
             return _claude_chat(messages, temperature, max_tokens, False, on_text=on_text)
         except Exception as e:
             print("claude stream failed:", str(e)[:160])
+    if OPENAI_KEY:
+        try:
+            return _openai_chat(messages, max_tokens, False, on_text)
+        except Exception as e:
+            print("openai stream failed:", str(e)[:160])
     order = FAST_CANDIDATES[:]
     if _working["model"] in order:
         order.remove(_working["model"])
@@ -2021,7 +2029,114 @@ CLAUDE_MAX_SLOTS = threading.BoundedSemaphore(max(1, _env_num("DEEP_OQ_MAX_CONCU
 OPENAI_KEY = os.environ.get("OPENAI_API_KEY", "").strip()
 OPENAI_MODELS = [m for m in dict.fromkeys([os.environ.get("DEEP_OQ_OPENAI_MODEL", "gpt-6.2-astra"),
                                            os.environ.get("DEEP_OQ_OPENAI_MODEL_ALT", "gpt-6.2-sol")]) if m]
-OPENAI_REASONING = os.environ.get("DEEP_OQ_OPENAI_REASONING", "high")
+OPENAI_REASONING = os.environ.get("DEEP_OQ_OPENAI_REASONING", "high")     # low | medium | high | xhigh | max
+OPENAI_MAX_OUT = _env_num("DEEP_OQ_OPENAI_MAX_OUT", 64000)                # Astra allows up to 128000
+OPENAI_WEB = os.environ.get("DEEP_OQ_OPENAI_WEB_SEARCH", "1") != "0"
+OPENAI_VECTOR_STORE = os.environ.get("OPENAI_VECTOR_STORE_ID", "").strip()  # optional: turns on file search
+_oa_client = None
+
+
+def _openai_client():
+    global _oa_client
+    if _oa_client is None:
+        try:
+            from openai import OpenAI
+        except ImportError as exc:
+            raise RuntimeError("Missing dependency for OpenAI: pip install openai") from exc
+        _oa_client = OpenAI(api_key=OPENAI_KEY, max_retries=3, timeout=600.0)
+    return _oa_client
+
+
+def _openai_tools():
+    tools = [{"type": "function", "name": t["name"], "description": t["description"],
+              "parameters": t["input_schema"]} for t in CLAUDE_TOOLS]
+    if OPENAI_WEB:
+        tools.append({"type": "web_search"})
+    if OPENAI_VECTOR_STORE:
+        tools.append({"type": "file_search", "vector_store_ids": [OPENAI_VECTOR_STORE]})
+    return tools
+
+
+def _openai_attempt(cli, kw, msgs, on_text):
+    """One conversation: streams text, runs function calls, continues cut-off answers."""
+    inp, got, conts = list(msgs), "", 0
+    for _ in range(8 + OQ_CONT):
+        kw["input"] = inp
+        if on_text:
+            with cli.responses.stream(**kw) as s:
+                for ev in s:
+                    if getattr(ev, "type", "") == "response.output_text.delta":
+                        got += ev.delta
+                        on_text(got)
+                resp = s.get_final_response()
+        else:
+            resp = cli.responses.create(**kw)
+        calls = [o for o in resp.output if getattr(o, "type", "") == "function_call"]
+        if calls:
+            inp += [o.model_dump(exclude_none=True) for o in resp.output]
+            for c in calls:
+                try:
+                    args = json.loads(c.arguments or "{}")
+                except ValueError:
+                    args = {}
+                out, _bad = _claude_tool(c.name, args)
+                inp.append({"type": "function_call_output", "call_id": c.call_id, "output": out})
+            continue
+        text = (resp.output_text or "").strip()
+        if on_text is None:
+            got += ("\n" if got and text else "") + text
+        if getattr(resp, "status", "") == "incomplete" and conts < OQ_CONT and (text or got):
+            conts += 1
+            inp.append({"role": "assistant", "content": text})
+            inp.append({"role": "user", "content": "Continue exactly where you stopped. Do not repeat anything."})
+            continue
+        return got.strip()
+    return got.strip()
+
+
+def _openai_chat(messages, max_tokens=4096, smart=False, on_text=None):
+    cli = _openai_client()
+    system, msgs = _to_claude_msgs(messages)
+    effort = "max" if getattr(_tl, "max", False) else (OPENAI_REASONING if smart else "low")
+    limit = OPENAI_MAX_OUT if smart else min(max(max_tokens, 4096), OPENAI_MAX_OUT)
+    last = None
+    for model in OPENAI_MODELS:
+        full = dict(model=model, instructions=system, max_output_tokens=limit, prompt_cache_key="deep-oq",
+                    tools=_openai_tools(), reasoning={"effort": effort})
+        # if the API rejects a setting, retry with fewer settings instead of failing
+        for drop in ((), ("prompt_cache_key",), ("prompt_cache_key", "tools"), ("prompt_cache_key", "tools", "reasoning")):
+            kw = {k: v for k, v in full.items() if k not in drop}
+            try:
+                text = _openai_attempt(cli, kw, msgs, on_text)
+                if text:
+                    print("OpenAI answered:", model, "effort", effort)
+                    return text
+            except Exception as e:
+                last = e
+                print("openai", model, "failed:", str(e)[:160])
+    raise last or RuntimeError("OpenAI returned no answer")
+
+
+def openai_json(prompt, schema, name="result", effort="low"):
+    """Structured output: the reply always matches the schema. Returns a dict, or None if OpenAI is not set up."""
+    if not OPENAI_KEY:
+        return None
+    try:
+        r = _openai_client().responses.create(
+            model=OPENAI_MODELS[0], input=prompt, reasoning={"effort": effort}, max_output_tokens=2000,
+            text={"format": {"type": "json_schema", "name": name, "schema": schema, "strict": True}})
+        return json.loads(r.output_text)
+    except Exception as e:
+        print("openai json failed:", str(e)[:160])
+        return None
+
+
+def _openai_vision(prompt, image):
+    r = _openai_client().responses.create(
+        model=OPENAI_MODELS[0], max_output_tokens=8000, reasoning={"effort": "medium"},
+        input=[{"role": "user", "content": [{"type": "input_text", "text": prompt},
+                                            {"type": "input_image", "image_url": image}]}])
+    return (r.output_text or "").strip()
 print("Claude engine:", ("ON (%s / %s / %s)" % (CLAUDE_FAST, CLAUDE_SMART, CLAUDE_MAX)) if CLAUDE_ON
       else "off (set ANTHROPIC_API_KEY to switch it on)", "| OpenAI backup:", "ON" if OPENAI_KEY else "off")
 
@@ -2505,7 +2620,7 @@ def _premium_chat(messages, temperature, max_tokens, smart, prefer, force=False)
             print("Claude failed:", str(e)[:200])
     if OPENAI_KEY and (smart or max_tokens > 600):
         try:
-            return _openai_chat(messages, max_tokens)
+            return _openai_chat(messages, max_tokens, smart)
         except Exception as e:
             print("OpenAI backup failed:", str(e)[:200])
     return None
@@ -3908,6 +4023,7 @@ body:not(.chatting) #v-chat.on{padding-top:12vh;padding-bottom:0}
     <button class="tab" type="button" data-view="lab">Lab</button>
     <button class="tab" type="button" data-view="news">News</button>
     <button class="tab" type="button" data-view="music">Music</button>
+    <button class="tab" type="button" data-view="3d">3D</button>
     <a class="tab" href="/vr" style="text-decoration:none;display:inline-flex;align-items:center;background:linear-gradient(135deg,#00c9a7,#2f8cff);color:#04122b;font-weight:700">VR</a>
   </nav>
   <div class="tools" id="chatTools">
@@ -4161,6 +4277,34 @@ body:not(.chatting) #v-chat.on{padding-top:12vh;padding-bottom:0}
       <p class="muted" id="nstat" aria-live="polite"></p>
       <div class="outpane" id="nbout" hidden></div>
       <ul id="nlist" style="list-style:none;padding:0;margin:12px 0 0"></ul>
+    </div>
+  </div>
+</section>
+<section class="view studio" id="v-3d">
+  <div class="wrap">
+    <h2 class="st-title">3D</h2>
+    <p class="st-sub">Describe anything and get a 3D model you can spin, zoom and download as GLB, STL or OBJ. Quick builds from shapes. AI mesh makes a realistic model from a picture or your photo.</p>
+    <div class="grid2 even">
+      <div class="panel">
+        <div class="seg" id="t3mode" role="group" aria-label="3D mode">
+          <button type="button" data-m="code" aria-pressed="true">Quick</button>
+          <button type="button" data-m="ai" aria-pressed="false">AI mesh</button>
+        </div>
+        <label class="lab">What should the model be?
+          <textarea class="in" id="t3text" rows="4" placeholder="A medieval castle with four towers and a bridge"></textarea></label>
+        <label class="lab" id="t3fileW" hidden>Photo of the object (optional)
+          <input class="in" id="t3file" type="file" accept="image/*"></label>
+        <div><button class="primary" id="t3go" type="button">Make 3D model</button></div>
+        <p class="muted" id="t3stat" aria-live="polite"></p>
+        <div class="actions" id="t3dl" hidden>
+          <button class="btn" type="button" data-x="glb">Download GLB</button>
+          <button class="btn" type="button" data-x="stl">Download STL</button>
+          <button class="btn" type="button" data-x="obj">Download OBJ</button>
+        </div>
+      </div>
+      <div class="panel">
+        <iframe class="preview" id="t3frame" sandbox="allow-scripts" title="3D preview" style="height:460px;background:#0e1233"></iframe>
+      </div>
     </div>
   </div>
 </section>
@@ -5023,6 +5167,7 @@ function submit(){
 if(vidMode){if(!q)return;vidMode=false;return makeVideoChat(q)}
   if(imgMode){if(!q)return;return askExtra(q,null,true)}
   if(!q)return;
+  if(/^\s*(?:please\s+)?(?:create|make|generate|build)\s+(?:me\s+)?(?:an?\s+)?3d\b/i.test(q)){$('#t3text').value=q;box.value='';showView('3d');return}
   if(IMG_RE.test(q))return askExtra(q,null,true);
   ask(q);
 }
@@ -5053,7 +5198,7 @@ $('#drawer').setAttribute('aria-hidden','true');
 stats();box.focus();
 
 /* ================= tabs ================= */
-const VIEWS=['chat','code','photo','video','lab','news','music'];
+const VIEWS=['chat','code','photo','video','lab','news','music','3d'];
 function showView(v){
   if(!VIEWS.includes(v))v='chat';
   document.body.dataset.view=v;
@@ -5751,6 +5896,75 @@ applyNews();
   $('#sp-go').onclick=go;
   $('#sp-q').addEventListener('keydown',e=>{if(e.key==='Enter')go()});
 })();
+/* ================= 3D ================= */
+let t3mode='code',t3img='',t3glb=null;
+const T3='https://cdn.jsdelivr.net/npm/three@0.160.0';
+const t3s=m=>$('#t3stat').textContent=m;
+function t3Doc(code){
+  return '<!doctype html><html><body style="margin:0;overflow:hidden;background:#0e1233">'
+  +'<script type="importmap">{"imports":{"three":"'+T3+'/build/three.module.js","three/addons/":"'+T3+'/examples/jsm/"}}<\/script>'
+  +'<script type="module">'
+  +'import * as THREE from "three";'
+  +'import {OrbitControls} from "three/addons/controls/OrbitControls.js";'
+  +'import {GLTFExporter} from "three/addons/exporters/GLTFExporter.js";'
+  +'import {GLTFLoader} from "three/addons/loaders/GLTFLoader.js";'
+  +'import {STLExporter} from "three/addons/exporters/STLExporter.js";'
+  +'import {OBJExporter} from "three/addons/exporters/OBJExporter.js";'
+  +'const R=new THREE.WebGLRenderer({antialias:true});R.setPixelRatio(devicePixelRatio);R.setSize(innerWidth,innerHeight);document.body.appendChild(R.domElement);'
+  +'const S=new THREE.Scene();S.background=new THREE.Color(0x0e1233);'
+  +'const C=new THREE.PerspectiveCamera(45,innerWidth/innerHeight,0.01,1000);'
+  +'S.add(new THREE.HemisphereLight(0xffffff,0x444466,1.1));const L=new THREE.DirectionalLight(0xffffff,2);L.position.set(5,8,6);S.add(L);'
+  +'const grid=new THREE.GridHelper(10,20,0x4455aa,0x222a55);S.add(grid);'
+  +'const O=new OrbitControls(C,R.domElement);O.enableDamping=true;'
+  +'let model=null;'
+  +'function show(m){if(model)S.remove(model);model=m;S.add(m);const b=new THREE.Box3().setFromObject(m),s=b.getSize(new THREE.Vector3()),c=b.getCenter(new THREE.Vector3()),r=Math.max(s.x,s.y,s.z)||1;'
+  +'O.target.copy(c);C.position.set(c.x+r*1.4,c.y+r*0.9,c.z+r*1.6);C.near=r/100;C.far=r*100;C.updateProjectionMatrix();grid.position.y=b.min.y;grid.scale.setScalar(Math.max(1,r/5));O.update()}'
+  +'(function loop(){O.update();R.render(S,C);requestAnimationFrame(loop)})();'
+  +'addEventListener("resize",()=>{R.setSize(innerWidth,innerHeight);C.aspect=innerWidth/innerHeight;C.updateProjectionMatrix()});'
+  +'const say=o=>parent.postMessage(o,"*");'
+  +'addEventListener("message",e=>{if(e.source!==parent)return;const d=e.data||{};'
+  +'if(d.load){new GLTFLoader().parse(d.load,"",g=>{show(g.scene);say({ready:1})},()=>say({err:"Could not read the model file."}));return}'
+  +'if(!model)return;'
+  +'if(d.export==="glb"){new GLTFExporter().parse(model,r=>say({file:r,name:"model.glb"}),()=>say({err:"GLB export failed."}),{binary:true})}'
+  +'else if(d.export==="stl"){const r=new STLExporter().parse(model,{binary:true});say({file:r.buffer,name:"model.stl"})}'
+  +'else if(d.export==="obj"){say({file:new OBJExporter().parse(model),name:"model.obj"})}});'
+  +(code?(code.replace(/<\/script/gi,'<\\/script')+';try{show(buildModel(THREE));say({ready:1})}catch(e){say({err:"The model code failed: "+e.message})}'):'say({boot:1});')
+  +'<\/script></body></html>';
+}
+document.querySelectorAll('#t3mode button').forEach(b=>b.onclick=()=>{
+  t3mode=b.dataset.m;
+  document.querySelectorAll('#t3mode button').forEach(x=>x.setAttribute('aria-pressed',x===b));
+  $('#t3fileW').hidden=t3mode!=='ai';
+});
+$('#t3file').onchange=async e=>{
+  const f=e.target.files[0];if(!f)return;
+  try{t3img=await shrinkImage(f,1024);t3s('Photo ready.')}catch(err){t3img='';t3s(err.message)}
+};
+$('#t3go').onclick=async()=>{
+  const text=$('#t3text').value.trim();
+  if(!text&&!(t3mode==='ai'&&t3img)){t3s('Describe the model first.');return}
+  const go=$('#t3go');go.disabled=true;$('#t3dl').hidden=true;
+  t3s(t3mode==='ai'?'Making a real 3D mesh. This takes 1 to 4 minutes...':'Designing the model...');
+  try{
+    const r=await api('/make3d',{mode:t3mode,text:text,image:t3mode==='ai'?t3img:''}),j=await r.json().catch(()=>({}));
+    if(!r.ok||j.error)throw new Error(j.error||'The server did not answer.');
+    const f=$('#t3frame');
+    if(j.glb){const bin=atob(j.glb),u=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i);t3glb=u.buffer;f.srcdoc=t3Doc('')}
+    else{t3glb=null;f.srcdoc=t3Doc(j.code)}
+    t3s('Loading the viewer...');
+  }catch(e){t3s(e.message)}
+  go.disabled=false;
+};
+$('#t3dl').onclick=e=>{const b=e.target.closest('[data-x]');if(b)$('#t3frame').contentWindow.postMessage({export:b.dataset.x},'*')};
+window.addEventListener('message',e=>{
+  const f=$('#t3frame');if(e.source!==f.contentWindow||!e.data)return;
+  const d=e.data;
+  if(d.boot&&t3glb){f.contentWindow.postMessage({load:t3glb},'*');return}
+  if(d.err)t3s(d.err);
+  if(d.ready){$('#t3dl').hidden=false;t3s('Done. Drag to rotate, scroll to zoom.')}
+  if(d.file){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([d.file],{type:'application/octet-stream'}));a.download=d.name;
+    document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),4000)}
+});
 showView(location.hash.slice(1));(function(){let ctl=null,on=false;const SI=send.innerHTML,XI='<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>',f0=window.fetch;window.fetch=function(u,o){if(u==='/ask_stream'){ctl=new AbortController();o=Object.assign({},o,{signal:ctl.signal})}return f0.call(this,u,o)};send.addEventListener('click',function(e){if(on){e.preventDefault();e.stopImmediatePropagation();ctl.abort()}},true);setInterval(function(){const now=!!(busy&&ctl&&!ctl.signal.aborted);if(!busy)ctl=null;if(now!==on){on=now;send.innerHTML=on?XI:SI;send.setAttribute('aria-label',on?'Stop answer':'Send')}if(on)send.disabled=false},100)})();
 
 </script>
@@ -8646,6 +8860,102 @@ def thumbnail_route():
     finally:
         shutil.rmtree(work, ignore_errors=True)
     return jsonify(image="data:image/jpeg;base64," + base64.b64encode(data).decode(), note=note)
+  THREED_SYS = (
+    "You are an expert 3D modeller. Write ONE JavaScript function: function buildModel(THREE) { ... return group; } "
+    "that builds the requested object with three.js and returns a THREE.Group. Rules: use only THREE geometries "
+    "(Box, Sphere, Cylinder, Cone, Torus, Capsule, Lathe, Extrude with Shape, Tube with CatmullRomCurve3), group "
+    "and position parts carefully, and use many parts for real detail. Use MeshStandardMaterial with good colours "
+    "(roughness and metalness set). Y axis is up. Centre the model on x and z, rest it on y = 0, and make it about "
+    "2 units tall. No textures, no fetch, no DOM, no async, no imports, no eval. Output only one ```js code block."
+)
+_3D_BAD = re.compile(r"fetch\s*\(|XMLHttpRequest|WebSocket|import\s*\(|\beval\s*\(|document\.|window\.|"
+                     r"localStorage|sessionStorage|postMessage|importScripts|new\s+Function", re.I)
+
+
+def _rep_run(model, inp, token, polls=55, wait=4):
+    import urllib.request as _ur
+    hd = {"Authorization": "Bearer " + token, "Content-Type": "application/json"}
+    if ":" in model:  # owner/name:versionhash
+        url, body = "https://api.replicate.com/v1/predictions", {"version": model.split(":", 1)[1], "input": inp}
+    else:
+        url, body = "https://api.replicate.com/v1/models/" + model + "/predictions", {"input": inp}
+    with _ur.urlopen(_ur.Request(url, json.dumps(body).encode(), hd), timeout=60) as r:
+        pred = json.loads(r.read().decode())
+    get_url = pred["urls"]["get"]
+    for _ in range(polls):
+        if pred.get("status") in ("succeeded", "failed", "canceled"):
+            break
+        time.sleep(wait)
+        with _ur.urlopen(_ur.Request(get_url, headers=hd), timeout=60) as r:
+            pred = json.loads(r.read().decode())
+    if pred.get("status") != "succeeded":
+        raise RuntimeError(str(pred.get("error") or pred.get("status"))[:200])
+    return pred.get("output")
+
+
+def _find_glb(o):
+    if isinstance(o, str):
+        return o if o.startswith("http") and re.search(r"\.glb(\?|$)", o, re.I) else None
+    for v in (o.values() if isinstance(o, dict) else o if isinstance(o, list) else []):
+        u = _find_glb(v)
+        if u:
+            return u
+    return None
+
+
+@app.post("/make3d")
+def make3d_route():
+    if denied():
+        return jsonify(error="locked"), 401
+    d = request.get_json(silent=True) or {}
+    text = str(d.get("text", "")).strip()[:1500]
+    image = str(d.get("image", ""))[:8_000_000]
+    mode = d.get("mode", "code")
+    if not text and not image:
+        return jsonify(error="Describe the model first."), 400
+    if mode == "code":
+        try:
+            raw = chat([{"role": "system", "content": THREED_SYS},
+                        {"role": "user", "content": "Build this 3D model: " + (text or "the object in the photo")}],
+                       0.4, 8000, smart=True)
+        except Exception as e:
+            print("make3d failed:", e)
+            return jsonify(error="Could not design the model right now. Try again."), 500
+        m = re.search(r"```(?:js|javascript)?\s*\n(.*?)```", raw, re.S)
+        code = (m.group(1) if m else raw).strip()
+        if "function buildModel" not in code or len(code) > 80000 or _3D_BAD.search(code):
+            return jsonify(error="The AI wrote a model that could not be used. Please try again."), 502
+        return jsonify(code=code)
+    token = os.environ.get("REPLICATE_API_TOKEN", "").strip()
+    model = os.environ.get("REPLICATE_3D_MODEL", "").strip()
+    if not token or not model:
+        return jsonify(error="AI mesh needs REPLICATE_API_TOKEN and REPLICATE_3D_MODEL (an image-to-3D model that outputs GLB) set on Render."), 400
+    work = tempfile.mkdtemp(prefix="oq_")
+    try:
+        if not image.startswith("data:image/"):
+            path = os.path.join(work, "o.jpg")
+            if not _fetch_scene_image("a single " + text + ", centered, full object visible, plain white background, "
+                                      "soft studio lighting, no text", random.randint(1, 10**6), path):
+                return jsonify(error="The picture service did not answer. Try again in a moment."), 502
+            with open(path, "rb") as f:
+                image = "data:image/jpeg;base64," + base64.b64encode(f.read()).decode()
+        key = os.environ.get("REPLICATE_3D_IMAGE_KEY", "image")
+        val = [image] if os.environ.get("REPLICATE_3D_IMAGE_LIST") == "1" else image
+        out = _rep_run(model, {key: val}, token)
+        url = _find_glb(out)
+        if not url:
+            return jsonify(error="That Replicate model did not return a GLB file. Choose a model that outputs GLB."), 502
+        with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "DeepOQ/1.0"}), timeout=120) as r:
+            data = r.read(30_000_000)
+        return jsonify(glb=base64.b64encode(data).decode())
+    except urllib.error.HTTPError as e:
+        print("make3d failed:", e.code, e.read()[:300])
+        return jsonify(error="Replicate said error %d (check the token, billing, model name and image field name)." % e.code), 502
+    except Exception as e:
+        print("make3d failed:", e)
+        return jsonify(error="Could not make the 3D model right now."), 500
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
 _sp = {"tok": "", "exp": 0}
 
 def _spotify_token():
