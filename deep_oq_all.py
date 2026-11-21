@@ -4720,7 +4720,7 @@ class EngineBehaviour(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-''')
+
 
 import deep_oq                                               # noqa: E402  (loaded from the embedded sources above)
 from deep_oq import solve, Engine, Solution, Step            # noqa: E402,F401
