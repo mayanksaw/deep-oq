@@ -2368,6 +2368,7 @@ def _claude_attempt(kwargs, on_text):
         if final is None:
             break
         stop = getattr(final, "stop_reason", "")
+        print("claude done: model=%s stop=%s chars=%d conts=%d" % (kwargs.get("model"), stop, len(got), conts))
         if stop == "refusal" and not got.strip():
             raise RuntimeError("the model declined this request")
         msgs = kwargs["messages"]
@@ -2380,7 +2381,7 @@ def _claude_attempt(kwargs, on_text):
                     results.append({"type": "tool_result", "tool_use_id": b.id, "content": out, "is_error": bad})
             msgs.append({"role": "user", "content": results})
             continue
-        if stop == "max_tokens" and conts < OQ_CONT:
+        if stop in ("max_tokens", "pause_turn", None, "") and conts < OQ_CONT:
             conts += 1
             msgs.append({"role": "assistant", "content": _blocks(final.content)})
             msgs.append({"role": "user", "content": "Continue exactly where you stopped. Do not repeat anything you already wrote."})
