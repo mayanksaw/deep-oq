@@ -5,9 +5,12 @@ chat_cli.py - try the Deep OQ engine from the terminal.
     python chat_cli.py               full engine with your API keys (3 panel agents by default)
     python chat_cli.py 7             full engine with 7 panel agents
 
-Type a question and press Enter. Type  quit  to stop. Lines starting with [debug] are for you;
+Type a question and press Enter. To send a picture:  /image "C:\\path\\to\\photo.png" prove this Type  quit  to stop. Lines starting with [debug] are for you;
 they show which solver, agents and checks ran. Users never see them.
 """
+import base64
+import mimetypes
+import re
 import sys
 
 
@@ -52,7 +55,19 @@ def full() -> None:
             break
         if not q:
             continue
-        reply = engine.respond(history, q)
+        images = None
+        m = re.match(r'^/image\s+(?:"([^"]+)"|(\S+))\s*(.*)$', q)
+        if m:
+            path, q = (m.group(1) or m.group(2)), m.group(3)
+            try:
+                with open(path, "rb") as fh:
+                    raw = fh.read()
+            except OSError as e:
+                print(f"[could not open that file: {e}]")
+                continue
+            mime = mimetypes.guess_type(path)[0] or "image/png"
+            images = [{"media_type": mime, "data": base64.b64encode(raw).decode("ascii")}]
+        reply = engine.respond(history, q, images=images)
         print(f"\nDeep OQ> {reply.text}")
         print(f"[debug] mode={reply.mode} confidence={reply.confidence}")
         for note in reply.notes:
