@@ -174,7 +174,10 @@ from __future__ import annotations
 
 import ast
 import os
-import resource
+try:
+        import resource
+    except ImportError:
+        resource = None
 import subprocess
 import sys
 import tempfile
@@ -232,13 +235,14 @@ def static_check(code: str) -> str:
 
 def _limits(mem_mb: int, cpu_s: int):
     def apply():
-        resource.setrlimit(resource.RLIMIT_AS, (mem_mb * 1024 * 1024, mem_mb * 1024 * 1024))
-        resource.setrlimit(resource.RLIMIT_CPU, (cpu_s, cpu_s))
-        resource.setrlimit(resource.RLIMIT_FSIZE, (1_000_000, 1_000_000))
-        resource.setrlimit(resource.RLIMIT_NOFILE, (32, 32))
-        os.setsid()
+        if resource is not None:
+            resource.setrlimit(resource.RLIMIT_AS, (mem_mb * 1024 * 1024, mem_mb * 1024 * 1024))
+            resource.setrlimit(resource.RLIMIT_CPU, (cpu_s, cpu_s))
+            resource.setrlimit(resource.RLIMIT_FSIZE, (1_000_000, 1_000_000))
+            resource.setrlimit(resource.RLIMIT_NOFILE, (32, 32))
+        if hasattr(os, "setsid"):
+            os.setsid()
     return apply
-
 
 def run_python(code: str, timeout: float = 8.0, mem_mb: int = 1024, max_output: int = 20_000) -> ExecResult:
     import time
