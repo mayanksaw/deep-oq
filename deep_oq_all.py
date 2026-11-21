@@ -175,9 +175,9 @@ from __future__ import annotations
 import ast
 import os
 try:
-        import resource
-    except ImportError:
-        resource = None
+    import resource
+except ImportError:
+    resource = None
 import subprocess
 import sys
 import tempfile
