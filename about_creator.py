@@ -39,7 +39,7 @@ PROFILE = {
     "projects": [
         {"name": "Deep OQ", "text": "An all-in-one AI app for chat, code, photos and video."},
         {"name": "Deep io", "text": "His first AI chat app, trained and deployed by himself."},
-        {"name": "Deep io Coder", "text": "An AI that writes code, in the style of Claude."},
+        {"name": "Deep io Coder", "text": "An AI that writes code."},
         {"name": "Deep OS", "text": "An idea for an AI-based operating system, still being built."},
         {"name": "Jarvis", "text": "A voice and text assistant for Windows, written in Python."},
     ],
