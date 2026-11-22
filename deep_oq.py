@@ -3706,7 +3706,7 @@ def api_transcribe():
     auto = lang not in _WH_CODES   # "auto": Whisper listens and works out the language itself
     for model in WHISPER_MODELS:
         kw = dict(file=(f.filename or "voice.webm", raw), model=model, temperature=0,
-                  response_format="verbose_json" if auto else "json", timeout=20.0)
+                  response_format="json", timeout=20.0)
         if not auto:
             kw["language"] = lang   # knowing the language skips detection, which is quicker
         try:
@@ -3715,9 +3715,6 @@ def api_transcribe():
             if text is None and isinstance(r, str):
                 text = r
             det = lang
-            if auto:
-                name = str(getattr(r, "language", "") or "").strip().lower()
-                det = _WH_CODES_BY_NAME.get(name, name[:2] if len(name) == 2 else "")
             return jsonify(text=(text or "").strip(), lang=det)
         except Exception as e:
             last = e
@@ -4920,10 +4917,10 @@ function speakText(raw,btn){
   if(typeof paint0==='function')window.paint=function(bot,text){paint0.apply(this,arguments);if(voiceFeed){try{voiceFeed(text)}catch(e){}}};
   const qs=s=>ov&&ov.querySelector(s);
   const setTxt=(s,t)=>{const e=qs(s);if(e)e.textContent=t};
-  const LANGS=[['auto','Auto (detects what you speak)'],['en','English'],['hi','हिन्दी Hindi'],['bn','বাংলা Bengali'],['ta','தமிழ் Tamil'],['te','తెలుగు Telugu'],['mr','मराठी Marathi'],['gu','ગુજરાતી Gujarati'],['pa','ਪੰਜਾਬੀ Punjabi'],['ur','اردو Urdu'],['kn','ಕನ್ನಡ Kannada'],['ml','മലയാളം Malayalam'],['ne','नेपाली Nepali'],['es','Español'],['fr','Français'],['de','Deutsch'],['pt','Português'],['it','Italiano'],['ru','Русский'],['ar','العربية'],['tr','Türkçe'],['id','Bahasa Indonesia'],['nl','Nederlands'],['pl','Polski'],['vi','Tiếng Việt'],['th','ไทย'],['ja','日本語'],['ko','한국어'],['zh','中文']];
+  const LANGS=[['auto','Auto (Hindi or English)'],['en','English'],['hi','हिन्दी Hindi'],['bn','বাংলা Bengali'],['ta','தமிழ் Tamil'],['te','తెలుగు Telugu'],['mr','मराठी Marathi'],['gu','ગુજરાતી Gujarati'],['pa','ਪੰਜਾਬੀ Punjabi'],['ur','اردو Urdu'],['kn','ಕನ್ನಡ Kannada'],['ml','മലയാളം Malayalam'],['ne','नेपाली Nepali'],['es','Español'],['fr','Français'],['de','Deutsch'],['pt','Português'],['it','Italiano'],['ru','Русский'],['ar','العربية'],['tr','Türkçe'],['id','Bahasa Indonesia'],['nl','Nederlands'],['pl','Polski'],['vi','Tiếng Việt'],['th','ไทย'],['ja','日本語'],['ko','한국어'],['zh','中文']];
   const BCP={en:'en-IN',hi:'hi-IN',es:'es-ES',fr:'fr-FR',de:'de-DE',ar:'ar-SA',bn:'bn-IN',ta:'ta-IN',te:'te-IN',mr:'mr-IN',gu:'gu-IN',pa:'pa-IN',ur:'ur-PK',kn:'kn-IN',ml:'ml-IN',ne:'ne-NP',ja:'ja-JP',ko:'ko-KR',zh:'zh-CN',pt:'pt-BR',ru:'ru-RU',it:'it-IT',tr:'tr-TR',id:'id-ID',nl:'nl-NL',th:'th-TH',vi:'vi-VN',pl:'pl-PL'};
   const SCRIPTS=[[/[ऀ-ॿ]/,'hi',['mr','ne']],[/[ঀ-৿]/,'bn'],[/[਀-੿]/,'pa'],[/[઀-૿]/,'gu'],[/[஀-௿]/,'ta'],[/[ఀ-౿]/,'te'],[/[ಀ-೿]/,'kn'],[/[ഀ-ൿ]/,'ml'],[/[ก-๿]/,'th'],[/[぀-ヿ]/,'ja'],[/[가-힯]/,'ko'],[/[Ѐ-ӿ]/,'ru'],[/[؀-ۿ]/,'ar',['ur']],[/[一-鿿]/,'zh',['ja']]];
-  let heard='',vcLang=localStorage.vcl||'auto',vcRate=parseFloat(localStorage.vcRate)||1,vcVoice=localStorage.vcVoice||'',people=localStorage.vcPeople==='1';
+  let heard='',vcLang=localStorage.vcl||((localStorage.vl||'en-IN')==='hi-IN'?'hi':'en'),vcRate=parseFloat(localStorage.vcRate)||1,vcVoice=localStorage.vcVoice||'',people=localStorage.vcPeople==='1';
   if(!LANGS.some(x=>x[0]===vcLang))vcLang='auto';
   const cur=()=>vcLang!=='auto'?vcLang:(heard||((localStorage.vl||'en-IN')==='hi-IN'?'hi':'en'));
   const hi=()=>cur()==='hi';
@@ -4981,8 +4978,9 @@ function speakText(raw,btn){
     const r=await fetch('/api/transcribe',{method:'POST',headers:{'X-Access-Key':localStorage.ak||''},body:fd});
     const j=await r.json().catch(()=>({}));
     if(!r.ok||j.error)throw new Error(j.error||'Could not understand the recording.');
-    if(vcLang==='auto'&&j.lang&&BCP[j.lang])heard=j.lang;
-    return (j.text||'').trim();
+    const tx=(j.text||'').trim();
+    if(vcLang==='auto'){const sc=SCRIPTS.find(x=>x[0].test(tx));heard=sc?sc[1]:'en'}   /* quick: language is read from the writing, no slow detection */
+    return tx;
   }
   function listen(){if(!active)return;newRec();if(barged){barged=false;voiced=true;loud=150}setState('listen')}
 
