@@ -6315,13 +6315,22 @@ function botFail(bot,e){
   bot.classList.remove('thinking');bot.classList.add('err');
   bot.lastChild.innerHTML='<div class="body"><p>Could not do that.</p><p>'+esc(e.message)+'</p></div>';
 }
+async function picSrc(url){   /* /pimg is fetched so the real error message can be shown */
+  if(String(url).indexOf('/pimg')!==0)return url;
+  const r=await fetch(url,{headers:{'X-Access-Key':localStorage.ak||''}});
+  if(!r.ok){let m='The picture service did not answer. Try again in a moment.';try{const j=await r.json();if(j&&j.error)m=j.error}catch(e){}throw new Error(m)}
+  return URL.createObjectURL(await r.blob());
+}
 function loadPic(url){return new Promise((ok,no)=>{
+  picSrc(url).then(u=>loadPic0(u,ok,no)).catch(no);
+})}
+function loadPic0(url,ok,no){
   const im=new Image(),t=setTimeout(()=>no(new Error('The picture service took too long. Try again.')),120000);
   im.className='genimg';im.alt='Generated image';
   im.onload=()=>{clearTimeout(t);ok(im)};
   im.onerror=()=>{clearTimeout(t);no(new Error('The picture service did not answer. Try again in a moment.'))};
   im.src=url;
-})}
+}
 async function downloadImage(url,btn){
   const old=btn.textContent;btn.textContent='Downloading...';btn.disabled=true;
   const save=blob=>{
@@ -7196,7 +7205,7 @@ $('#lgo').onclick=async()=>{
       +(j.answer?'<div class="body">'+md(j.answer)+'</div>':'')
       +(j.music?'<p><button class="btn" id="lplay" type="button">Play</button></p>':'')
       +(j.robot?'<canvas id="lcan" width="300" height="300" aria-label="Robot path" style="max-width:100%"></canvas>':'');
-    if(j.image){const im=$('#limgout');im.onerror=()=>{im.remove();lstatus('The picture service did not answer. Try again in a moment.')};im.src=j.image}
+    if(j.image){const im=$('#limgout');im.onerror=()=>{im.remove();lstatus('The picture service did not answer. Try again in a moment.')};picSrc(j.image).then(u=>{im.src=u}).catch(e=>{im.remove();lstatus(e.message)})}
     if(j.music)$('#lplay').onclick=()=>labPlay(j.music);
     if(j.robot)labRobot(j.robot);
     if(!j.image)lstatus('');
@@ -7798,7 +7807,8 @@ def pimg_route():
     got = _gen_image_bytes(prompt, seed)
     if got:
         return got[0], 200, {"Content-Type": got[1], "Cache-Control": "private, max-age=3600"}
-    return jsonify(error="The picture service did not answer."), 502
+    why = " | ".join(getattr(_img_tl, "why", [])) or "No picture service is set up (OPENAI_API_KEY, GEMINI_API_KEY or POLLINATIONS_KEY)."
+    return jsonify(error=_owner("The picture service did not answer. Try again in a moment.", "Picture failed: " + why)), 502
 
 @app.get("/dlimg")
 def dlimg_route():
@@ -10016,21 +10026,42 @@ $("form").addEventListener("submit", async e => {
 </html>
 """
 
-def _openai_image(prompt, quality=None):
-    """OpenAI picture model (set DEEP_OQ_OPENAI_IMAGE_MODEL to change it; default gpt-image-1)."""
+_img_tl = threading.local()
+
+
+def _img_note(msg):
+    print("image:", msg)
     try:
-        mdl = os.environ.get("DEEP_OQ_OPENAI_IMAGE_MODEL", "gpt-image-1").strip() or "gpt-image-1"
-        q = (quality or os.environ.get("DEEP_OQ_OPENAI_IMAGE_QUALITY", "high")).strip()
+        _img_tl.why.append(msg)
+    except AttributeError:
+        _img_tl.why = [msg]
+
+
+def _openai_image(prompt, quality=None):
+    """OpenAI picture models, best first: gpt-image-1 (the ChatGPT look; needs a verified OpenAI organization),
+    then dall-e-3. Set DEEP_OQ_OPENAI_IMAGE_MODEL to put your own model first."""
+    q = (quality or os.environ.get("DEEP_OQ_OPENAI_IMAGE_QUALITY", "high")).strip()
+    first = os.environ.get("DEEP_OQ_OPENAI_IMAGE_MODEL", "").strip()
+    for mdl in dict.fromkeys([m for m in (first, "gpt-image-1", "dall-e-3") if m]):
         try:
-            r = _openai_client().images.generate(model=mdl, prompt=prompt, size="1024x1024", quality=q)
-        except Exception as e1:
-            print("openai image (quality %s) failed, retrying plain: %s" % (q, str(e1)[:120]))
-            r = _openai_client().images.generate(model=mdl, prompt=prompt, size="1024x1024")
-        b64 = r.data[0].b64_json
-        if b64:
-            return base64.b64decode(b64), "image/png"
-    except Exception as e:
-        print("openai image failed:", str(e)[:200])
+            if mdl.startswith("dall-e"):
+                kw = dict(model=mdl, prompt=prompt[:3900], size="1024x1024", response_format="b64_json")
+                if mdl == "dall-e-3":
+                    kw["quality"] = "hd" if q == "high" else "standard"
+                r = _openai_client().images.generate(**kw)
+            else:
+                try:
+                    r = _openai_client().images.generate(model=mdl, prompt=prompt, size="1024x1024", quality=q)
+                except Exception as e1:
+                    if "verif" in str(e1).lower() or "403" in str(e1) or "401" in str(e1):
+                        raise
+                    r = _openai_client().images.generate(model=mdl, prompt=prompt, size="1024x1024")
+            b64 = r.data[0].b64_json
+            if b64:
+                return base64.b64decode(b64), "image/png"
+            _img_note("openai " + mdl + " returned no picture")
+        except Exception as e:
+            _img_note("openai " + mdl + ": " + str(e)[:200])
     return None
 
 
@@ -10039,6 +10070,7 @@ def _gen_image_bytes(prompt, seed, quality=None):
     when one is down or limits you, the next one answers: Pollinations (keyed, no logo), Gemini, OpenAI.
     The free Pollinations endpoint is NOT used because it stamps its logo on every picture."""
     prompt = (prompt or "")[:700]
+    _img_tl.why = []
     if OPENAI_KEY and os.environ.get("DEEP_OQ_IMAGE_PROVIDER", "openai").strip().lower() != "pollinations":
         got = _openai_image(prompt, quality)   # OpenAI's picture model first (the ChatGPT look); the others are the backup
         if got:
@@ -10057,12 +10089,12 @@ def _gen_image_bytes(prompt, seed, quality=None):
                     print("image", label, "gave", r.status, ct)
                     break
             except urllib.error.HTTPError as e:
-                print("image", label, "failed:", e.code, e.read()[:160])
+                _img_note("%s: HTTP %s %s" % (label, e.code, e.read()[:120]))
                 if e.code in (401, 402, 403, 404):
                     break
                 time.sleep(1.5)
             except Exception as e:
-                print("image", label, "failed:", e)
+                _img_note(label + ": " + str(e)[:120])
                 time.sleep(1.5)
     for name, url, key, model in EXTRA_PROVIDERS:  # Google Gemini picture model (uses the same GEMINI_API_KEY)
         if name != "gemini":
@@ -10082,9 +10114,9 @@ def _gen_image_bytes(prompt, seed, quality=None):
                     blob = part.get("inlineData") or part.get("inline_data")
                     if blob and blob.get("data"):
                         return base64.b64decode(blob["data"]), (blob.get("mimeType") or blob.get("mime_type") or "image/png")
-                print("gemini image gave no picture")
+                _img_note("gemini gave no picture")
             except Exception as e:
-                print("gemini image", gm, "failed:", str(e)[:200])
+                _img_note("gemini " + gm + ": " + str(e)[:200])
     if OPENAI_KEY:  # OpenAI picture model
         return _openai_image(prompt, quality)
     return None
