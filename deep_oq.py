@@ -4243,7 +4243,6 @@ body:not(.chatting) #v-chat.on{padding-top:12vh;padding-bottom:0}
       </div>
       <textarea id="q" rows="1" placeholder="Ask Deep OQ" aria-label="Message" autocomplete="off"></textarea>
       <button class="vlang" id="rsBtn" type="button" aria-pressed="false" title="Research mode: searches many sites, opens pages and writes a cited answer">Research</button>
-      <button class="vlang" id="vlang" type="button" aria-label="Voice language" title="Voice language: tap to switch English or Hindi">EN</button>
       <button class="mic" id="vcBtn" type="button" aria-label="Voice chat" title="Voice chat: talk back and forth, hands free">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4M8 6v12M12 3v18M16 7v10M20 10v4"/></svg>
       </button>
