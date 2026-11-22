@@ -3119,15 +3119,20 @@ def _deep_oq_raw(session, question, force_exam=False, emit=None):
     if dbg:  # code plus a problem: use the full debugging system
         emit("status", "Debugging")
         return debug_solve(dbg[0], dbg[1], dbg[2], emit)
-    history = kb_load_history(session, 12)
+    # VOICE CHAT = FAST LANE: one quick streamed answer, no planning, checking or extra tool calls
+    voice = bool(getattr(_tl, "voice", False)) and not force and not force_exam
+    history = kb_load_history(session, 6 if voice else 12)
     know = knowledge_block(question)
     me = mem_block(_session_user(session))
-    tool_text, used = run_tools(question, lambda m, t, k: chat(m, t, k))
-    exam = force_exam or is_exam(question) or is_math(question)
+    if voice and not (_LIVE.search(question) or _COUNT.search(question) or _URL_RE.search(question)):
+        tool_text, used = "", []
+    else:
+        tool_text, used = run_tools(question, lambda m, t, k: chat(m, t, k))
+    exam = (force_exam or is_exam(question) or is_math(question)) and not voice
     if exam:
         emit("status", "Solving step by step")
     today = datetime.date.today().strftime("%A, %d %B %Y")
-    rigorous = force or exam or is_hard(question)
+    rigorous = force or exam or (is_hard(question) and not voice)
     sysmsg = (SYSTEM + (VOICE_NOTE + (PEOPLE_NOTE if getattr(_tl, "people", False) else "") if getattr(_tl, "voice", False) else "") + (EXAM_SYSTEM if exam else "") + (REASON_RULES if rigorous else "") + f" Today's date is {today}. TOOL RESULTS (calculator, counter, "
               "web search) are exact or current: trust them over your own arithmetic "
               "and memory, and do not mention the tools. When a result says 'Current holder (incumbent)', that is "
@@ -3137,12 +3142,14 @@ def _deep_oq_raw(session, question, force_exam=False, emit=None):
             + ("TOOL RESULTS:\n" + tool_text + "\n\n" if tool_text else "")
             + f"QUESTION:\n{question}")
 
-    if "web" in used and not (force or exam or is_hard(question)):
-        return chat(base + [{"role": "user", "content": user
+    if "web" in used and (voice or not (force or exam or is_hard(question))):
+        _fn = ((lambda m, t, k: chat_stream(m, t, 900, lambda x: emit("text", x))) if voice
+               else (lambda m, t, k: chat(m, t, k, smart=True)))
+        return _fn(base + [{"role": "user", "content": user
                     + "\n\nAnswer from the TOOL RESULTS when they contain the answer. Check their dates: if they conflict or look old, "
                     "say what is most recent and how sure you are. If they do not contain the answer or are about something "
                     "else, ignore them and answer from your own knowledge, saying it may have changed. Never reply that you "
-                    "cannot answer because of the search results. Keep it short."}], 0.2, 2048, smart=True)
+                    "cannot answer because of the search results. Keep it short."}], 0.2, 2048)
     if exam:  # JEE / NEET / UPSC style
         solve_txt = ("\n\nSolve this like a top teacher. Work one step at a time, explain why each step is done, "
                      "do the arithmetic carefully and check the result.")
@@ -3197,8 +3204,8 @@ def _deep_oq_raw(session, question, force_exam=False, emit=None):
             "mention the two solutions." + tag}], 0.1, OQ_OUT, smart=True, prefer=EXAM_MODEL)
         return _split_final(ref)[1]
 
-    if not (force or is_hard(question) or "calc" in used or "count" in used):
-        return chat_stream(base + [{"role": "user", "content": user}], 0.5, OQ_OUT, lambda t: emit("text", t))
+    if voice or not (force or is_hard(question) or "calc" in used or "count" in used):
+        return chat_stream(base + [{"role": "user", "content": user}], 0.5, (900 if voice else OQ_OUT), lambda t: emit("text", t))
     emit("status", "Thinking carefully")
 
     plan = chat(base + [{"role": "user", "content":
@@ -5072,7 +5079,7 @@ function speakText(raw,btn){
     await sp.done;
     voiceFeed=null;
     if(!active)return;
-    if(!barged)await sleep(300);
+    if(!barged)await sleep(150);
     listen();
   }
 
@@ -5094,7 +5101,7 @@ function speakText(raw,btn){
     if(rms>thr){loud+=50;silenceMs=0;if(loud>=150)voiced=true;if(people&&loud%100===0){const f=pitch();if(f)f0s.push(f)}}
     else{if(!voiced){loud=0;noise=noise*0.95+rms*0.05}else silenceMs+=50}
     const len=Date.now()-recStart;
-    if(voiced&&(silenceMs>=850||len>120000))endUtterance();
+    if(voiced&&(silenceMs>=650||len>120000))endUtterance();
     else if(!voiced&&len>2500&&!recycling){   /* keep the silence before you speak short: start a fresh recording, then drop the old one */
       recycling=true;const old=rec,keep=loud;newRec();loud=keep;
       if(old&&old.state!=='inactive'){old.onstop=()=>{};try{old.stop()}catch(e){}}
@@ -7374,7 +7381,7 @@ import urllib.parse
 import urllib.request
 
 VISION_MODELS = [m for m in (os.environ.get("DEEP_OQ_VISION_MODEL"), "qwen/qwen3.8-27b", "qwen/qwen3.6-27b",
-                             "meta-llama/llama-4-scout-17b-16e-instruct") if m]
+                             "meta-llama/llama-4-scout-17b-16e-instruct", "meta-llama/llama-4-maverick-17b-128e-instruct") if m]
 LAB_SYS = ("You are Deep OQ, an AI created by Mayank Kumar Saw. Be accurate, practical and concise. "
            "Use short paragraphs and bullet lists. Never use tables, horizontal lines (---) or HTML tags.")
 KC = {"rice": 1.2, "wheat": 1.15, "maize": 1.2, "corn": 1.2, "cotton": 1.15, "tomato": 1.15,
@@ -7434,11 +7441,13 @@ def _vision(prompt, image, temperature=0.3):
     msgs = [{"role": "user", "content": [
         {"type": "text", "text": prompt},
         {"type": "image_url", "image_url": {"url": image}}]}]
+    why = []
     if CLAUDE_ON:
         try:
             return _claude_vision(prompt, image)
         except Exception as e:
             print("claude vision failed:", str(e)[:160])
+            why.append("Claude: " + str(e)[:140])
     last = None
     if _has_gemini():  # Gemini reads handwriting, tables and diagrams best, so it goes first
         try:
@@ -7451,6 +7460,7 @@ def _vision(prompt, image, temperature=0.3):
         except Exception as e:
             last = e
             print("gemini vision failed:", str(e)[:160])
+            why.append("Gemini: " + str(e)[:100])
     if OPENAI_KEY:
         try:
             t = _openai_vision(prompt, image)
@@ -7459,19 +7469,23 @@ def _vision(prompt, image, temperature=0.3):
         except Exception as e:
             last = e
             print("openai vision failed:", str(e)[:160])
+            why.append("OpenAI: " + str(e)[:100])
     for mdl in VISION_MODELS:  # try the newest model first, then the backups
         try:
             r = client.chat.completions.create(model=mdl, max_tokens=4096, temperature=temperature, messages=msgs)
         except Exception as e:
             last = e
             print("vision model failed:", mdl, str(e)[:160])
+            why.append(mdl + ": " + str(e)[:100])
             continue
         text = re.sub(r"<think>.*?</think>", "", r.choices[0].message.content or "", flags=re.S).strip()
         if text:
             return text
     if last is not None and any(w in str(last).lower() for w in ("rate", "429", "limit")):
         raise ValueError("Deep OQ is busy reading photos right now. Wait a minute and try again.")
-    raise ValueError("Photo understanding is not available right now. Please try again later.")
+    raise ValueError(_owner("Photo understanding is not available right now. Please try again later.",
+                            "Photo reading failed on every service. " + (" | ".join(why) or "No vision service is set up.")
+                            + " (Set ANTHROPIC_API_KEY or GEMINI_API_KEY on Render for photo reading.)"))
 
 
 POLLINATIONS_KEY = os.environ.get("POLLINATIONS_KEY", "").strip()
@@ -7527,8 +7541,64 @@ def _split_questions(text):
     return out or [("", text)]
 
 
+SNAP_MERGE_PROMPT = (
+    "Two readers transcribed the exam or maths question in this photo. Look at the photo carefully yourself and "
+    "write the single most accurate transcription, in exactly the same format as the readings (Q1., Q2., sub-parts "
+    "and options on their own lines, maths in LaTeX inside $...$, [Figure: ...] lines). Wherever the readers "
+    "disagree, decide by looking closely at the photo: check every number, sign, exponent, fraction, bracket, "
+    "inequality direction and variable letter. Do NOT solve or explain anything. If something truly cannot be "
+    "read, write [unclear].")
+
+
+def _vision_alt(prompt, image):
+    """A second, independent reading from a different service than Claude (Gemini, then OpenAI). None if not set up."""
+    if _has_gemini():
+        try:
+            head, b64 = image.split(",", 1)
+            mime = head[5:].split(";")[0] or "image/jpeg"
+            t = _gemini_parts([{"text": prompt}, {"inline_data": {"mime_type": mime, "data": b64}}], 0.1, 4096)
+            if t:
+                return t
+        except Exception as e:
+            print("second reading (gemini) failed:", str(e)[:140])
+    if OPENAI_KEY:
+        try:
+            t = _openai_vision(prompt, image)
+            if t:
+                return t
+        except Exception as e:
+            print("second reading (openai) failed:", str(e)[:140])
+    return None
+
+
+def _read_photo(image):
+    """Read a question photo twice with two different AIs and settle any difference by looking at the photo again."""
+    import difflib
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        f1 = ex.submit(_vision, SNAP_READ_PROMPT, image, 0.1)
+        f2 = ex.submit(_vision_alt, SNAP_READ_PROMPT, image)
+        seen = (f1.result() or "").strip()
+        try:
+            alt = (f2.result() or "").strip()
+        except Exception:
+            alt = ""
+    if not seen or seen.upper().startswith("NO_QUESTION") or not alt or alt.upper().startswith("NO_QUESTION"):
+        return seen
+    norm = lambda t: re.sub(r"[^a-z0-9]+", "", t.lower())[:5000]
+    if difflib.SequenceMatcher(None, norm(seen), norm(alt)).ratio() >= 0.985:
+        return seen   # both readers agree
+    try:
+        merged = _vision(SNAP_MERGE_PROMPT + "\n\nREADING A:\n" + seen + "\n\nREADING B:\n" + alt, image, 0.1).strip()
+        if merged and not merged.upper().startswith("NO_QUESTION"):
+            return merged
+    except Exception as e:
+        print("reading merge failed:", str(e)[:140])
+    return seen
+
+
 def _snap(text, image):
-    seen = _vision(SNAP_READ_PROMPT, image, 0.1).strip()
+    seen = _read_photo(image).strip()
     if not seen or seen.upper().startswith("NO_QUESTION"):
         return {"answer": _vision(text or "Describe this photo in detail. If it contains any written text, numbers, "
                                   "labels or diagrams, read them exactly and explain what they say.", image),
@@ -7657,10 +7727,7 @@ def _lab(d):
                 "detail, realistic skin, fur and material textures, true-to-life colours. If the request "
                 "has words to show in the picture, keep those words exactly. Output only the prompt:\n" + text)
         seed = random.randint(1, 10**6)
-        if POLLINATIONS_KEY:  # own key: the server fetches the picture (no logo, key stays secret)
-            url = "/pimg?seed=" + str(seed) + "&p=" + urllib.parse.quote(p[:700])
-        else:
-            url = _pollinations_url(p, seed)
+        url = "/pimg?seed=" + str(seed) + "&p=" + urllib.parse.quote(p[:700])  # the server tries several picture services
         return {"image": url, "answer": "Prompt used: " + p}
 
     if mod == "data":
@@ -7723,26 +7790,14 @@ def _lab(d):
 
 @app.get("/pimg")
 def pimg_route():
-    """Fetches a generated picture with the server's own Pollinations key (login required)."""
+    """Makes a generated picture on the server, trying several picture services (login required)."""
     prompt = request.args.get("p", "")[:700]
     seed = re.sub(r"\D", "", request.args.get("seed", ""))[:9] or "1"
     if not prompt.strip():
         return jsonify(error="No prompt."), 400
-    tries = [(_pollinations_gen_url(prompt, seed), {"Authorization": "Bearer " + POLLINATIONS_KEY}, "keyed"),
-             (_pollinations_url(prompt, seed), {}, "free")]  # keyed first, then the free service
-    for url, headers, label in tries:
-        try:
-            req = urllib.request.Request(url, headers=dict(headers, **{"User-Agent": "DeepOQ/1.0"}))
-            with urllib.request.urlopen(req, timeout=110) as r:
-                ctype = r.headers.get("Content-Type", "")
-                if r.status == 200 and ctype.startswith("image/"):
-                    print("pimg ok:", label)
-                    return r.read(), 200, {"Content-Type": ctype, "Cache-Control": "private, max-age=3600"}
-                print("pimg", label, "gave", r.status, ctype)
-        except urllib.error.HTTPError as e:
-            print("pimg", label, "failed:", e.code, e.read()[:200])
-        except Exception as e:
-            print("pimg", label, "failed:", e)
+    got = _gen_image_bytes(prompt, seed)
+    if got:
+        return got[0], 200, {"Content-Type": got[1], "Cache-Control": "private, max-age=3600"}
     return jsonify(error="The picture service did not answer."), 502
 
 @app.get("/dlimg")
@@ -9961,22 +10016,87 @@ $("form").addEventListener("submit", async e => {
 </html>
 """
 
-def _fetch_scene_image(prompt, seed, path):
+def _openai_image(prompt, quality=None):
+    """OpenAI picture model (set DEEP_OQ_OPENAI_IMAGE_MODEL to change it; default gpt-image-1)."""
+    try:
+        mdl = os.environ.get("DEEP_OQ_OPENAI_IMAGE_MODEL", "gpt-image-1").strip() or "gpt-image-1"
+        q = (quality or os.environ.get("DEEP_OQ_OPENAI_IMAGE_QUALITY", "high")).strip()
+        try:
+            r = _openai_client().images.generate(model=mdl, prompt=prompt, size="1024x1024", quality=q)
+        except Exception as e1:
+            print("openai image (quality %s) failed, retrying plain: %s" % (q, str(e1)[:120]))
+            r = _openai_client().images.generate(model=mdl, prompt=prompt, size="1024x1024")
+        b64 = r.data[0].b64_json
+        if b64:
+            return base64.b64decode(b64), "image/png"
+    except Exception as e:
+        print("openai image failed:", str(e)[:200])
+    return None
+
+
+def _gen_image_bytes(prompt, seed, quality=None):
+    """One picture as (bytes, content_type) or None. Tries the picture services one after another so that
+    when one is down or limits you, the next one answers: Pollinations (keyed, no logo), Gemini, OpenAI.
+    The free Pollinations endpoint is NOT used because it stamps its logo on every picture."""
+    prompt = (prompt or "")[:700]
+    if OPENAI_KEY and os.environ.get("DEEP_OQ_IMAGE_PROVIDER", "openai").strip().lower() != "pollinations":
+        got = _openai_image(prompt, quality)   # OpenAI's picture model first (the ChatGPT look); the others are the backup
+        if got:
+            return got
     tries = []
     if POLLINATIONS_KEY:
-        tries.append((_pollinations_gen_url(prompt, seed), {"Authorization": "Bearer " + POLLINATIONS_KEY}))
-    tries.append((_pollinations_url(prompt, seed), {}))
-    for url, hd in tries:
-        try:
-            req = urllib.request.Request(url, headers=dict(hd, **{"User-Agent": "DeepOQ/1.0"}))
-            with urllib.request.urlopen(req, timeout=100) as r:
-                if r.headers.get("Content-Type", "").startswith("image/"):
-                    with open(path, "wb") as f:
-                        f.write(r.read(15_000_000))
-                    return True
-        except Exception as e:
-            print("scene image failed:", e)
-    return False
+        tries.append(("pollinations-keyed", _pollinations_gen_url(prompt, seed), {"Authorization": "Bearer " + POLLINATIONS_KEY}))
+    for label, url, hd in tries:
+        for attempt in range(2):
+            try:
+                req = urllib.request.Request(url, headers=dict(hd, **{"User-Agent": "DeepOQ/1.0"}))
+                with urllib.request.urlopen(req, timeout=75) as r:
+                    ct = r.headers.get("Content-Type", "")
+                    if r.status == 200 and ct.startswith("image/"):
+                        return r.read(15_000_000), ct
+                    print("image", label, "gave", r.status, ct)
+                    break
+            except urllib.error.HTTPError as e:
+                print("image", label, "failed:", e.code, e.read()[:160])
+                if e.code in (401, 402, 403, 404):
+                    break
+                time.sleep(1.5)
+            except Exception as e:
+                print("image", label, "failed:", e)
+                time.sleep(1.5)
+    for name, url, key, model in EXTRA_PROVIDERS:  # Google Gemini picture model (uses the same GEMINI_API_KEY)
+        if name != "gemini":
+            continue
+        for gm in dict.fromkeys([os.environ.get("DEEP_OQ_GEMINI_IMAGE_MODEL", "").strip(), "gemini-2.5-flash-image"]):
+            if not gm:
+                continue
+            try:
+                payload = {"contents": [{"role": "user", "parts": [{"text": "Create this image: " + prompt}]}],
+                           "generationConfig": {"responseModalities": ["IMAGE", "TEXT"]}}
+                req = urllib.request.Request(
+                    "https://generativelanguage.googleapis.com/v1beta/models/" + gm + ":generateContent",
+                    json.dumps(payload).encode(), {"Content-Type": "application/json", "x-goog-api-key": key})
+                with urllib.request.urlopen(req, timeout=100) as r:
+                    data = json.loads(r.read().decode())
+                for part in data["candidates"][0]["content"]["parts"]:
+                    blob = part.get("inlineData") or part.get("inline_data")
+                    if blob and blob.get("data"):
+                        return base64.b64decode(blob["data"]), (blob.get("mimeType") or blob.get("mime_type") or "image/png")
+                print("gemini image gave no picture")
+            except Exception as e:
+                print("gemini image", gm, "failed:", str(e)[:200])
+    if OPENAI_KEY:  # OpenAI picture model
+        return _openai_image(prompt, quality)
+    return None
+
+
+def _fetch_scene_image(prompt, seed, path):
+    got = _gen_image_bytes(prompt, seed, os.environ.get("DEEP_OQ_SCENE_IMAGE_QUALITY", "medium"))  # video scenes: cheaper
+    if not got:
+        return False
+    with open(path, "wb") as f:
+        f.write(got[0])
+    return True
 
 
 MAX_SCENES = _env_int("MAX_SCENES", 200)
@@ -10019,10 +10139,48 @@ def _caption_png(text, path, w=1280, h=720):
     img.save(path)
 
 
+def _openai_video(prompt, path):
+    """Real AI video clip from OpenAI Sora (paid). Needs OPENAI_API_KEY.
+    DEEP_OQ_OPENAI_VIDEO_MODEL (default sora-2), DEEP_OQ_OPENAI_VIDEO_SECONDS (4, 8 or 12; default 4)."""
+    import urllib.request as _ur
+    hd = {"Authorization": "Bearer " + OPENAI_KEY, "Content-Type": "application/json"}
+    secs = os.environ.get("DEEP_OQ_OPENAI_VIDEO_SECONDS", "4").strip()
+    secs = secs if secs in ("4", "8", "12") else "4"
+    body = json.dumps({"model": os.environ.get("DEEP_OQ_OPENAI_VIDEO_MODEL", "sora-2").strip() or "sora-2",
+                       "prompt": prompt[:900], "size": "1280x720", "seconds": secs}).encode()
+    with _ur.urlopen(_ur.Request("https://api.openai.com/v1/videos", body, hd), timeout=60) as r:
+        job = json.loads(r.read().decode())
+    vid = job.get("id")
+    if not vid:
+        raise RuntimeError("OpenAI video gave no job id")
+    for _ in range(90):   # up to about 15 minutes
+        if job.get("status") in ("completed", "failed", "cancelled", "canceled"):
+            break
+        time.sleep(10)
+        with _ur.urlopen(_ur.Request("https://api.openai.com/v1/videos/" + vid, headers=hd), timeout=60) as r:
+            job = json.loads(r.read().decode())
+    if job.get("status") != "completed":
+        raise RuntimeError("OpenAI video failed: " + str(job.get("error") or job.get("status"))[:200])
+    req = _ur.Request("https://api.openai.com/v1/videos/" + vid + "/content", headers={"Authorization": "Bearer " + OPENAI_KEY})
+    with _ur.urlopen(req, timeout=300) as r:
+        with open(path, "wb") as f:
+            f.write(r.read(200_000_000))
+    return True
+
+
 def _ai_motion(prompt, path):
-    """Real AI video clip from Replicate (paid). Needs REPLICATE_API_TOKEN."""
+    """Real AI video clip: OpenAI Sora when OPENAI_API_KEY is set (set DEEP_OQ_VIDEO_PROVIDER=replicate to prefer
+    Replicate), otherwise Replicate (paid, needs REPLICATE_API_TOKEN). The other one is the backup."""
     import urllib.request as _ur
     token = os.environ.get("REPLICATE_API_TOKEN", "").strip()
+    prefer_rep = os.environ.get("DEEP_OQ_VIDEO_PROVIDER", "").strip().lower() == "replicate" and token
+    if OPENAI_KEY and not prefer_rep:
+        try:
+            return _openai_video(prompt, path)
+        except Exception as e:
+            print("openai video failed:", str(e)[:200])
+            if not token:
+                raise
     model = os.environ.get("REPLICATE_VIDEO_MODEL", "minimax/video-01").strip()
     hd = {"Authorization": "Bearer " + token, "Content-Type": "application/json"}
     body = json.dumps({"input": {"prompt": prompt}}).encode()
@@ -10065,8 +10223,8 @@ def makevideo_route():
     music = "no music" not in low
     caps = "no caption" not in low
     motion = bool(re.search(r"(ai|real) motion", low))
-    if motion and not os.environ.get("REPLICATE_API_TOKEN", "").strip():
-        return jsonify(error=_owner("AI motion is not available right now.", "AI motion needs a REPLICATE_API_TOKEN setting on Render.")), 400
+    if motion and not (OPENAI_KEY or os.environ.get("REPLICATE_API_TOKEN", "").strip()):
+        return jsonify(error=_owner("AI motion is not available right now.", "AI motion needs OPENAI_API_KEY (Sora) or REPLICATE_API_TOKEN set on Render.")), 400
     try:
         n = max(2, min(int(d.get("scenes") or 8), MAX_SCENES))
         secs = max(1, min(int(d.get("secs") or 4), 60))
