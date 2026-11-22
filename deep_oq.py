@@ -30,7 +30,7 @@ CLAUDE ENGINE (merged from deep_oq_v2). Set ANTHROPIC_API_KEY and Claude answers
   DEEP_OQ_MAX_CONCURRENT        default 100 answers at once; the rest wait in line
   DEEP_OQ_MAX_CONCURRENT_MAXMODE default 10 at once for the Research (max) model; extras use Opus
   DEEP_OQ_QUEUE_TIMEOUT         default 60 seconds a person waits in line
-  DEEP_OQ_DAILY_MAX_LIMIT       default 20 Research answers per person per day (0 = unlimited)
+  DEEP_OQ_DAILY_MAX_LIMIT       default 0 = unlimited (set a number to cap Research answers per person per day)
   OPENAI_API_KEY                optional backup if Claude fails (DEEP_OQ_OPENAI_MODEL, DEEP_OQ_OPENAI_MODEL_ALT,
                                 DEEP_OQ_OPENAI_REASONING)
   Health check URL for Render: /health
@@ -859,8 +859,8 @@ def _run_tools_inner(question, fast_chat):
 # ==========================================================================
 
 
-MAX_UPLOAD_MB = int(os.environ.get("MAX_VIDEO_MB", "60"))
-MAX_SECONDS = int(os.environ.get("MAX_VIDEO_SECONDS", "300"))   # ffmpeg time limit
+MAX_UPLOAD_MB = int(os.environ.get("MAX_VIDEO_MB", "500"))
+MAX_SECONDS = int(os.environ.get("MAX_VIDEO_SECONDS", "1800"))   # ffmpeg time limit
 VIDEO_EXT = {".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v", ".3gp"}
 _video_slot = threading.Semaphore(1)  # one video job at a time keeps a small server alive
 
@@ -1929,8 +1929,8 @@ for _m in (FAST_MODEL, "openai/gpt-oss-120b", "llama-3.3-70b-versatile",
 _working = {"model": None}  # remembers the first model that works on this account
 
 
-OQ_OUT = _env_int("DEEP_OQ_MAX_OUT", 12288)      # most tokens one reply may use (a model's own maximum still applies)
-OQ_CONT = _env_int("DEEP_OQ_CONTINUES", 6)       # a reply that is cut off is continued this many times
+OQ_OUT = _env_int("DEEP_OQ_MAX_OUT", 32768)      # most tokens one reply may use (a model's own maximum still applies)
+OQ_CONT = _env_int("DEEP_OQ_CONTINUES", 10)       # a reply that is cut off is continued this many times
 _MODEL_MAX_OUT = {"qwen/qwen3.8-27b": 16384, "qwen/qwen3.6-27b": 16384, "llama-3.3-70b-versatile": 32768}
 
 
@@ -2117,8 +2117,9 @@ def _env_num(name, default):
 
 _tl = threading.local()  # per-request flags (max mode)
 VOICE_NOTE = (" VOICE CHAT: your reply will be read aloud in a live spoken conversation. Answer like a friendly person "
-              "talking: 1 to 4 short natural sentences, no lists, headings, tables, code, links or emojis, unless the person "
-              "clearly asks for detail. Say maths steps simply in words that sound natural when spoken.")
+              "talking: natural spoken sentences, usually 2 to 6, and as long as needed when the person asks for detail or "
+              "an explanation. No lists, headings, tables, code, links or emojis. Say maths steps simply in words that "
+              "sound natural when spoken.")
 CLAUDE_KEY = os.environ.get("ANTHROPIC_API_KEY", "").strip()
 CLAUDE_ON = bool(CLAUDE_KEY)
 CLAUDE_FAST = os.environ.get("DEEP_OQ_MODEL_FAST", "claude-sonnet-5-5")
@@ -2128,7 +2129,7 @@ CLAUDE_TINY = os.environ.get("DEEP_OQ_MODEL_TINY", "claude-haiku-5-5")
 CLAUDE_THINK = _env_num("DEEP_OQ_THINKING_BUDGET", 16000)      # 0 = no extended thinking
 CLAUDE_MAX_TOKENS = _env_num("DEEP_OQ_MAX_TOKENS", 32000)
 CLAUDE_QUEUE_TIMEOUT = _env_num("DEEP_OQ_QUEUE_TIMEOUT", 60)    # seconds a person waits in line
-DAILY_MAX_LIMIT = _env_num("DEEP_OQ_DAILY_MAX_LIMIT", 20)       # max-mode answers per person per day, 0 = no limit
+DAILY_MAX_LIMIT = _env_num("DEEP_OQ_DAILY_MAX_LIMIT", 0)       # max-mode answers per person per day, 0 = no limit
 CLAUDE_SLOTS = threading.BoundedSemaphore(max(1, _env_num("DEEP_OQ_MAX_CONCURRENT", 100)))
 CLAUDE_MAX_SLOTS = threading.BoundedSemaphore(max(1, _env_num("DEEP_OQ_MAX_CONCURRENT_MAXMODE", 10)))
 OPENAI_KEY = os.environ.get("OPENAI_API_KEY", "").strip()
@@ -3618,7 +3619,7 @@ def api_memory_clear():
     mem_clear(login_session.get("user") or "guest")
     return jsonify(ok=True)
 
-FREE_DAILY = _env_num("DEEP_OQ_FREE_DAILY", 40)  # 0 = unlimited
+FREE_DAILY = _env_num("DEEP_OQ_FREE_DAILY", 0)  # 0 = unlimited (default)
 
 
 def quota_ok(username):
@@ -3649,7 +3650,7 @@ def ask():
 
 WHISPER_MODELS = list(dict.fromkeys(  # your own list first (comma separated is fine), then the defaults
     [m.strip() for m in os.environ.get("DEEP_OQ_WHISPER_MODEL", "").replace(";", ",").replace(" ", ",").split(",")
-     if m.strip()] + ["whisper-large-v3-turbo", "whisper-large-v3"]))
+     if m.strip()] + ["whisper-large-v3", "whisper-large-v3-turbo"]))
 
 
 @app.post("/api/transcribe")
@@ -4051,6 +4052,20 @@ a.primary{text-decoration:none;display:inline-block}
 .mic.rec{background:var(--err);color:#fff;animation:micp 1.2s ease-in-out infinite}
 @keyframes micp{50%{opacity:.65}}
 .vlang{height:30px;min-width:30px;padding:0 6px;border-radius:15px;font-size:12px;font-weight:700;align-self:center}
+#vlang{display:none}  /* language still switches from the voice chat screen */
+.field{gap:2px;padding:4px 4px 4px 4px;border-radius:24px}
+.field textarea{font-size:16.5px;padding:6px 8px;min-width:0}
+.plus,.mic,.send{width:36px;height:36px}
+.plus svg,.mic svg,.send svg{width:18px;height:18px}
+#rsBtn{height:26px;min-width:0;padding:0 8px;font-size:11.5px}
+.composer{padding-bottom:12px}
+@media (hover:none){.hint{display:none}}
+@media (max-width:520px){
+  #rsBtn{font-size:0;width:34px;height:34px;padding:0;border-radius:50%;display:grid;place-items:center}
+  #rsBtn::before{content:"";width:18px;height:18px;background:currentColor;
+    -webkit-mask:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round'><circle cx='11' cy='11' r='6.5'/><path d='M16 16l4.5 4.5'/></svg>") center/contain no-repeat;
+    mask:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round'><circle cx='11' cy='11' r='6.5'/><path d='M16 16l4.5 4.5'/></svg>") center/contain no-repeat}
+}
 .hist{position:fixed;top:0;right:0;bottom:0;width:min(360px,92vw);z-index:9000;background:var(--surface);border-left:1px solid var(--line);box-shadow:-12px 0 40px var(--shade);display:flex;flex-direction:column;font-family:var(--ui)}
 .hist header{display:flex;align-items:center;justify-content:space-between;padding:16px 18px;border-bottom:1px solid var(--line)}
 .hist h2{margin:0;font-size:18px}
@@ -4481,7 +4496,7 @@ body:not(.chatting) #v-chat.on{padding-top:12vh;padding-bottom:0}
 <section class="view studio" id="v-video">
   <div class="wrap">
     <h2 class="st-title">Video</h2>
-    <p class="st-sub">Trim, speed up, resize, rotate or add a look. You can also turn a clip into a GIF or an MP3. Files up to 60 MB. Your video is sent to the server to be edited, then deleted.</p>
+    <p class="st-sub">Trim, speed up, resize, rotate or add a look. You can also turn a clip into a GIF or an MP3. Files up to 500 MB. Your video is sent to the server to be edited, then deleted.</p>
     <div class="grid2 rev">
       <div class="stagecol">
         <div class="stage" id="vstage">
@@ -4821,12 +4836,12 @@ function speakText(raw,btn){
 .vc-end{background:#ff5a5f;color:#fff;border:0;border-radius:999px;padding:14px 38px;font-size:16px;font-weight:700}`;
   document.head.append(st);
   let ov=null,active=false,stream=null,ac=null,an=null,buf=null,rec=null,chunks=[],tick=null,state='',keepRs=false,cancelSpeak=null,recycling=false;
-  let noise=0.01,silenceMs=0,recStart=0,voiced=false,loud=0,mt='';
+  let noise=0.01,silenceMs=0,recStart=0,voiced=false,loud=0,mt='',barged=false,bargeMs=0,echoPeak=0,speakAt=0;
   const sleep=ms=>new Promise(r=>setTimeout(r,ms));
   const qs=s=>ov&&ov.querySelector(s);
   const setTxt=(s,t)=>{const e=qs(s);if(e)e.textContent=t};
   const hi=()=>(localStorage.vl||'en-IN')==='hi-IN';
-  const LAB={listen:['Listening...','सुन रहा हूँ...'],think:['Thinking...','सोच रहा हूँ...'],speak:['Speaking... tap the circle to skip','बोल रहा हूँ... छोड़ने के लिए गोले को दबाएँ']};
+  const LAB={listen:['Listening...','सुन रहा हूँ...'],think:['Thinking...','सोच रहा हूँ...'],speak:['Speaking... talk to interrupt me','बोल रहा हूँ... बीच में बोलकर रोक सकते हैं']};
   function setState(s){state=s;if(!ov)return;ov.dataset.s=s;setTxt('.vcs',LAB[s][hi()?1:0])}
 
   function newRec(){
@@ -4850,7 +4865,7 @@ function speakText(raw,btn){
     if(!r.ok||j.error)throw new Error(j.error||'Could not understand the recording.');
     return (j.text||'').trim();
   }
-  function listen(){if(!active)return;newRec();setState('listen')}
+  function listen(){if(!active)return;newRec();if(barged){barged=false;voiced=true;loud=150}setState('listen')}
 
   async function endUtterance(){
     if(state!=='listen')return;
@@ -4877,16 +4892,16 @@ function speakText(raw,btn){
     setTxt('.vctext',say.replace(/\[([^\]]+)\]\([^)]+\)/g,'$1').replace(/[*#`_>|]/g,'').slice(0,400));
     await speak(say);
     if(!active)return;
-    await sleep(350);
+    if(!barged)await sleep(350);
     listen();
   }
   function speak(raw){
     return new Promise(res=>{
       const ss=window.speechSynthesis;
       if(!ss){res();return}
-      setState('speak');
+      setState('speak');echoPeak=0;bargeMs=0;speakAt=Date.now();
       const t=raw.replace(/```[\s\S]*?```/g,' ').replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g,'$1').replace(/https?:\/\/\S+/g,'')
-        .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu,'').replace(/[*#`_>|~]/g,'').replace(/\s+/g,' ').trim().slice(0,2500);
+        .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu,'').replace(/[*#`_>|~]/g,'').replace(/\s+/g,' ').trim().slice(0,10000);
       const parts=(t.match(/[^.!?।\n]+[.!?।]*\s*/g)||[t]).map(s=>s.trim()).filter(s=>/[\p{L}\p{N}]/u.test(s));
       if(!parts.length){res();return}
       const lang=/[ऀ-ॿ]/.test(t)?'hi-IN':(localStorage.vl||'en-IN');
@@ -4914,12 +4929,18 @@ function speakText(raw,btn){
     let s=0;for(let i=0;i<buf.length;i++)s+=buf[i]*buf[i];
     const rms=Math.sqrt(s/buf.length);
     if(ov)ov.style.setProperty('--lv',state==='listen'?Math.min(1,rms*9):0);
+    if(state==='speak'&&cancelSpeak){   /* talk over it to interrupt: must be clearly louder than its own echo */
+      if(Date.now()-speakAt<700)echoPeak=Math.max(echoPeak,rms);
+      else if(rms>Math.max(0.07,echoPeak*2.2))bargeMs+=50;else bargeMs=0;
+      if(bargeMs>=250){bargeMs=0;barged=true;const c=cancelSpeak;c()}
+      return;
+    }
     if(state!=='listen'||!rec)return;
     const thr=Math.max(0.025,noise*3.2);
     if(rms>thr){loud+=50;silenceMs=0;if(loud>=150)voiced=true}
     else{if(!voiced){loud=0;noise=noise*0.95+rms*0.05}else silenceMs+=50}
     const len=Date.now()-recStart;
-    if(voiced&&(silenceMs>=1200||len>35000))endUtterance();
+    if(voiced&&(silenceMs>=1200||len>120000))endUtterance();
     else if(!voiced&&len>12000&&!recycling){recycling=true;finishRec(false).then(()=>{recycling=false;if(active&&state==='listen')newRec()})}
   }
 
@@ -5185,10 +5206,10 @@ async function attach(f,opts){
     if(f.type.startsWith('image/')){
       const d=await shrinkImage(f),doc=await shrinkImage(f,1800,true);att={kind:'image',name:f.name,data:d,doc:doc,thumb:d,solve:!!(opts&&opts.solve)};
     }else if(f.type.startsWith('video/')||ext==='mkv'){
-      if(f.size>300*1048576)throw new Error('That video is over 300 MB. Choose a smaller one.');
+      if(f.size>500*1048576)throw new Error('That video is over 500 MB. Choose a smaller one.');
       const d=await videoGrid(f);att={kind:'video',name:f.name,data:d,thumb:d};
     }else if(ext==='pdf'||f.type==='application/pdf'){
-      if(f.size>20*1048576)throw new Error('That PDF is over 20 MB. Choose a smaller one.');
+      if(f.size>100*1048576)throw new Error('That PDF is over 100 MB. Choose a smaller one.');
       const fd=new FormData();fd.append('file',f);
       const r=await fetch('/readfile',{method:'POST',headers:{'X-Access-Key':localStorage.ak||''},body:fd});
       const j=await r.json().catch(()=>({}));
@@ -5960,7 +5981,7 @@ function dropZone(stage,handler){
 dropZone($('#pstage'),loadPhoto);
 
 /* ================= video ================= */
-const VMAX=2000*1024*1024;
+const VMAX=500*1024*1024;
 let vfmt='mp4',vfile=null,vurl='',vres='';
 const vstatus=m=>$('#vstatus').textContent=m;
 function applyFmt(){
@@ -5971,7 +5992,7 @@ document.querySelectorAll('#vfmt button').forEach(b=>b.onclick=()=>{vfmt=b.datas
 applyFmt();
 function loadVideo(f){
   if(!f)return;
-  if(f.size>VMAX){vstatus('That file is '+(f.size/1048576).toFixed(0)+' MB. The limit is 60 MB.');return}
+  if(f.size>VMAX){vstatus('That file is '+(f.size/1048576).toFixed(0)+' MB. The limit is 500 MB.');return}
   vfile=f;if(vurl)URL.revokeObjectURL(vurl);vurl=URL.createObjectURL(f);
   const v=$('#vsrc');v.src=vurl;v.hidden=false;$('#vdrop').hidden=true;
   $('#vset').disabled=false;$('#vresult').hidden=true;vstatus('');
@@ -7702,7 +7723,7 @@ function playEmbed(src){
 document.querySelector('#embx').onclick=()=>{document.querySelector('#embf').src='about:blank';document.querySelector('#emb').hidden=true};
 mfix.onclick=async()=>{
   if(!lastFile)return;
-  if(lastFile.size>60*1024*1024){mstat.textContent='This file is over 60 MB, the most the converter accepts. Try a shorter clip.';return}
+  if(lastFile.size>500*1024*1024){mstat.textContent='This file is over 500 MB, the most the converter accepts. Try a shorter clip.';return}
   mstat.textContent='Converting for playback. This can take a minute or two...';mfix.disabled=true;
   const go=()=>{const fd=new FormData();fd.append('file',lastFile);fd.append('format','mp4');
     ['start','end'].forEach(k=>fd.append(k,'0'));fd.append('speed','1');fd.append('height','720');
