@@ -30,7 +30,7 @@ CLAUDE ENGINE (merged from deep_oq_v2). Set ANTHROPIC_API_KEY and Claude answers
   DEEP_OQ_MAX_CONCURRENT        default 100 answers at once; the rest wait in line
   DEEP_OQ_MAX_CONCURRENT_MAXMODE default 10 at once for the Research (max) model; extras use Opus
   DEEP_OQ_QUEUE_TIMEOUT         default 60 seconds a person waits in line
-  DEEP_OQ_DAILY_MAX_LIMIT       default 20 Research answers per person per day (0 = unlimited)
+  DEEP_OQ_DAILY_MAX_LIMIT       default 0 = unlimited (set a number to cap Research answers per person per day)
   OPENAI_API_KEY                optional backup if Claude fails (DEEP_OQ_OPENAI_MODEL, DEEP_OQ_OPENAI_MODEL_ALT,
                                 DEEP_OQ_OPENAI_REASONING)
   Health check URL for Render: /health
@@ -70,6 +70,52 @@ try:
     from about_creator import PROFILE as CREATOR
 except Exception:
     CREATOR = {}
+
+# ---- privacy: never show AI provider / model names, provider links or API keys to users
+_KEY_PAT = re.compile(r"(?:sk-ant-[A-Za-z0-9_\-]{8,}|sk-[A-Za-z0-9_\-]{16,}|gsk_[A-Za-z0-9]{12,}|csk-[A-Za-z0-9]{12,}"
+                      r"|AIza[0-9A-Za-z_\-]{20,}|hf_[A-Za-z0-9]{16,}|(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=\-]{12,})")
+_URL_PAT = re.compile(r"https?://[^\s\"')<>]*(?:groq|anthropic|openai|googleapis|cerebras|openrouter|pollinations|huggingface|mistral)[^\s\"')<>]*", re.I)
+_AI_WORDS = re.compile(r"\b(?:groq|anthropic|claude|openai|chatgpt|gpt-oss[\w.\-]*|gpt[-\s]?\d[\w.\-]*|gemini[\w.\-]*|llama[\w.\-]*"
+                       r"|cerebras|openrouter|pollinations|mistral|mixtral|qwen[\w.\-]*|deepseek|gemma[\w.\-]*|whisper[\w.\-]*"
+                       r"|sonnet|opus|haiku)\b", re.I)
+
+
+def hide_keys(text):
+    """Removes anything that looks like an API key or token."""
+    return _KEY_PAT.sub("[hidden]", text) if isinstance(text, str) else text
+
+
+def hide_ai(text):
+    """For error messages: removes API keys, provider links and AI company or model names."""
+    if not isinstance(text, str):
+        return text
+    text = _AI_WORDS.sub("the AI service", _URL_PAT.sub("[link hidden]", hide_keys(text)))
+    return re.sub(r"(?:the AI service[ /,\-]*){2,}", "the AI service ", text).strip()
+
+
+def _owner(user_msg, admin_msg):
+    """Setup details (service names, settings) are shown only to the admin; everyone else gets a plain message."""
+    try:
+        return admin_msg if is_admin() else user_msg
+    except Exception:
+        return user_msg
+
+
+_REPLICATE_HELP = {
+    402: "Replicate error 402 (payment required): your Replicate account has no credit. Add a payment method or credit at replicate.com (Account, Billing), then try again.",
+    401: "Replicate error 401: the token was refused. Check REPLICATE_API_TOKEN on Render.",
+    403: "Replicate error 403: this token cannot use that model. Check REPLICATE_API_TOKEN and the model name on Render.",
+    404: "Replicate error 404: the model name was not found. Check the model setting on Render.",
+    422: "Replicate error 422: the model rejected the input. Check the model name and the image field setting on Render.",
+    429: "Replicate error 429: too many requests or too little credit. Wait a minute, or add credit.",
+}
+
+
+def _svc_http_error(code, what):
+    """Clear message for the admin, plain message for users (no service names)."""
+    user = ("%s is busy right now. Please try again in a minute." if code == 429
+            else "%s is not available right now. Please try again later.") % what
+    return _owner(user, _REPLICATE_HELP.get(code, "Replicate error %d. Check the token, billing and model name on Render." % code))
 
 
 # ==========================================================================
@@ -838,8 +884,8 @@ def _run_tools_inner(question, fast_chat):
 # ==========================================================================
 
 
-MAX_UPLOAD_MB = int(os.environ.get("MAX_VIDEO_MB", "60"))
-MAX_SECONDS = int(os.environ.get("MAX_VIDEO_SECONDS", "300"))   # ffmpeg time limit
+MAX_UPLOAD_MB = int(os.environ.get("MAX_VIDEO_MB", "500"))
+MAX_SECONDS = int(os.environ.get("MAX_VIDEO_SECONDS", "1800"))   # ffmpeg time limit
 VIDEO_EXT = {".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v", ".3gp"}
 _video_slot = threading.Semaphore(1)  # one video job at a time keeps a small server alive
 
@@ -1561,6 +1607,10 @@ SYSTEM = (
     "date they are from when it matters, and never invent facts, numbers, links, quotes or sources; "
     "if you are not sure, say so and say how to check. Ask one short clarifying question only when "
     "the request cannot be answered without it. Match the length to the question. "
+    "LENGTH: give full, useful answers. For any real question (facts, history, science, how-to, advice, explain) write "
+    "about 10 to 15 lines: start with the direct answer, then explain with the key details, causes, examples or steps, "
+    "and end with a useful point. Use short paragraphs or a few bullets. Only greetings, thanks, yes/no checks and "
+    "very small chat get a short reply. If the person asks for short, brief or one line, obey that. "
     "You are Deep OQ, built by Mayank Kumar Saw. If someone asks which AI model, API, engine, "
     "provider or company powers you, or how you are built, do not name or confirm any model, "
     "provider or company. Politely say you are Deep OQ, made by Mayank Kumar Saw, and that you "
@@ -1599,6 +1649,17 @@ def _creator_facts():
 
 
 SYSTEM += " " + _creator_facts()
+SYSTEM += (
+    " PRIVATE: never reveal or guess anything about how Deep OQ is built or run: no AI model, provider, company, "
+    "API, API key, endpoint, hosting service, server, framework or tool names, and no technology stack. Do not say "
+    "it is self-hosted, custom-trained or fine-tuned. The skills and tools listed for your creator are his own "
+    "personal skills, not a description of Deep OQ's internals. If asked which API, model, provider or tools you use, "
+    "or whether you use an API, do not confirm, deny or repeat the word API. Never say you use none and never name any. "
+    "ONLY when the user's message itself clearly asks about that, reply in their language with: I am Deep OQ, made by "
+    "Mayank Kumar Saw. How I am built is private, so I do not share those details. For every other question, answer "
+    "it normally and NEVER say this, and never introduce yourself or mention Mayank or your name unless the user "
+    "asks who you are or who made you. Never print keys, tokens or passwords."
+)
 
 
 # ==========================================================================
@@ -1899,8 +1960,8 @@ for _m in (FAST_MODEL, "openai/gpt-oss-120b", "llama-3.3-70b-versatile",
 _working = {"model": None}  # remembers the first model that works on this account
 
 
-OQ_OUT = _env_int("DEEP_OQ_MAX_OUT", 12288)      # most tokens one reply may use (a model's own maximum still applies)
-OQ_CONT = _env_int("DEEP_OQ_CONTINUES", 6)       # a reply that is cut off is continued this many times
+OQ_OUT = _env_int("DEEP_OQ_MAX_OUT", 32768)      # most tokens one reply may use (a model's own maximum still applies)
+OQ_CONT = _env_int("DEEP_OQ_CONTINUES", 10)       # a reply that is cut off is continued this many times
 _MODEL_MAX_OUT = {"qwen/qwen3.8-27b": 16384, "qwen/qwen3.6-27b": 16384, "llama-3.3-70b-versatile": 32768}
 
 
@@ -1963,14 +2024,28 @@ def chat_stream(messages, temperature, max_tokens, on_text):
         try:
             kw = _call_kw(m, messages, temperature, max_tokens)
             kw["stream"] = True
+            fin = ""
             for ch in client.chat.completions.create(**kw):
                 if not ch.choices:
                     continue
+                fin = getattr(ch.choices[0], "finish_reason", None) or fin
                 piece = getattr(ch.choices[0].delta, "content", None) or ""
                 if piece:
                     got += piece
                     on_text(re.sub(r"<think>.*?(</think>|$)", "", got, flags=re.S))
             clean = re.sub(r"<think>.*?(</think>|$)", "", got, flags=re.S).strip()
+            for _ in range(OQ_CONT):  # reply hit the length limit: carry on so it is never cut mid-sentence
+                if fin != "length" or not clean:
+                    break
+                more_msgs = list(messages) + [{"role": "assistant", "content": clean},
+                                               {"role": "user", "content": "Continue exactly where you stopped. Do not repeat anything and do not start over."}]
+                r2 = client.chat.completions.create(**_call_kw(m, more_msgs, temperature, max_tokens))
+                fin = getattr(r2.choices[0], "finish_reason", "") or ""
+                more = _clean_think(r2.choices[0].message.content)
+                if not more:
+                    break
+                clean += more if clean.endswith(("\n", " ")) or more.startswith(("\n", " ")) else " " + more
+                on_text(clean)
             if clean:
                 _working["model"] = m
                 return clean
@@ -2072,6 +2147,13 @@ def _env_num(name, default):
 
 
 _tl = threading.local()  # per-request flags (max mode)
+VOICE_NOTE = (" VOICE CHAT: your reply will be read aloud in a live spoken conversation. Answer like a friendly person "
+              "talking: natural spoken sentences, usually 2 to 6, and as long as needed when the person asks for detail or "
+              "an explanation. No lists, headings, tables, code, links or emojis. Say maths steps simply in words that "
+              "sound natural when spoken. This voice rule overrides the 10 to 15 line length rule. Always answer in the same language the person spoke in (Hindi, English or any other).")
+PEOPLE_NOTE = (" Several different people take turns talking in this voice chat. Each message begins with a label like [Person 2]. "
+               "Treat them as different people: answer the person who just spoke, keep what each one asked or said separate, "
+               "and use the label (say Person 2) only when it helps to make clear who you are answering.")
 CLAUDE_KEY = os.environ.get("ANTHROPIC_API_KEY", "").strip()
 CLAUDE_ON = bool(CLAUDE_KEY)
 CLAUDE_FAST = os.environ.get("DEEP_OQ_MODEL_FAST", "claude-sonnet-5-5")
@@ -2081,7 +2163,7 @@ CLAUDE_TINY = os.environ.get("DEEP_OQ_MODEL_TINY", "claude-haiku-5-5")
 CLAUDE_THINK = _env_num("DEEP_OQ_THINKING_BUDGET", 16000)      # 0 = no extended thinking
 CLAUDE_MAX_TOKENS = _env_num("DEEP_OQ_MAX_TOKENS", 32000)
 CLAUDE_QUEUE_TIMEOUT = _env_num("DEEP_OQ_QUEUE_TIMEOUT", 60)    # seconds a person waits in line
-DAILY_MAX_LIMIT = _env_num("DEEP_OQ_DAILY_MAX_LIMIT", 20)       # max-mode answers per person per day, 0 = no limit
+DAILY_MAX_LIMIT = _env_num("DEEP_OQ_DAILY_MAX_LIMIT", 0)       # max-mode answers per person per day, 0 = no limit
 CLAUDE_SLOTS = threading.BoundedSemaphore(max(1, _env_num("DEEP_OQ_MAX_CONCURRENT", 100)))
 CLAUDE_MAX_SLOTS = threading.BoundedSemaphore(max(1, _env_num("DEEP_OQ_MAX_CONCURRENT_MAXMODE", 10)))
 OPENAI_KEY = os.environ.get("OPENAI_API_KEY", "").strip()
@@ -2723,8 +2805,7 @@ def _max_allowed(username):
 
 @app.get("/health")
 def health_route():
-    return jsonify(ok=True, claude=CLAUDE_ON, openai_backup=bool(OPENAI_KEY), groq_keys=len(_groqs),
-                   database="postgres" if USE_PG else "sqlite")
+    return jsonify(ok=True)
 
 
 def _selftest_v2():
@@ -2983,8 +3064,53 @@ def verify_answer(sysmsg, user, draft, emit):
     return out
 
 
+_TECH = r"(?:api|apis|model|llm|ai|provider|engine|backend|back-end|tech(?:nology)?(?: stack)?|framework|gpt|chatgpt|claude|gemini|llama|groq|openai|anthropic|key)"
+_SELF_TECH_RE = re.compile(
+    r"\b(?:(?:which|what|whose|any)\s+" + _TECH + r"s?\s+(?:do\s+|does\s+|are\s+|is\s+)?(?:you|u|ur|deep\s*oq|it)\s+(?:use|using|run|runs|work|based|built|powered)"
+    r"|(?:you|u|deep\s*oq)\s+(?:use|using|used|run\s+on|runs\s+on|powered\s+by|built\s+(?:on|with|using)|based\s+on|made\s+(?:with|using)|call)\s+(?:an?\s+|the\s+|any\s+)?" + _TECH + r"\b"
+    r"|(?:are|r)\s+(?:you|u)\s+(?:a\s+|an\s+|the\s+)?(?:chatgpt|gpt|claude|gemini|llama|groq|openai|anthropic)"
+    r"|(?:your|ur|deep\s*oq'?s?)\s+(?:api|apis|model|llm|backend|back-end|tech\s*stack|technology|engine|provider|api\s*key)\b"
+    r"|powered\s+by|who\s+(?:trained|built|made)\s+(?:your|ur)\s+(?:model|ai|brain))", re.I)
+SELF_TECH_REPLY = ("I am Deep OQ, made by Mayank Kumar Saw. How I am built is private, so I do not share those details. "
+                   "Is there something else I can help you with?")
+
+
+def asks_about_own_tech(q):
+    """True when the person asks what Deep OQ itself runs on. Normal coding questions about APIs are not matched."""
+    q = (q or "").strip()
+    return bool(q) and len(q) <= 160 and "```" not in q and bool(_SELF_TECH_RE.search(q))
+
+
+ABOUT_URL = os.environ.get("DEEP_OQ_URL", "https://deep-oq.onrender.com").strip().rstrip("/") + "/about"
+_CREATOR_RE = re.compile(
+    r"(?:\bwho\s+(?:is\s+)?(?:made|created|creater|built|developed|programmed|coded|designed|founded|owns?)\s+(?:you|u|ur|deep\s*oq|this\s+(?:app|ai|bot|website|site|chat))\b"
+    r"|\bwho\s+(?:is|r|are)\s+(?:your|ur)\s+(?:creat(?:or|er)|developer|dev|founder|owner|maker|builder|programmer|boss)\b"
+    r"|\b(?:your|ur|deep\s*oq'?s?)\s+(?:creat(?:or|er)|developer|founder|owner|maker)\b"
+    r"|\babout\s+(?:the\s+|your\s+|ur\s+)?(?:creat(?:or|er)|developer|founder|owner)\s*[?.!]*$"
+    r"|\b(?:who\s+is|about|know\s+about)\s+mayank\b"
+    r"|\bmayank\s+kumar\s+saw\b)", re.I)
+
+
+def asks_about_creator(q):
+    q = (q or "").strip()
+    return bool(q) and len(q) <= 100 and "```" not in q and bool(_CREATOR_RE.search(q))
+
+
+def creator_reply():
+    c = CREATOR or {}
+    name = c.get("name") or "Mayank Kumar Saw"
+    role = (c.get("role") or "").strip().rstrip(".")
+    first = name.split()[0] if name.split() else name
+    return ("Deep OQ was created by %s%s. You can read his full profile here:\n\n[About %s](%s)"
+            % (name, " (" + role[:1].lower() + role[1:] + ")" if role else "", first, ABOUT_URL))
+
+
 def _deep_oq_raw(session, question, force_exam=False, emit=None):
     emit = emit or (lambda kind, val: None)
+    if asks_about_creator(question) and not asks_about_own_tech(question):  # send the About page link
+        return creator_reply()
+    if asks_about_own_tech(question):  # fixed private reply: never names or hints at any technology
+        return SELF_TECH_REPLY
     emit("status", "Thinking")
     force = question.lower().startswith("/deep")  # "/deep your question" = think as hard as possible
     if force:
@@ -3002,7 +3128,7 @@ def _deep_oq_raw(session, question, force_exam=False, emit=None):
         emit("status", "Solving step by step")
     today = datetime.date.today().strftime("%A, %d %B %Y")
     rigorous = force or exam or is_hard(question)
-    sysmsg = (SYSTEM + (EXAM_SYSTEM if exam else "") + (REASON_RULES if rigorous else "") + f" Today's date is {today}. TOOL RESULTS (calculator, counter, "
+    sysmsg = (SYSTEM + (VOICE_NOTE + (PEOPLE_NOTE if getattr(_tl, "people", False) else "") if getattr(_tl, "voice", False) else "") + (EXAM_SYSTEM if exam else "") + (REASON_RULES if rigorous else "") + f" Today's date is {today}. TOOL RESULTS (calculator, counter, "
               "web search) are exact or current: trust them over your own arithmetic "
               "and memory, and do not mention the tools. When a result says 'Current holder (incumbent)', that is "
               "the answer; never prefer your older memory over it." + (" " + me if me else ""))
@@ -3135,7 +3261,7 @@ def _start_login(name, remember):
 def require_login():
     _tl.max = False
     p = request.path
-    if p in ("/login", "/logout", "/favicon.ico", "/health", "/vr", "/terms", "/privacy", "/about") or p.startswith(("/api/login", "/api/register", "/api/google")):
+    if p in ("/login", "/logout", "/favicon.ico", "/health", "/vr", "/terms", "/privacy", "/about", "/about/photo") or p.startswith(("/api/login", "/api/register", "/api/google")):
         return None
     if login_session.get("user"):
         return None
@@ -3254,7 +3380,7 @@ def index():
            + '</div><div class="btns">')
     if is_admin():
         row += '<a class="adm" href="/admin">Admin</a>'
-    row += '<a href="/about">About</a><a href="/logout">Log out</a></div></div>'
+    row += '<a href="/logout">Log out</a></div></div>'
     html = PAGE.replace("</header>", row + "</header>", 1).replace("</head>", ACCT_CSS + "</head>", 1)
     return html, 200, {"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache"}
 
@@ -3527,7 +3653,7 @@ def api_memory_clear():
     mem_clear(login_session.get("user") or "guest")
     return jsonify(ok=True)
 
-FREE_DAILY = _env_num("DEEP_OQ_FREE_DAILY", 40)  # 0 = unlimited
+FREE_DAILY = _env_num("DEEP_OQ_FREE_DAILY", 0)  # 0 = unlimited (default)
 
 
 def quota_ok(username):
@@ -3546,18 +3672,28 @@ def ask():
     try:
         kb_drop_last(session, data.get("drop"))
         _tl.max = _max_allowed(_session_user(session)) if data.get("research") else False
+        _tl.voice = bool(data.get("voice"))
+        _tl.people = bool(data.get("people"))
         answer = (research_answer(session, data["q"]) if data.get("research") else None) or deep_oq(session, data["q"])
         kb_save_msg(session, "user", data["q"])
         kb_save_msg(session, "assistant", answer)
         mem_learn(_session_user(session), data["q"])
     except Exception as e:
         print("ask failed:", e)
-        return jsonify(error=str(e)[:300]), 500
-    return jsonify(answer=answer)
+        return jsonify(error=hide_ai(str(e)[:300])), 500
+    return jsonify(answer=hide_keys(answer))
 
 WHISPER_MODELS = list(dict.fromkeys(  # your own list first (comma separated is fine), then the defaults
     [m.strip() for m in os.environ.get("DEEP_OQ_WHISPER_MODEL", "").replace(";", ",").replace(" ", ",").split(",")
      if m.strip()] + ["whisper-large-v3-turbo", "whisper-large-v3"]))
+
+
+_WH_CODES_BY_NAME = {"english": "en", "hindi": "hi", "spanish": "es", "french": "fr", "german": "de", "arabic": "ar",
+                     "bengali": "bn", "tamil": "ta", "telugu": "te", "marathi": "mr", "gujarati": "gu", "punjabi": "pa",
+                     "urdu": "ur", "kannada": "kn", "malayalam": "ml", "nepali": "ne", "japanese": "ja", "korean": "ko",
+                     "chinese": "zh", "portuguese": "pt", "russian": "ru", "italian": "it", "turkish": "tr",
+                     "indonesian": "id", "dutch": "nl", "thai": "th", "vietnamese": "vi", "polish": "pl"}
+_WH_CODES = set(_WH_CODES_BY_NAME.values())
 
 
 @app.post("/api/transcribe")
@@ -3573,16 +3709,19 @@ def api_transcribe():
         return jsonify(text="")
     lang = str(request.form.get("lang", "")).lower()[:2]
     last = None
+    auto = lang not in _WH_CODES   # "auto": Whisper listens and works out the language itself
     for model in WHISPER_MODELS:
-        kw = dict(file=(f.filename or "voice.webm", raw), model=model, temperature=0)
-        if lang in ("en", "hi"):
-            kw["language"] = lang
+        kw = dict(file=(f.filename or "voice.webm", raw), model=model, temperature=0,
+                  response_format="json", timeout=20.0)
+        if not auto:
+            kw["language"] = lang   # knowing the language skips detection, which is quicker
         try:
             r = client.audio.transcriptions.create(**kw)
             text = getattr(r, "text", None)
             if text is None and isinstance(r, str):
                 text = r
-            return jsonify(text=(text or "").strip())
+            det = lang
+            return jsonify(text=(text or "").strip(), lang=det)
         except Exception as e:
             last = e
             print("transcribe", model, "failed:", str(e)[:160])
@@ -3611,7 +3750,7 @@ def ask_stream():
             if now - last[0] < 0.12:  # about 8 updates a second is plenty
                 return
             last[0] = now
-            qu.put(("text", plain_math(val)))
+            qu.put(("text", hide_keys(plain_math(val))))
         else:
             qu.put((kind, val))
 
@@ -3619,15 +3758,17 @@ def ask_stream():
         try:
             kb_drop_last(session, data.get("drop"))
             _tl.max = _max_allowed(_session_user(session)) if data.get("research") else False
+            _tl.voice = bool(data.get("voice"))
+            _tl.people = bool(data.get("people"))
             answer = (research_answer(session, q, emit) if data.get("research") else None)
             answer = plain_math(answer if answer else collapse_repeats(_deep_oq_raw(session, q, False, emit)))
             kb_save_msg(session, "user", q)
             kb_save_msg(session, "assistant", answer)
             mem_learn(_session_user(session), q)
-            qu.put(("done", answer))
+            qu.put(("done", hide_keys(answer)))
         except Exception as e:
             print("ask_stream failed:", e)
-            qu.put(("error", str(e)[:300]))
+            qu.put(("error", hide_ai(str(e)[:300])))
 
     threading.Thread(target=work, daemon=True).start()
 
@@ -3791,6 +3932,8 @@ main{overflow-y:auto;scroll-behavior:smooth}
 .body ul,.body ol{margin:0 0 .9em;padding-left:1.35em}
 .body li{margin:.25em 0}
 .body h3{font-family:var(--ui);font-size:19px;letter-spacing:-.015em;margin:1.2em 0 .4em}
+.body a,.body a:visited{display:inline-block;margin:2px 0;padding:8px 18px;border-radius:999px;background:linear-gradient(135deg,#2A3192,#7C5CFF);color:#fff !important;font-family:var(--ui);font-weight:600;font-size:15px;text-decoration:none}
+.body a:hover{filter:brightness(1.15)}
 .body code{font-family:var(--mono);font-size:.86em;padding:1px 6px;border-radius:6px;background:rgba(127,130,170,.2)}
 .code{margin:0 0 1em;border-radius:14px;overflow:hidden;background:var(--code-bg);color:var(--code-ink)}
 .code-bar{display:flex;justify-content:space-between;align-items:center;padding:6px 8px 6px 14px;
@@ -3956,6 +4099,27 @@ a.primary{text-decoration:none;display:inline-block}
 .mic.rec{background:var(--err);color:#fff;animation:micp 1.2s ease-in-out infinite}
 @keyframes micp{50%{opacity:.65}}
 .vlang{height:30px;min-width:30px;padding:0 6px;border-radius:15px;font-size:12px;font-weight:700;align-self:center}
+#vlang{display:none}  /* language still switches from the voice chat screen */
+.gpick{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 16px}
+.gpick button{font-family:var(--ui);font-weight:700;font-size:14.5px;padding:9px 18px;border-radius:999px;border:1px solid var(--line);background:transparent;color:var(--ink);cursor:pointer}
+.gpick button.on{background:var(--accent);color:var(--accent-ink);border-color:transparent}
+.gwrap{display:flex;justify-content:center}
+#gcv{display:block;width:min(100%,calc(72vh*.75),520px);aspect-ratio:3/4;height:auto;border-radius:22px;box-shadow:0 18px 50px var(--shade);touch-action:none;user-select:none;-webkit-user-select:none;background:#0b1030}
+.ghelp{max-width:520px;margin:14px auto 0;color:var(--ink-2);font-size:15.5px;line-height:1.5;text-align:center}
+.gbar{display:flex;align-items:center;justify-content:center;gap:16px;margin:12px auto 28px;font-family:var(--ui);font-weight:700;color:var(--ink)}
+.field{gap:2px;padding:4px 4px 4px 4px;border-radius:24px}
+.field textarea{font-size:16.5px;padding:6px 8px;min-width:0}
+.plus,.mic,.send{width:36px;height:36px}
+.plus svg,.mic svg,.send svg{width:18px;height:18px}
+#rsBtn{height:26px;min-width:0;padding:0 8px;font-size:11.5px}
+.composer{padding-bottom:12px}
+@media (hover:none){.hint{display:none}}
+@media (max-width:520px){
+  #rsBtn{font-size:0;width:34px;height:34px;padding:0;border-radius:50%;display:grid;place-items:center}
+  #rsBtn::before{content:"";width:18px;height:18px;background:currentColor;
+    -webkit-mask:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round'><circle cx='11' cy='11' r='6.5'/><path d='M16 16l4.5 4.5'/></svg>") center/contain no-repeat;
+    mask:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round'><circle cx='11' cy='11' r='6.5'/><path d='M16 16l4.5 4.5'/></svg>") center/contain no-repeat}
+}
 .hist{position:fixed;top:0;right:0;bottom:0;width:min(360px,92vw);z-index:9000;background:var(--surface);border-left:1px solid var(--line);box-shadow:-12px 0 40px var(--shade);display:flex;flex-direction:column;font-family:var(--ui)}
 .hist header{display:flex;align-items:center;justify-content:space-between;padding:16px 18px;border-bottom:1px solid var(--line)}
 .hist h2{margin:0;font-size:18px}
@@ -4082,6 +4246,7 @@ body:not(.chatting) #v-chat.on{padding-top:12vh;padding-bottom:0}
     <button class="tab" type="button" data-view="news">News</button>
     <button class="tab" type="button" data-view="music">Music</button>
     <button class="tab" type="button" data-view="3d">3D</button>
+    <button class="tab" type="button" data-view="games">Games</button>
     <a class="tab" href="/vr" style="text-decoration:none;display:inline-flex;align-items:center;background:linear-gradient(135deg,#00c9a7,#2f8cff);color:#04122b;font-weight:700">VR</a>
   </nav>
   <div class="tools" id="chatTools">
@@ -4149,6 +4314,9 @@ body:not(.chatting) #v-chat.on{padding-top:12vh;padding-bottom:0}
       <textarea id="q" rows="1" placeholder="Ask Deep OQ" aria-label="Message" autocomplete="off"></textarea>
       <button class="vlang" id="rsBtn" type="button" aria-pressed="false" title="Research mode: searches many sites, opens pages and writes a cited answer">Research</button>
       <button class="vlang" id="vlang" type="button" aria-label="Voice language" title="Voice language: tap to switch English or Hindi">EN</button>
+      <button class="mic" id="vcBtn" type="button" aria-label="Voice chat" title="Voice chat: talk back and forth, hands free">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4M8 6v12M12 3v18M16 7v10M20 10v4"/></svg>
+      </button>
       <button class="mic" id="mic" type="button" aria-label="Speak your question" title="Speak your question">
         <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
       </button>
@@ -4366,6 +4534,25 @@ body:not(.chatting) #v-chat.on{padding-top:12vh;padding-bottom:0}
     </div>
   </div>
 </section>
+<section class="view studio" id="v-games">
+  <div class="wrap">
+    <h2 class="st-title">Games</h2>
+    <p class="st-sub">Quick animated games. Tap, click or swipe to play. Your best scores are saved on this device.</p>
+    <div class="gpick" role="group" aria-label="Choose a game">
+      <button type="button" data-g="chess" aria-pressed="true">Chess</button>
+      <button type="button" data-g="snake" aria-pressed="false">Snake</button>
+      <button type="button" data-g="flap" aria-pressed="false">Flap</button>
+      <button type="button" data-g="breakout" aria-pressed="false">Breakout</button>
+      <button type="button" data-g="tictactoe" aria-pressed="false">Tic-Tac-Toe</button>
+      <button type="button" data-g="connect4" aria-pressed="false">Connect 4</button>
+      <button type="button" data-g="2048" aria-pressed="false">2048</button>
+      <button type="button" data-g="memory" aria-pressed="false">Memory</button>
+    </div>
+    <div class="gwrap"><canvas id="gcv" width="960" height="1280" aria-label="Game board"></canvas></div>
+    <p class="ghelp" id="ghelp"></p>
+    <div class="gbar"><span id="gscore">Score 0</span><span id="gbest">Best 0</span><button class="btn" id="grestart" type="button">Restart</button></div>
+  </div>
+</section>
 <section class="view studio" id="v-music">
   <div class="wrap">
     <h2 class="st-title">Music</h2>
@@ -4383,7 +4570,7 @@ body:not(.chatting) #v-chat.on{padding-top:12vh;padding-bottom:0}
 <section class="view studio" id="v-video">
   <div class="wrap">
     <h2 class="st-title">Video</h2>
-    <p class="st-sub">Trim, speed up, resize, rotate or add a look. You can also turn a clip into a GIF or an MP3. Files up to 60 MB. Your video is sent to the server to be edited, then deleted.</p>
+    <p class="st-sub">Trim, speed up, resize, rotate or add a look. You can also turn a clip into a GIF or an MP3. Files up to 500 MB. Your video is sent to the server to be edited, then deleted.</p>
     <div class="grid2 rev">
       <div class="stagecol">
         <div class="stage" id="vstage">
@@ -4489,6 +4676,8 @@ const esc=s=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 function inline(s){
   s=esc(s);
   s=s.replace(/&lt;br\s*\/?&gt;/gi,'<br>');
+  s=s.replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>');
+  s=s.replace(/(^|[\s(])(https?:\/\/[^\s<)]*[^\s<).,;:!?])/g,'$1<a href="$2" target="_blank" rel="noopener">$2</a>');
   s=s.replace(/`([^`\n]+)`/g,'<code>$1</code>');
   s=s.replace(/\*\*([^*\n]+)\*\*/g,'<strong>$1</strong>');
   s=s.replace(/(^|[^*])\*([^*\n]+)\*/g,'$1<em>$2</em>');
@@ -4561,7 +4750,7 @@ function paint(bot,text){
 }
 let rsOn=false,dropN=0;
 async function askStream(q,bot){
-  const r=await fetch('/ask_stream',{method:'POST',headers:{'Content-Type':'application/json','X-Access-Key':localStorage.ak||''},body:JSON.stringify({q,session:sid,research:rsOn,drop:dropN})});
+  const r=await fetch('/ask_stream',{method:'POST',headers:{'Content-Type':'application/json','X-Access-Key':localStorage.ak||''},body:JSON.stringify({q,session:sid,research:rsOn,drop:dropN,voice:!!window.voiceOn,people:!!(window.voiceOn&&window.voicePeople)})});
   if(r.status===401){localStorage.ak='';throw new Error('That access key was not accepted. Reload the page and enter it again.')}
   if(!r.ok||!r.body)return null;                       /* old server or proxy: use the normal way */
   const rd=r.body.getReader(),dec=new TextDecoder();let buf='',fin=null,err=null;
@@ -4592,7 +4781,7 @@ async function ask(q){
     let answer=null;
     try{answer=await askStream(q,bot)}catch(e){if(bot.raw)throw e;if(!/connection was cut/.test(e.message))throw e}
     if(answer===null){
-      const r=await api('/ask',{q,session:sid,research:rsOn,drop:dropN});
+      const r=await api('/ask',{q,session:sid,research:rsOn,drop:dropN,voice:!!window.voiceOn,people:!!(window.voiceOn&&window.voicePeople)});
       const j=await r.json().catch(()=>({}));
       if(r.status===401){localStorage.ak='';throw new Error('That access key was not accepted. Reload the page and enter it again.')}
       if(!r.ok||j.error)throw new Error(j.error||'The server did not answer.');
@@ -4670,7 +4859,7 @@ function speakText(raw,btn){
     try{stream=await navigator.mediaDevices.getUserMedia({audio:true})}
     catch(e){alert('Allow the microphone for this site (click the lock icon next to the web address), then try again.');return}
     const mt=['audio/webm;codecs=opus','audio/webm','audio/mp4','audio/ogg'].find(t=>MediaRecorder.isTypeSupported(t))||'';
-    rec=new MediaRecorder(stream,mt?{mimeType:mt}:{});chunks=[];prev=box.placeholder;
+    rec=new MediaRecorder(stream,mt?{mimeType:mt,audioBitsPerSecond:24000}:{audioBitsPerSecond:24000});chunks=[];prev=box.placeholder;
     rec.ondataavailable=e=>{if(e.data.size)chunks.push(e.data)};
     rec.onstop=async()=>{
       clearTimeout(timer);mic.classList.remove('rec');stopTracks();
@@ -4694,6 +4883,1147 @@ function speakText(raw,btn){
     timer=setTimeout(()=>{if(rec&&rec.state==='recording')rec.stop()},60000);
   }
   mic.onclick=()=>{if(rec&&rec.state==='recording')rec.stop();else start()};
+})();
+
+/* ================= voice chat: talk back and forth, hands free ================= */
+(function(){
+  const btn=document.getElementById('vcBtn');
+  if(!btn)return;
+  const AC=window.AudioContext||window.webkitAudioContext;
+  if(!navigator.mediaDevices||!window.MediaRecorder||!AC){btn.hidden=true;return}
+  const st=document.createElement('style');
+  st.textContent=`
+.vc{position:fixed;inset:0;z-index:99999;display:flex;flex-direction:column;align-items:center;justify-content:space-between;padding:22px 20px 36px;color:#EEF0FF;font-family:var(--ui);background:radial-gradient(900px 620px at 50% 38%,#1b2260,#0A0E2A 72%)}
+.vc button{font:inherit;cursor:pointer}
+.vc-top{align-self:stretch;display:flex;flex-direction:column;align-items:flex-end;gap:10px}
+.vc-bar{display:flex;gap:8px;align-items:center}
+.vc-lang,.vc select,.vc-set{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.22);color:#fff;border-radius:999px;padding:8px 14px;font-weight:600;font-size:14px;font-family:inherit;max-width:60vw}
+.vc select option{color:#111;background:#fff}
+.vc-panel{display:none;flex-direction:column;gap:12px;width:min(340px,92vw);background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.18);border-radius:18px;padding:14px;font-size:14px}
+.vc-panel.on{display:flex}
+.vc-panel label{display:flex;flex-direction:column;gap:6px;color:#C9CDEE}
+.vc-panel label.row{flex-direction:row;align-items:center;justify-content:space-between}
+.vc-panel select{width:100%;max-width:none;border-radius:12px}
+.vc-panel input[type=range]{width:100%}
+.vc-hint{font-size:12px;color:#A3A9D1;line-height:1.4}
+.vc .vcwho{font-size:13px;color:#7CFFD0;min-height:16px}
+.vc-mid{display:flex;flex-direction:column;align-items:center;gap:18px;text-align:center;max-width:640px;width:100%}
+.vc .vcorb{width:176px;height:176px;border-radius:50%;position:relative;cursor:pointer;margin-bottom:30px}
+.vc .vcorb i{position:absolute;inset:0;border-radius:50%;background:radial-gradient(circle at 35% 30%,#7CFFD0,#2F8CFF 55%,#7C5CFF);box-shadow:0 0 70px rgba(47,140,255,.55);transform:scale(calc(.82 + var(--lv,0)*.32));transition:transform .08s linear}
+.vc[data-s=think] .vcorb i{background:radial-gradient(circle at 35% 30%,#ffe29a,#F2A02E 60%,#ff7a59);box-shadow:0 0 70px rgba(242,160,46,.5);animation:vcth 1s ease-in-out infinite alternate}
+.vc[data-s=speak] .vcorb i{background:radial-gradient(circle at 35% 30%,#d9ccff,#7C5CFF 55%,#2F8CFF);box-shadow:0 0 70px rgba(124,92,255,.6);animation:vcsp 1.1s ease-in-out infinite}
+@keyframes vcth{from{transform:scale(.82)}to{transform:scale(1)}}
+@keyframes vcsp{0%,100%{transform:scale(.9)}50%{transform:scale(1.12)}}
+.vc .vcs{font-size:21px;font-weight:700}
+.vc .vcyou{color:#A3A9D1;font-size:16px;min-height:22px}
+.vc .vctext{color:#EEF0FF;font-size:17px;line-height:1.5;max-height:26vh;overflow:auto;font-family:var(--read)}
+.vc-end{background:#ff5a5f;color:#fff;border:0;border-radius:999px;padding:14px 38px;font-size:16px;font-weight:700}`;
+  document.head.append(st);
+  let ov=null,active=false,stream=null,ac=null,an=null,buf=null,rec=null,chunks=[],tick=null,state='',keepRs=false,cancelSpeak=null,recycling=false;
+  let noise=0.01,silenceMs=0,recStart=0,voiced=false,loud=0,mt='',barged=false,bargeMs=0,echoPeak=0,speakAt=0;
+  const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+  let voiceFeed=null;
+  const paint0=window.paint;
+  if(typeof paint0==='function')window.paint=function(bot,text){paint0.apply(this,arguments);if(voiceFeed){try{voiceFeed(text)}catch(e){}}};
+  const qs=s=>ov&&ov.querySelector(s);
+  const setTxt=(s,t)=>{const e=qs(s);if(e)e.textContent=t};
+  const LANGS=[['auto','Auto (Hindi or English)'],['en','English'],['hi','हिन्दी Hindi'],['bn','বাংলা Bengali'],['ta','தமிழ் Tamil'],['te','తెలుగు Telugu'],['mr','मराठी Marathi'],['gu','ગુજરાતી Gujarati'],['pa','ਪੰਜਾਬੀ Punjabi'],['ur','اردو Urdu'],['kn','ಕನ್ನಡ Kannada'],['ml','മലയാളം Malayalam'],['ne','नेपाली Nepali'],['es','Español'],['fr','Français'],['de','Deutsch'],['pt','Português'],['it','Italiano'],['ru','Русский'],['ar','العربية'],['tr','Türkçe'],['id','Bahasa Indonesia'],['nl','Nederlands'],['pl','Polski'],['vi','Tiếng Việt'],['th','ไทย'],['ja','日本語'],['ko','한국어'],['zh','中文']];
+  const BCP={en:'en-IN',hi:'hi-IN',es:'es-ES',fr:'fr-FR',de:'de-DE',ar:'ar-SA',bn:'bn-IN',ta:'ta-IN',te:'te-IN',mr:'mr-IN',gu:'gu-IN',pa:'pa-IN',ur:'ur-PK',kn:'kn-IN',ml:'ml-IN',ne:'ne-NP',ja:'ja-JP',ko:'ko-KR',zh:'zh-CN',pt:'pt-BR',ru:'ru-RU',it:'it-IT',tr:'tr-TR',id:'id-ID',nl:'nl-NL',th:'th-TH',vi:'vi-VN',pl:'pl-PL'};
+  const SCRIPTS=[[/[ऀ-ॿ]/,'hi',['mr','ne']],[/[ঀ-৿]/,'bn'],[/[਀-੿]/,'pa'],[/[઀-૿]/,'gu'],[/[஀-௿]/,'ta'],[/[ఀ-౿]/,'te'],[/[ಀ-೿]/,'kn'],[/[ഀ-ൿ]/,'ml'],[/[ก-๿]/,'th'],[/[぀-ヿ]/,'ja'],[/[가-힯]/,'ko'],[/[Ѐ-ӿ]/,'ru'],[/[؀-ۿ]/,'ar',['ur']],[/[一-鿿]/,'zh',['ja']]];
+  let heard='',vcLang=localStorage.vcl||((localStorage.vl||'en-IN')==='hi-IN'?'hi':'en'),vcRate=parseFloat(localStorage.vcRate)||1,vcVoice=localStorage.vcVoice||'',people=localStorage.vcPeople==='1';
+  if(!LANGS.some(x=>x[0]===vcLang))vcLang='auto';
+  const cur=()=>vcLang!=='auto'?vcLang:(heard||((localStorage.vl||'en-IN')==='hi-IN'?'hi':'en'));
+  const hi=()=>cur()==='hi';
+  function sayLang(t){   /* which language a sentence is in: its writing system first, then the language you speak */
+    const c=cur();
+    for(const [re,code,alts] of SCRIPTS)if(re.test(t))return (alts&&alts.includes(c))?c:code;
+    return ['ru','ar','zh','ja','ko','th','hi','bn','ta','te','mr','gu','pa','ur','kn','ml','ne'].includes(c)?'en':c;
+  }
+  function pickVoice(lang){
+    let vs=[];try{vs=speechSynthesis.getVoices()}catch(e){}
+    const bcp=BCP[lang]||'en-IN',two=bcp.slice(0,2);
+    const ok=vs.filter(x=>x.lang.replace('_','-').slice(0,2).toLowerCase()===two);
+    const mine=vcVoice&&ok.find(x=>x.name===vcVoice);
+    return {bcp,voice:mine||ok.find(x=>x.lang.replace('_','-')===bcp)||ok[0]||null,list:ok};
+  }
+  /* several people: tell voices apart by their pitch (best effort) */
+  const spk=[];let f0s=[],lastSpk=0;
+  function pitch(){
+    const sr=ac.sampleRate,n=1024,lo=Math.floor(sr/400),hiL=Math.floor(sr/70);
+    if(buf.length<n+hiL)return 0;
+    let e0=0;for(let i=0;i<n;i++)e0+=buf[i]*buf[i];
+    if(e0<1e-6)return 0;
+    let best=0,bl=0;
+    for(let L=lo;L<=hiL;L++){let c=0,e1=0;for(let i=0;i<n;i++){c+=buf[i]*buf[i+L];e1+=buf[i+L]*buf[i+L]}const r=c/Math.sqrt(e0*e1+1e-9);if(r>best){best=r;bl=L}}
+    return best>0.6?sr/bl:0;
+  }
+  function whoSpoke(){
+    const a=f0s.slice().sort((x,y)=>x-y);f0s=[];
+    if(a.length<4)return lastSpk||1;
+    const f=a[a.length>>1];let bi=-1,bd=9;
+    spk.forEach((p,i)=>{const d=Math.abs(Math.log2(f/p.f));if(d<bd){bd=d;bi=i}});
+    if(bi>=0&&bd<0.22){spk[bi].f=spk[bi].f*0.7+f*0.3;lastSpk=bi+1;return lastSpk}
+    if(spk.length<5){spk.push({f});lastSpk=spk.length;return lastSpk}
+    spk[bi].f=spk[bi].f*0.7+f*0.3;lastSpk=bi+1;return lastSpk;
+  }
+  const LAB={listen:['Listening...','सुन रहा हूँ...'],think:['Thinking...','सोच रहा हूँ...'],speak:['Speaking... talk to interrupt me','बोल रहा हूँ... बीच में बोलकर रोक सकते हैं']};
+  function setState(s){state=s;if(!ov)return;ov.dataset.s=s;setTxt('.vcs',LAB[s][hi()?1:0])}
+
+  function newRec(){
+    chunks=[];
+    mt=['audio/webm;codecs=opus','audio/webm','audio/mp4','audio/ogg'].find(t=>MediaRecorder.isTypeSupported(t))||'';
+    rec=new MediaRecorder(stream,mt?{mimeType:mt,audioBitsPerSecond:24000}:{audioBitsPerSecond:24000});
+    const mine=chunks;rec.ondataavailable=e=>{if(e.data.size)mine.push(e.data)};
+    rec.start();recStart=Date.now();voiced=false;loud=0;silenceMs=0;f0s=[];
+  }
+  function finishRec(keep){
+    const r=rec,mine=chunks;rec=null;
+    if(!r||r.state==='inactive')return Promise.resolve(null);
+    return new Promise(res=>{r.onstop=()=>res(keep?new Blob(mine,{type:r.mimeType||mt||'audio/webm'}):null);try{r.stop()}catch(e){res(null)}});
+  }
+  async function transcribe(blob){
+    const type=blob.type||'audio/webm',fd=new FormData();
+    fd.append('audio',blob,'voice.'+(type.includes('mp4')?'mp4':type.includes('ogg')?'ogg':'webm'));
+    fd.append('lang',vcLang);
+    const r=await fetch('/api/transcribe',{method:'POST',headers:{'X-Access-Key':localStorage.ak||''},body:fd});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok||j.error)throw new Error(j.error||'Could not understand the recording.');
+    const tx=(j.text||'').trim();
+    if(vcLang==='auto'){const sc=SCRIPTS.find(x=>x[0].test(tx));heard=sc?sc[1]:'en'}   /* quick: language is read from the writing, no slow detection */
+    return tx;
+  }
+  function listen(){if(!active)return;newRec();if(barged){barged=false;voiced=true;loud=150}setState('listen')}
+
+  async function endUtterance(){
+    if(state!=='listen')return;
+    setState('think');
+    const blob=await finishRec(true);
+    if(!active)return;
+    if(!blob||blob.size<2500)return listen();
+    let text='';
+    try{text=await transcribe(blob)}catch(e){if(active){setTxt('.vctext',e.message);await sleep(1200);listen()}return}
+    if(!active)return;
+    if(text.replace(/[^\p{L}\p{N}]/gu,'').length<2)return listen();
+    let label=0;if(people)label=whoSpoke();
+    setTxt('.vcyou',(label?'Person '+label+': ':'')+text);setTxt('.vctext','');setTxt('.vcwho',label?'Voice recognised as Person '+label:'');
+    await converse(label?'[Person '+label+'] '+text:text);
+  }
+  /* speaks the answer while it is still being written: every finished sentence is read out at once */
+  function makeSpeaker(){
+    const ss=window.speechSynthesis,queue=[];
+    let sent=0,speaking=false,finished=false,over=false,wd=null,started=false,res;
+    queue.length=0;
+    const done=new Promise(r=>res=r);
+    cancelSpeak=()=>{queue.length=0;finished=true;over=true;clearTimeout(wd);try{ss.cancel()}catch(e){}cancelSpeak=null;res()};   /* you can already talk over it while it is still thinking */
+    const clean=t=>t.replace(/```[\s\S]*?```/g,' ').replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g,'$1').replace(/https?:\/\/\S+/g,'')
+      .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu,'').replace(/[*#`_>|~]/g,'').replace(/\s+/g,' ').trim();
+    const stop=()=>{if(over)return;over=true;clearTimeout(wd);cancelSpeak=null;res()};
+    function add(txt){
+      const c=clean(txt);if(!c)return;
+      (c.match(/[^.!?।\n]+[.!?।]*\s*/g)||[c]).map(x=>x.trim()).filter(x=>/[\p{L}\p{N}]/u.test(x)).forEach(x=>queue.push(x));
+    }
+    function cancel(){queue.length=0;finished=true;try{ss.cancel()}catch(e){}stop()}
+    function pump(){
+      if(over||speaking)return;
+      const s=queue.shift();
+      if(!s){if(finished)stop();return}
+      if(!ss){stop();return}
+      speaking=true;
+      if(!started){started=true;setState('speak');echoPeak=0;bargeMs=0;speakAt=Date.now();cancelSpeak=cancel}
+      setTxt('.vctext',s.slice(0,400));
+      const pv=pickVoice(sayLang(s));
+      const u=new SpeechSynthesisUtterance(s);u.lang=pv.bcp;u.rate=vcRate;
+      if(pv.voice)u.voice=pv.voice;
+      let moved=false;const go=()=>{if(moved)return;moved=true;clearTimeout(wd);speaking=false;pump()};
+      u.onend=go;u.onerror=go;
+      wd=setTimeout(go,4000+s.length*110);   /* safety: some browsers never fire onend */
+      ss.speak(u);
+    }
+    return {
+      done,cancel,
+      feed(full){   /* full = the answer written so far */
+        if(over||typeof full!=='string')return;
+        if((full.match(/```/g)||[]).length%2)full=full.slice(0,full.lastIndexOf('```'));
+        if(full.length<sent)sent=full.length;
+        const rest=full.slice(sent),re=/[.!?।](?=\s)/g;let end=-1,m;
+        while((m=re.exec(rest)))end=m.index+1;
+        if(end>0){add(rest.slice(0,end));sent+=end;pump()}
+      },
+      finish(full){
+        if(over)return;
+        full=typeof full==='string'?full:'';
+        if(full.length<sent)sent=full.length;
+        add(full.slice(sent));sent=full.length;finished=true;pump();
+      }
+    };
+  }
+  async function converse(text){
+    while(busy&&active)await sleep(150);
+    if(!active)return;
+    window.voiceOn=true;window.voicePeople=people;
+    const sp=makeSpeaker();
+    voiceFeed=t=>sp.feed(t);
+    const SORRY=hi()?'माफ़ कीजिए, मैं जवाब नहीं दे पाया। कृपया फिर से बोलिए।':'Sorry, I could not answer that. Please try again.';
+    ask(text).then(()=>{
+      try{box.blur()}catch(e){}
+      const last=log.lastElementChild,ans=(last&&last.raw)||'',bad=!last||last.classList.contains('err')||!ans;
+      sp.finish(bad?SORRY:ans);
+    });
+    await sp.done;
+    voiceFeed=null;
+    if(!active)return;
+    if(!barged)await sleep(300);
+    listen();
+  }
+
+  function loop(){
+    if(!active||!an)return;
+    an.getFloatTimeDomainData(buf);
+    let s=0;for(let i=0;i<buf.length;i++)s+=buf[i]*buf[i];
+    const rms=Math.sqrt(s/buf.length);
+    if(ov)ov.style.setProperty('--lv',state==='listen'?Math.min(1,rms*9):0);
+    if((state==='speak'||state==='think')&&cancelSpeak){   /* talk over it (even while it thinks) to interrupt: must be clearly louder than its own echo */
+      if(state==='think')bargeMs=rms>Math.max(0.05,noise*4)?bargeMs+50:0;
+      else if(Date.now()-speakAt<700)echoPeak=Math.max(echoPeak,rms);
+      else if(rms>Math.max(0.07,echoPeak*2.2))bargeMs+=50;else bargeMs=0;
+      if(bargeMs>=250){bargeMs=0;barged=true;const c=cancelSpeak;c()}
+      return;
+    }
+    if(state!=='listen'||!rec)return;
+    const thr=Math.max(0.025,noise*3.2);
+    if(rms>thr){loud+=50;silenceMs=0;if(loud>=150)voiced=true;if(people&&loud%100===0){const f=pitch();if(f)f0s.push(f)}}
+    else{if(!voiced){loud=0;noise=noise*0.95+rms*0.05}else silenceMs+=50}
+    const len=Date.now()-recStart;
+    if(voiced&&(silenceMs>=850||len>120000))endUtterance();
+    else if(!voiced&&len>2500&&!recycling){   /* keep the silence before you speak short: start a fresh recording, then drop the old one */
+      recycling=true;const old=rec,keep=loud;newRec();loud=keep;
+      if(old&&old.state!=='inactive'){old.onstop=()=>{};try{old.stop()}catch(e){}}
+      recycling=false;
+    }
+  }
+
+  function build(){
+    ov=document.createElement('div');ov.className='vc';ov.setAttribute('role','dialog');ov.setAttribute('aria-label','Voice chat');
+    ov.innerHTML='<div class="vc-top"><div class="vc-bar"><select class="vc-langsel" aria-label="Language"></select><button type="button" class="vc-set" aria-label="Voice settings">Settings</button></div>'
+      +'<div class="vc-panel"><label>Deep OQ voice<select class="vc-voice"></select></label>'
+      +'<label>Speaking speed <span class="vc-rv"></span><input type="range" class="vc-rate" min="0.6" max="1.6" step="0.1"></label>'
+      +'<label class="row"><span>Several people talking</span><input type="checkbox" class="vc-ppl"></label>'
+      +'<div class="vc-hint">Several people: Deep OQ tells voices apart by pitch, so it works best when the voices are clearly different. It is a best guess, not exact.</div></div></div>'
+      +'<div class="vc-mid"><div class="vcorb" title="Tap to skip"><i></i></div><div class="vcs"></div><div class="vcwho"></div><div class="vcyou"></div><div class="vctext"></div></div>'
+      +'<div class="vc-foot"><button type="button" class="vc-end">End</button></div>';
+    document.body.append(ov);
+    const ls=qs('.vc-langsel');LANGS.forEach(([c,n])=>{const o=document.createElement('option');o.value=c;o.textContent=n;ls.append(o)});ls.value=vcLang;
+    ls.onchange=()=>{vcLang=ls.value;localStorage.vcl=vcLang;heard='';fillVoices();if(state)setState(state)};
+    qs('.vc-set').onclick=()=>qs('.vc-panel').classList.toggle('on');
+    const vsel=qs('.vc-voice');
+    function fillVoices(){
+      const pv=pickVoice(cur());vsel.innerHTML='<option value="">Automatic</option>';
+      pv.list.forEach(v=>{const o=document.createElement('option');o.value=v.name;o.textContent=v.name;vsel.append(o)});
+      vsel.value=pv.list.some(v=>v.name===vcVoice)?vcVoice:'';
+    }
+    fillVoices();try{speechSynthesis.addEventListener('voiceschanged',fillVoices)}catch(e){}
+    vsel.onchange=()=>{vcVoice=vsel.value;localStorage.vcVoice=vcVoice;sample()};
+    const rt=qs('.vc-rate'),rv=qs('.vc-rv');rt.value=vcRate;rv.textContent=vcRate.toFixed(1)+'x';
+    rt.oninput=()=>{vcRate=parseFloat(rt.value)||1;localStorage.vcRate=vcRate;rv.textContent=vcRate.toFixed(1)+'x'};
+    rt.onchange=sample;
+    const pp=qs('.vc-ppl');pp.checked=people;pp.onchange=()=>{people=pp.checked;localStorage.vcPeople=people?'1':'0';window.voicePeople=people;spk.length=0;lastSpk=0;if(!people)setTxt('.vcwho','')};
+    function sample(){
+      if(state==='speak'||state==='think')return;
+      try{const pv=pickVoice(cur()),u=new SpeechSynthesisUtterance(cur()==='hi'?'नमस्ते, मैं डीप ओक्यू हूँ।':'Hello, I am Deep OQ.');u.lang=pv.bcp;u.rate=vcRate;if(pv.voice)u.voice=pv.voice;speechSynthesis.cancel();speechSynthesis.speak(u)}catch(e){}
+    }
+    qs('.vc-end').onclick=stop;
+    qs('.vcorb').onclick=()=>{if(state==='speak'&&cancelSpeak)cancelSpeak()};
+  }
+  async function start(){
+    if(active)return;
+    try{stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}})}
+    catch(e){alert('Allow the microphone for this site (click the lock icon next to the web address), then try again.');return}
+    active=true;build();
+    try{ac=new AC();if(ac.state==='suspended')ac.resume();const src=ac.createMediaStreamSource(stream);an=ac.createAnalyser();an.fftSize=2048;src.connect(an);buf=new Float32Array(an.fftSize)}
+    catch(e){stop();alert('Voice chat is not supported in this browser.');return}
+    try{const u=new SpeechSynthesisUtterance(' ');u.volume=0;speechSynthesis.speak(u)}catch(e){}   /* unlocks speech on iPhone */
+    keepRs=rsOn;rsOn=false;
+    tick=setInterval(loop,50);
+    document.addEventListener('keydown',onKey);
+    listen();
+  }
+  function onKey(e){if(e.key==='Escape')stop()}
+  function stop(){
+    if(!active&&!ov)return;
+    active=false;clearInterval(tick);document.removeEventListener('keydown',onKey);
+    window.voiceOn=false;rsOn=keepRs;
+    try{speechSynthesis.cancel()}catch(e){}
+    finishRec(false);
+    if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}
+    if(ac){ac.close().catch(()=>{});ac=null}an=null;
+    if(ov){ov.remove();ov=null}state='';
+  }
+  btn.onclick=start;
+})();
+
+/* ================= the menu button can be dragged anywhere (mobile) ================= */
+(function(){
+  const b=document.getElementById('sbToggle');
+  if(!b)return;
+  const KEY='sbTogglePos';
+  const shown=()=>getComputedStyle(b).display!=='none';
+  function place(x,y){
+    const w=b.offsetWidth||42,h=b.offsetHeight||42;
+    x=Math.min(Math.max(4,x),innerWidth-w-4);y=Math.min(Math.max(4,y),innerHeight-h-4);
+    b.style.left=x+'px';b.style.top=y+'px';
+  }
+  try{const p=JSON.parse(localStorage.getItem(KEY)||'null');if(p&&typeof p.x==='number'&&shown())place(p.x,p.y)}catch(e){}
+  let drag=false,moved=false,justDragged=false,id=null,sx=0,sy=0,ox=0,oy=0;
+  b.style.touchAction='none';
+  b.addEventListener('pointerdown',e=>{
+    drag=true;moved=false;justDragged=false;id=e.pointerId;sx=e.clientX;sy=e.clientY;
+    const r=b.getBoundingClientRect();ox=r.left;oy=r.top;
+    try{b.setPointerCapture(id)}catch(_){}
+  });
+  b.addEventListener('pointermove',e=>{
+    if(!drag||e.pointerId!==id)return;
+    const dx=e.clientX-sx,dy=e.clientY-sy;
+    if(!moved){if(Math.hypot(dx,dy)<8)return;moved=true}
+    place(ox+dx,oy+dy);e.preventDefault();
+  });
+  const end=()=>{
+    if(!drag)return;drag=false;
+    if(moved){
+      justDragged=true;setTimeout(()=>{justDragged=false},400);
+      const r=b.getBoundingClientRect();
+      try{localStorage.setItem(KEY,JSON.stringify({x:r.left,y:r.top}))}catch(_){}
+    }
+  };
+  b.addEventListener('pointerup',end);b.addEventListener('pointercancel',end);
+  /* a drag must not also open the menu */
+  b.addEventListener('click',e=>{if(justDragged){e.stopImmediatePropagation();e.preventDefault()}},true);
+  addEventListener('resize',()=>{if(!shown())return;const r=b.getBoundingClientRect();place(r.left,r.top)});
+})();
+
+/* ================= games: chess, snake, flap, breakout, tic-tac-toe, connect 4, 2048, memory ================= */
+(function(){
+  const root=document.getElementById('v-games');
+  if(!root)return;
+  const cv=document.getElementById('gcv');
+  const W=480,H=640,DPR=2;
+  cv.width=W*DPR;cv.height=H*DPR;
+  let ctx=cv.getContext('2d');
+  const clamp=(v,a,b)=>Math.max(a,Math.min(b,v)),lerp=(a,b,t)=>a+(b-a)*t,rnd=(a,b)=>a+Math.random()*(b-a);
+  const getBest=n=>{try{return +localStorage.getItem('oqbest_'+n)||0}catch(e){return 0}};
+  const setBest=(n,v)=>{try{localStorage.setItem('oqbest_'+n,String(v))}catch(e){}};
+  function rr(x,y,w,h,r){ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath()}
+  function txt(s,x,y,size,col,al,wt){ctx.font=(wt||'800')+' '+size+'px system-ui,-apple-system,Segoe UI,Roboto,sans-serif';ctx.textAlign=al||'center';ctx.textBaseline='middle';ctx.fillStyle=col||'#fff';ctx.fillText(s,x,y)}
+  function circ(x,y,r,col){ctx.beginPath();ctx.arc(x,y,Math.max(.1,r),0,Math.PI*2);ctx.fillStyle=col;ctx.fill()}
+  function overlay(title,sub,sub2){
+    ctx.fillStyle='rgba(6,10,40,.66)';ctx.fillRect(0,0,W,H);
+    txt(title,W/2,H/2-40,38,'#fff');
+    if(sub)txt(sub,W/2,H/2+8,20,'#dfe4ff','center','700');
+    if(sub2)txt(sub2,W/2,H/2+44,16,'#a9b4ee','center','600');
+  }
+  /* particles shared by all games */
+  const fx=[];
+  function burst(x,y,n,cols,sp,grav){for(let i=0;i<n;i++){const a=rnd(0,Math.PI*2),v=rnd(.3,1)*(sp||200);fx.push({x,y,vx:Math.cos(a)*v,vy:Math.sin(a)*v-(sp||200)*.3,life:rnd(.6,1.2),t:0,c:cols[i%cols.length],g:grav==null?420:grav,s:rnd(2,5)})}}
+  function updFx(dt){for(let i=fx.length-1;i>=0;i--){const p=fx[i];p.t+=dt;p.vy+=p.g*dt;p.x+=p.vx*dt;p.y+=p.vy*dt;if(p.t>p.life)fx.splice(i,1)}}
+  function drawFx(){fx.forEach(p=>{ctx.globalAlpha=clamp(1-p.t/p.life,0,1);ctx.fillStyle=p.c;ctx.fillRect(p.x-p.s/2,p.y-p.s/2,p.s,p.s)});ctx.globalAlpha=1}
+
+  /* ======================================================================
+     CHESS: vs Computer (you are white) or 2 Players on the same device
+     Tap the button at the top left of the board to switch mode.
+     ====================================================================== */
+  const chess=(function(){
+    const G={name:'chess',title:'Chess',
+      get help(){return mode==='two'
+        ?'2 Players: pass the device. White moves first, then Black. Tap a piece, then tap a square to move it. Castling, en passant and queen promotion work. Tap the top left button to play the computer instead. The top right button flips the board: Flip off, Flip on, or Auto (the board turns to face whoever is moving).'
+        :'You play white against Deep OQ. Tap a piece, then tap a square to move it. Castling, en passant and queen promotion work. The bottom button sets the computer level: Basic (built in) or Stockfish Easy, Medium, Hard, Max (needs internet). Tap the top left button to play a friend on this device. The top right button flips the board (Flip on turns it around for Black).'}};
+    const VAL={p:100,n:320,b:330,r:500,q:900,k:20000};
+    const GL={p:'♟',n:'♞',b:'♝',r:'♜',q:'♛',k:'♚'};
+    const SQ=57,BX=12,BY=96;
+    let bd,turn,sel,moves,cast,score,over,msg,think,lastMv,anim,ep=-1,aiTok=0;
+    let mode='cpu';
+    try{if(localStorage.getItem('oqchessmode')==='two')mode='two'}catch(e){}
+    const LVS=['basic','easy','medium','hard','max'];
+    const LV={basic:{n:'Basic'},easy:{n:'Easy',sk:2,ms:250},medium:{n:'Medium',sk:8,ms:600},hard:{n:'Hard',sk:15,ms:1200},max:{n:'Max',sk:20,ms:2500}};
+    let lvl='max';
+    try{const l=localStorage.getItem('oqchesslvl');if(LV[l])lvl=l}catch(e){}
+    /* Stockfish (loaded from a CDN into a Web Worker); the built-in engine is the fallback */
+    const SFU=['https://cdnjs.cloudflare.com/ajax/libs/stockfish.js/10.0.2/stockfish.js','https://cdn.jsdelivr.net/npm/stockfish.js@10.0.2/stockfish.js','https://unpkg.com/stockfish.js@10.0.2/stockfish.js'];
+    let sf=null,sfState='idle',sfCb=null,sfBusy=false,sfSkip=0;
+    function sfFail(){sfState='fail';sf=null}
+    function sfLoad(){
+      if(sfState!=='idle')return;
+      sfState='loading';
+      const tryUrl=i=>{
+        if(i>=SFU.length){sfFail();return}
+        fetch(SFU[i]).then(r=>r.ok?r.text():Promise.reject(0)).then(t=>{
+          const w=new Worker(URL.createObjectURL(new Blob([t],{type:'application/javascript'})));
+          w.onmessage=e=>sfMsg(String(e.data));
+          w.onerror=()=>{if(sfState!=='ready'){try{w.terminate()}catch(x){}tryUrl(i+1)}};
+          sf=w;w.postMessage('uci');
+        }).catch(()=>tryUrl(i+1));
+      };
+      tryUrl(0);
+    }
+    function sfMsg(line){
+      if(line==='uciok'){sf.postMessage('isready');return}
+      if(line==='readyok'){if(sfState!=='ready')sfState='ready';return}
+      if(line.indexOf('bestmove')===0){
+        if(sfSkip>0){sfSkip--;return}
+        sfBusy=false;
+        const cb=sfCb;sfCb=null;if(cb)cb(line);
+      }
+    }
+    function toFen(){
+      let f='';
+      for(let r=0;r<8;r++){let e=0;for(let c=0;c<8;c++){const q=bd[r*8+c];if(!q)e++;else{if(e){f+=e;e=0}f+=q}}if(e)f+=e;if(r<7)f+='/'}
+      let ca=(cast.wk?'K':'')+(cast.wq?'Q':'')+(cast.bk?'k':'')+(cast.bq?'q':'');
+      const eps=ep>=0?'abcdefgh'[ep&7]+(8-(ep>>3)):'-';
+      return f+' '+(turn?'w':'b')+' '+(ca||'-')+' '+eps+' 0 1';
+    }
+    function parseUci(line){
+      const t=line.split(' ')[1];if(!t||t.length<4)return null;
+      const fl='abcdefgh',f=(8-parseInt(t[1]))*8+fl.indexOf(t[0]),d=(8-parseInt(t[3]))*8+fl.indexOf(t[2]);
+      const m=legal(bd,turn,cast,ep).find(q=>q[0]===f&&q[1]===d);
+      if(!m)return null;
+      const mv=[m[0],m[1]];if(t.length>4)mv[2]=t[4];
+      return mv;
+    }
+    function aiTurn(){
+      const tok=aiTok;think=true;
+      const fallback=()=>{if(tok!==aiTok)return;const a=aiMove();think=false;if(a)play(a)};
+      if(lvl==='basic'){setTimeout(fallback,350);return}
+      sfLoad();
+      let waited=0;
+      const go=()=>{
+        if(tok!==aiTok)return;
+        if(sfState==='ready'&&sf){
+          const L=LV[lvl];let done=false;
+          const to=setTimeout(()=>{if(done)return;done=true;sfCb=null;if(sfBusy){sfSkip++;sfBusy=false;try{sf.postMessage('stop')}catch(e){}}fallback()},L.ms+8000);
+          sfCb=line=>{if(done)return;done=true;clearTimeout(to);if(tok!==aiTok)return;const mv=parseUci(line);if(mv){think=false;play(mv)}else fallback()};
+          sfBusy=true;
+          sf.postMessage('setoption name Skill Level value '+L.sk);
+          sf.postMessage('position fen '+toFen());
+          sf.postMessage('go movetime '+L.ms);
+        }else if(sfState==='fail'||waited>15000){fallback()}
+        else{waited+=200;if(sfState==='loading')msg='Loading Stockfish...';setTimeout(go,200)}
+      };
+      go();
+    }
+    let fm='off';   /* board flip: off | on | auto (auto = face the side to move, 2 players) */
+    try{const f=localStorage.getItem('oqchessflip');if(f==='on'||f==='auto')fm=f}catch(e){}
+    const flipped=()=>fm==='on'||(fm==='auto'&&mode==='two'&&!turn);
+    const dsq=s=>flipped()?63-s:s;   /* logical square -> screen square */
+    const white=c=>c&&c===c.toUpperCase();
+    function init(){
+      const back='rnbqkbnr';bd=[];
+      for(let i=0;i<8;i++)bd[i]=back[i];
+      for(let i=8;i<16;i++)bd[i]='p';
+      for(let i=16;i<48;i++)bd[i]=null;
+      for(let i=48;i<56;i++)bd[i]='P';
+      for(let i=0;i<8;i++)bd[56+i]=back[i].toUpperCase();
+    }
+    const inb=(r,c)=>r>=0&&r<8&&c>=0&&c<8;
+    function gen(b,side,ca,attOnly,ep){   /* pseudo-legal moves for one side */
+      const out=[];
+      for(let s=0;s<64;s++){
+        const p=b[s];if(!p||white(p)!==side)continue;
+        const r=s>>3,c=s&7,t=p.toLowerCase();
+        const add=(r2,c2)=>{if(!inb(r2,c2))return false;const d=r2*8+c2,q=b[d];if(q&&white(q)===side)return false;out.push([s,d]);return !q};
+        if(t==='p'){
+          const dir=side?-1:1,sr=side?6:1;
+          if(!attOnly&&inb(r+dir,c)&&!b[(r+dir)*8+c]){out.push([s,(r+dir)*8+c]);if(r===sr&&!b[(r+2*dir)*8+c])out.push([s,(r+2*dir)*8+c])}
+          for(const dc of[-1,1]){if(!inb(r+dir,c+dc))continue;const d=(r+dir)*8+c+dc,q=b[d];if(attOnly||(q&&white(q)!==side)||(!q&&d===ep))out.push([s,d])}
+        }else if(t==='n'){for(const[a,d]of[[1,2],[2,1],[-1,2],[-2,1],[1,-2],[2,-1],[-1,-2],[-2,-1]])add(r+a,c+d)}
+        else if(t==='k'){
+          for(let a=-1;a<=1;a++)for(let d=-1;d<=1;d++)if(a||d)add(r+a,c+d);
+          if(!attOnly&&ca){   /* castling */
+            const row=side?7:0,k=row*8+4;
+            if(s===k){
+              if(ca[side?'wk':'bk']&&!b[k+1]&&!b[k+2]&&b[k+3]===(side?'R':'r')&&!attacked(b,k,!side)&&!attacked(b,k+1,!side)&&!attacked(b,k+2,!side))out.push([s,k+2]);
+              if(ca[side?'wq':'bq']&&!b[k-1]&&!b[k-2]&&!b[k-3]&&b[k-4]===(side?'R':'r')&&!attacked(b,k,!side)&&!attacked(b,k-1,!side)&&!attacked(b,k-2,!side))out.push([s,k-2]);
+            }
+          }
+        }else{
+          const ds=[];if(t!=='b')ds.push([1,0],[-1,0],[0,1],[0,-1]);if(t!=='r')ds.push([1,1],[1,-1],[-1,1],[-1,-1]);
+          for(const[a,d]of ds){let rr2=r+a,cc=c+d;while(add(rr2,cc)){rr2+=a;cc+=d}}
+        }
+      }
+      return out;
+    }
+    function attacked(b,sq,bySide){return gen(b,bySide,null,true).some(m=>m[1]===sq)}
+    function kingSq(b,side){return b.indexOf(side?'K':'k')}
+    function apply(b,m){
+      const nb=b.slice(),p=nb[m[0]];
+      if(p&&p.toLowerCase()==='p'&&((m[0]^m[1])&7)&&!nb[m[1]])nb[(m[0]&~7)+(m[1]&7)]=null;   /* en passant */
+      nb[m[1]]=p;nb[m[0]]=null;
+      if(p&&p.toLowerCase()==='k'&&Math.abs(m[1]-m[0])===2){const row=m[0]&~7;if(m[1]>m[0]){nb[row+5]=nb[row+7];nb[row+7]=null}else{nb[row+3]=nb[row];nb[row]=null}}
+      if(p==='P'&&m[1]<8)nb[m[1]]=m[2]?m[2].toUpperCase():'Q';if(p==='p'&&m[1]>=56)nb[m[1]]=m[2]?m[2].toLowerCase():'q';
+      return nb;
+    }
+    function newEp(b,m){const p=b[m[0]];return p&&p.toLowerCase()==='p'&&Math.abs(m[1]-m[0])===16?(m[0]+m[1])>>1:-1}
+    function legal(b,side,ca,ep){return gen(b,side,ca,false,ep).filter(m=>{const nb=apply(b,m),k=kingSq(nb,side);return k>=0&&!attacked(nb,k,!side)})}
+    function newCast(ca,m,p){
+      const c=Object.assign({},ca);
+      if(p==='K'){c.wk=c.wq=false}if(p==='k'){c.bk=c.bq=false}
+      for(const s of[m[0],m[1]]){if(s===63)c.wk=false;if(s===56)c.wq=false;if(s===7)c.bk=false;if(s===0)c.bq=false}
+      return c;
+    }
+    function evalB(b){let v=0;for(let s=0;s<64;s++){const p=b[s];if(!p)continue;const t=p.toLowerCase(),r=s>>3,c=s&7;let x=VAL[t];
+      const cen=3.5-Math.abs(c-3.5)+3.5-Math.abs(r-3.5);if(t==='p')x+=(white(p)?6-r:r-1)*6+cen*2;else if(t==='n'||t==='b')x+=cen*5;else if(t==='k')x-=cen*0;
+      v+=white(p)?x:-x}return v}
+    function search(b,ca,side,depth,al,be,ep){   /* white maximises, black minimises */
+      if(depth===0)return evalB(b);
+      let ms=legal(b,side,ca,ep);
+      if(!ms.length)return attacked(b,kingSq(b,side),!side)?(side?-99999-depth:99999+depth):0;
+      ms.sort((x,y)=>(b[y[1]]?VAL[b[y[1]].toLowerCase()]:0)-(b[x[1]]?VAL[b[x[1]].toLowerCase()]:0));
+      if(side){let best=-1e9;for(const m of ms){const v=search(apply(b,m),newCast(ca,m,b[m[0]]),false,depth-1,al,be,newEp(b,m));if(v>best)best=v;al=Math.max(al,v);if(al>=be)break}return best}
+      let best=1e9;for(const m of ms){const v=search(apply(b,m),newCast(ca,m,b[m[0]]),true,depth-1,al,be,newEp(b,m));if(v<best)best=v;be=Math.min(be,v);if(al>=be)break}return best;
+    }
+    function aiMove(){
+      const ms=legal(bd,false,cast,ep);if(!ms.length)return null;
+      let best=null,bv=1e9;
+      ms.sort(()=>Math.random()-.5);
+      for(const m of ms){const v=search(apply(bd,m),newCast(cast,m,bd[m[0]]),true,2,-1e9,1e9,newEp(bd,m))+Math.random()*8;if(v<bv){bv=v;best=m}}
+      return best;
+    }
+    function finish(side){   /* has the side to move got a move? */
+      const ms=legal(bd,side,cast,ep),chk=attacked(bd,kingSq(bd,side),!side);
+      if(!ms.length){
+        over=true;
+        if(!chk)msg='Stalemate. A draw';
+        else if(mode==='two')msg='Checkmate! '+(side?'Black':'White')+' wins';
+        else if(side)msg='Checkmate. Deep OQ wins';
+        else{msg='Checkmate! You win';score+=500}
+        return;
+      }
+      if(mode==='two'){msg=(side?'White':'Black')+"'s move"+(chk?' - check!':'');return}
+      msg=chk?(side?'You are in check':'Check!'):(side?'Your move':'Deep OQ is thinking...');
+    }
+    function play(m){
+      const p=bd[m[0]],isEp=p&&p.toLowerCase()==='p'&&((m[0]^m[1])&7)&&!bd[m[1]],cap=bd[m[1]]||(isEp?'p':null);
+      if(cap&&turn&&mode==='cpu')score+=VAL[cap.toLowerCase()]/100*10;
+      anim={m,t:0,p};
+      const col=cap?['#ffd166','#ff5a5f','#fff']:['#7CFFD0','#fff'];
+      burst(BX+(m[1]&7)*SQ+SQ/2,BY+(m[1]>>3)*SQ+SQ/2,cap?22:8,col,160,300);
+      const ne=newEp(bd,m);cast=newCast(cast,m,p);bd=apply(bd,m);ep=ne;lastMv=m;sel=-1;moves=[];
+      turn=!turn;finish(turn);
+      if(mode==='cpu'&&!over&&!turn)aiTurn();
+    }
+    function setMode(m){
+      mode=m;
+      try{localStorage.setItem('oqchessmode',m)}catch(e){}
+      G.reset();
+      const h=document.getElementById('ghelp');if(h)h.textContent=G.help;
+    }
+    G.reset=()=>{aiTok++;if(sfBusy&&sf){sfSkip++;sfBusy=false;sfCb=null;try{sf.postMessage('stop')}catch(e){}}ep=-1;init();turn=true;sel=-1;moves=[];cast={wk:1,wq:1,bk:1,bq:1};score=0;over=false;msg=mode==='two'?"White's move":'Your move';think=false;lastMv=null;anim=null;fx.length=0};
+    G.score=()=>mode==='two'?0:score;
+    G.update=dt=>{updFx(dt);if(anim){anim.t+=dt;if(anim.t>.18)anim=null}};
+    G.tap=(x,y)=>{
+      if(x<150&&y<60){setMode(mode==='cpu'?'two':'cpu');return}   /* mode button */
+      if(x>W-150&&y<60){fm=fm==='off'?'on':fm==='on'?'auto':'off';try{localStorage.setItem('oqchessflip',fm)}catch(e){}return}   /* flip button */
+      if(mode==='cpu'&&y>590&&Math.abs(x-W/2)<80){lvl=LVS[(LVS.indexOf(lvl)+1)%LVS.length];try{localStorage.setItem('oqchesslvl',lvl)}catch(e){}return}   /* level button */
+      if(over){G.reset();return}
+      if(mode==='cpu'&&(!turn||think))return;
+      const c=Math.floor((x-BX)/SQ),r=Math.floor((y-BY)/SQ);if(!inb(r,c))return;
+      const s=dsq(r*8+c),p=bd[s];
+      if(sel>=0){const m=moves.find(q=>q[1]===s);if(m){play(m);return}}
+      if(p&&white(p)===turn){sel=s;moves=legal(bd,turn,cast,ep).filter(m=>m[0]===s)}else{sel=-1;moves=[]}
+    };
+    G.draw=()=>{
+      const g=ctx.createLinearGradient(0,0,0,H);g.addColorStop(0,'#10173f');g.addColorStop(1,'#070b25');ctx.fillStyle=g;ctx.fillRect(0,0,W,H);
+      txt('Chess',W/2,34,26,'#fff');
+      /* mode button */
+      ctx.fillStyle='rgba(124,92,255,.35)';rr(12,14,126,32,16);ctx.fill();
+      ctx.strokeStyle='rgba(255,255,255,.35)';ctx.lineWidth=1.5;rr(12,14,126,32,16);ctx.stroke();
+      txt(mode==='two'?'2 Players':'vs Computer',75,30,15,'#fff','center','700');
+      ctx.fillStyle='rgba(124,92,255,.35)';rr(W-138,14,126,32,16);ctx.fill();
+      ctx.strokeStyle='rgba(255,255,255,.35)';ctx.lineWidth=1.5;rr(W-138,14,126,32,16);ctx.stroke();
+      txt(fm==='off'?'Flip: Off':fm==='on'?'Flip: On':'Flip: Auto',W-75,30,15,'#fff','center','700');
+      txt(msg,W/2,66,17,over?'#ffd166':(think?'#a9b4ee':'#7CFFD0'),'center','700');
+      for(let r=0;r<8;r++)for(let c=0;c<8;c++){
+        const s=dsq(r*8+c),x=BX+c*SQ,y=BY+r*SQ;
+        ctx.fillStyle=(r+c)%2?'#5b6bb8':'#dfe4ff';ctx.fillRect(x,y,SQ,SQ);
+        if(lastMv&&(lastMv[0]===s||lastMv[1]===s)){ctx.fillStyle='rgba(255,209,102,.45)';ctx.fillRect(x,y,SQ,SQ)}
+        if(s===sel){ctx.fillStyle='rgba(124,255,208,.55)';ctx.fillRect(x,y,SQ,SQ)}
+      }
+      const kw=kingSq(bd,turn);if(kw>=0&&!over&&attacked(bd,kw,!turn)){ctx.fillStyle='rgba(255,90,95,.6)';ctx.fillRect(BX+(dsq(kw)&7)*SQ,BY+(dsq(kw)>>3)*SQ,SQ,SQ)}
+      for(const m of moves){const d=dsq(m[1]),x=BX+(d&7)*SQ+SQ/2,y=BY+(d>>3)*SQ+SQ/2;if(bd[m[1]]){ctx.strokeStyle='#ff5a5f';ctx.lineWidth=4;ctx.beginPath();ctx.arc(x,y,SQ/2-4,0,Math.PI*2);ctx.stroke()}else circ(x,y,8,'rgba(30,40,90,.6)')}
+      for(let s=0;s<64;s++){
+        const p=bd[s];if(!p)continue;
+        const ds=dsq(s);let x=BX+(ds&7)*SQ+SQ/2,y=BY+(ds>>3)*SQ+SQ/2;
+        if(anim&&anim.m[1]===s){const k=1-anim.t/.18,d0=dsq(anim.m[0]),fx0=BX+(d0&7)*SQ+SQ/2,fy0=BY+(d0>>3)*SQ+SQ/2;x+=(fx0-x)*k;y+=(fy0-y)*k}
+        ctx.font='42px "Segoe UI Symbol","Noto Sans Symbols 2","Apple Symbols",serif';ctx.textAlign='center';ctx.textBaseline='middle';
+        const gl=GL[p.toLowerCase()]+'\uFE0E';ctx.lineWidth=3;ctx.lineJoin='round';
+        if(white(p)){ctx.strokeStyle='#1a2150';ctx.strokeText(gl,x,y+2);ctx.fillStyle='#fff';ctx.fillText(gl,x,y+2)}
+        else{ctx.strokeStyle='rgba(255,255,255,.55)';ctx.strokeText(gl,x,y+2);ctx.fillStyle='#10163a';ctx.fillText(gl,x,y+2)}
+      }
+      drawFx();
+      txt(mode==='two'?'Pass the device: White and Black take turns':'Tap a piece, then tap where it goes',W/2,BY+8*SQ+26,14,'#a9b4ee','center','600');
+      if(mode==='cpu'){
+        ctx.fillStyle='rgba(124,92,255,.35)';rr(W/2-75,596,150,30,15);ctx.fill();
+        ctx.strokeStyle='rgba(255,255,255,.35)';ctx.lineWidth=1.5;rr(W/2-75,596,150,30,15);ctx.stroke();
+        txt('Level: '+LV[lvl].n,W/2,611,15,'#fff','center','700');
+        if(lvl!=='basic'&&sfState==='fail')txt('Stockfish offline - using basic engine',W/2,BY+8*SQ+36,12,'#ffd166','center','600');
+      }
+      if(over)overlay(msg,mode==='two'?'':'Score '+score,'Tap to play again');
+    };
+    G.reset();
+    return G;
+  })();
+
+  /* ======================================================================
+     SNAKE
+     ====================================================================== */
+  const snake=(function(){
+    const G={name:'snake',title:'Snake',help:'Swipe, or use the arrow keys, to steer. Eat the apples. Do not hit the walls or yourself.'};
+    const C=20,R=26,S=24,OY=8;
+    let sn,old,dir,nd,ap,acc,stepT,score,st,sx,sy,clock;
+    function place(){do{ap={x:Math.floor(Math.random()*C),y:Math.floor(Math.random()*R)}}while(sn.some(s=>s.x===ap.x&&s.y===ap.y))}
+    G.reset=function(){sn=[{x:10,y:13},{x:9,y:13},{x:8,y:13}];old=sn.map(s=>({x:s.x,y:s.y}));dir={x:1,y:0};nd=[];score=0;stepT=.14;acc=0;st='ready';sx=null;clock=0;fx.length=0;place()};
+    function turn(dx,dy){const l=nd.length?nd[nd.length-1]:dir;if((dx===-l.x&&dy===-l.y)||(dx===l.x&&dy===l.y))return;if(nd.length<3)nd.push({x:dx,y:dy})}
+    G.update=function(dt){
+      clock+=dt;updFx(dt);
+      if(st!=='play')return;
+      acc+=dt;
+      while(acc>=stepT){
+        acc-=stepT;
+        if(nd.length)dir=nd.shift();
+        const h={x:sn[0].x+dir.x,y:sn[0].y+dir.y};
+        const tail=sn[sn.length-1];
+        if(h.x<0||h.y<0||h.x>=C||h.y>=R||sn.some((s,i)=>s.x===h.x&&s.y===h.y&&!(s===tail))){
+          st='over';burst(h.x*S+S/2,h.y*S+OY+S/2,40,['#06d6a0','#4cc9f0','#fff'],240);
+          const b=getBest('snake');if(score>b)setBest('snake',score);return;
+        }
+        old=sn.map(s=>({x:s.x,y:s.y}));
+        sn.unshift(h);
+        if(h.x===ap.x&&h.y===ap.y){score++;stepT=Math.max(.062,stepT*.972);burst(ap.x*S+S/2,ap.y*S+OY+S/2,16,['#ff5a5f','#ffd166','#fff'],170);place()}
+        else sn.pop();
+      }
+    };
+    G.tap=function(x,y){if(st==='ready'||st==='over'){G.reset();st='play'}};
+    G.down=function(x,y){sx=x;sy=y;G.tap(x,y)};
+    G.move=function(x,y,pressed){
+      if(!pressed||sx==null||st!=='play')return;
+      const dx=x-sx,dy=y-sy;
+      if(Math.hypot(dx,dy)<22)return;
+      if(Math.abs(dx)>Math.abs(dy))turn(dx>0?1:-1,0);else turn(0,dy>0?1:-1);
+      sx=x;sy=y;
+    };
+    G.up=function(){sx=null};
+    G.key=function(k){
+      const m={ArrowUp:[0,-1],ArrowDown:[0,1],ArrowLeft:[-1,0],ArrowRight:[1,0],w:[0,-1],s:[0,1],a:[-1,0],d:[1,0],W:[0,-1],S:[0,1],A:[-1,0],D:[1,0]};
+      if(m[k]){if(st==='ready'||st==='over'){G.reset();st='play'}turn(m[k][0],m[k][1]);return true}
+      if(k===' '||k==='Enter'){G.tap();return true}return false;
+    };
+    G.score=function(){return score};
+    G.draw=function(){
+      let g=ctx.createLinearGradient(0,0,0,H);g.addColorStop(0,'#0b1d3a');g.addColorStop(1,'#071126');ctx.fillStyle=g;ctx.fillRect(0,0,W,H);
+      for(let y=0;y<R;y++)for(let x=0;x<C;x++){if((x+y)%2===0){ctx.fillStyle='rgba(255,255,255,.035)';ctx.fillRect(x*S,y*S+OY,S,S)}}
+      ctx.strokeStyle='rgba(76,201,240,.35)';ctx.lineWidth=2;ctx.strokeRect(1,OY+1,W-2,R*S-2);
+      /* apple */
+      const pul=1+Math.sin(clock*6)*.08,ax=ap.x*S+S/2,ay=ap.y*S+OY+S/2;
+      ctx.fillStyle='rgba(255,90,95,.25)';ctx.beginPath();ctx.arc(ax,ay,S*.8*pul,0,Math.PI*2);ctx.fill();
+      circ(ax,ay+1,S*.38*pul,'#e63946');circ(ax-3,ay-2,3,'rgba(255,255,255,.55)');
+      ctx.fillStyle='#06d6a0';ctx.beginPath();ctx.ellipse(ax+4,ay-S*.38,5,2.6,-.6,0,Math.PI*2);ctx.fill();
+      /* snake */
+      const t=st==='play'?clamp(acc/stepT,0,1):1;
+      const pts=sn.map((s,i)=>{const o=(st==='play'&&old[i])?old[i]:s;return {x:lerp(o.x,s.x,t)*S+S/2,y:lerp(o.y,s.y,t)*S+OY+S/2}});
+      for(let i=pts.length-1;i>=0;i--){
+        const k=i/Math.max(1,pts.length-1),r=S*.46*(1-k*.25);
+        ctx.fillStyle='hsl('+(160-k*40)+',80%,'+(52-k*14)+'%)';
+        if(i<pts.length-1){ctx.strokeStyle=ctx.fillStyle;ctx.lineWidth=r*1.7;ctx.lineCap='round';ctx.beginPath();ctx.moveTo(pts[i].x,pts[i].y);ctx.lineTo(pts[i+1].x,pts[i+1].y);ctx.stroke()}
+        circ(pts[i].x,pts[i].y,r,ctx.fillStyle);
+      }
+      const hd=pts[0],dx=dir.x,dy=dir.y,px=-dy,py=dx;
+      circ(hd.x+dx*4+px*5,hd.y+dy*4+py*5,4.2,'#fff');circ(hd.x+dx*4-px*5,hd.y+dy*4-py*5,4.2,'#fff');
+      circ(hd.x+dx*5.5+px*5,hd.y+dy*5.5+py*5,2,'#0b1d3a');circ(hd.x+dx*5.5-px*5,hd.y+dy*5.5-py*5,2,'#0b1d3a');
+      drawFx();
+      ctx.fillStyle='rgba(6,12,32,.55)';rr(W-86,14,72,34,17);ctx.fill();txt(String(score),W-50,31,22,'#fff','center','900');
+      if(st==='ready')overlay('Snake','Swipe or use arrow keys','Tap to start');
+      if(st==='over')overlay('Game over','Score '+score,'Tap to play again');
+    };
+    return G;
+  })();
+
+  /* ======================================================================
+     FLAP
+     ====================================================================== */
+  const flap=(function(){
+    const G={name:'flap',title:'Flap',help:'Tap, click or press space to flap. Fly through the gaps without touching a pipe or the ground.'};
+    const GY=560,BX=130,BR=15,GAP=168;
+    let y,vy,pipes,score,st,spawn,dist,clock,deadT,clouds;
+    G.reset=function(){y=300;vy=0;pipes=[];score=0;st='ready';spawn=.9;dist=0;clock=0;deadT=0;fx.length=0;clouds=[];for(let i=0;i<5;i++)clouds.push({x:rnd(0,W),y:rnd(60,300),s:rnd(.6,1.3)})};
+    function go(){if(st==='ready'){st='play';vy=-380}else if(st==='play'){vy=-380}else if(st==='over'&&deadT>.55){G.reset()}}
+    G.tap=go;G.down=go;
+    G.key=function(k){if(k===' '||k==='ArrowUp'||k==='Enter'){go();return true}return false};
+    G.update=function(dt){
+      clock+=dt;updFx(dt);
+      clouds.forEach(c=>{c.x-=(st==='over'?0:12)*c.s*dt;if(c.x<-80)c.x=W+60});
+      if(st==='ready'){y=300+Math.sin(clock*4)*8;return}
+      if(st==='over'){deadT+=dt;if(y<GY-BR){vy+=1500*dt;y+=vy*dt;if(y>GY-BR)y=GY-BR}return}
+      vy+=1250*dt;y+=vy*dt;dist+=170*dt;
+      spawn-=dt;if(spawn<=0){spawn=1.45;pipes.push({x:W+40,gy:rnd(170,GY-GAP/2-60),ok:false})}
+      pipes.forEach(p=>p.x-=170*dt);
+      while(pipes.length&&pipes[0].x<-80)pipes.shift();
+      pipes.forEach(p=>{if(!p.ok&&p.x+30<BX){p.ok=true;score++;burst(BX,y,8,['#ffd166','#fff'],120,200)}});
+      let hit=y+BR>=GY||y-BR<=0;
+      pipes.forEach(p=>{if(BX+BR>p.x-30&&BX-BR<p.x+30){if(y-BR*.8<p.gy-GAP/2||y+BR*.8>p.gy+GAP/2)hit=true}});
+      if(hit){st='over';deadT=0;vy=-200;burst(BX,y,30,['#ffd166','#ff9f1c','#fff'],240);const b=getBest('flap');if(score>b)setBest('flap',score)}
+    };
+    G.score=function(){return score};
+    function pipe(x,top,bottom){
+      const g=ctx.createLinearGradient(x-30,0,x+30,0);g.addColorStop(0,'#2a9d4a');g.addColorStop(.5,'#67d97f');g.addColorStop(1,'#1f7a3a');ctx.fillStyle=g;
+      ctx.fillRect(x-26,0,52,top-18);rr(x-32,top-26,64,26,6);ctx.fill();
+      ctx.fillRect(x-26,bottom+18,52,GY-bottom-18);rr(x-32,bottom,64,26,6);ctx.fill();
+    }
+    G.draw=function(){
+      let g=ctx.createLinearGradient(0,0,0,GY);g.addColorStop(0,'#4cc9f0');g.addColorStop(1,'#bdeeff');ctx.fillStyle=g;ctx.fillRect(0,0,W,H);
+      clouds.forEach(c=>{ctx.fillStyle='rgba(255,255,255,.85)';[[0,0,26],[24,6,20],[-24,8,18],[44,12,14]].forEach(a=>{ctx.beginPath();ctx.arc(c.x+a[0]*c.s,c.y+a[1]*c.s,a[2]*c.s,0,Math.PI*2);ctx.fill()})});
+      pipes.forEach(p=>pipe(p.x,p.gy-GAP/2,p.gy+GAP/2));
+      ctx.fillStyle='#d9b15c';ctx.fillRect(0,GY,W,H-GY);ctx.fillStyle='#7bd24e';ctx.fillRect(0,GY,W,14);
+      ctx.fillStyle='rgba(0,0,0,.08)';const off=(dist%40);for(let x=-40;x<W+40;x+=40){ctx.beginPath();ctx.moveTo(x-off,GY+14);ctx.lineTo(x-off+20,GY+14);ctx.lineTo(x-off+6,GY+30);ctx.lineTo(x-off-14,GY+30);ctx.fill()}
+      /* bird */
+      const rot=clamp(vy/600,-.5,1.1);
+      ctx.save();ctx.translate(BX,y);ctx.rotate(st==='over'?1.2:rot);
+      circ(0,0,BR,'#ffd23f');ctx.fillStyle='#ff9f1c';ctx.beginPath();ctx.ellipse(-3,5,9,6,0,0,Math.PI*2);ctx.fill();
+      const wing=Math.sin(clock*(st==='play'?22:10))*7;
+      ctx.fillStyle='#f4a300';ctx.beginPath();ctx.ellipse(-4,3+wing*.4,10,5+Math.abs(wing)*.3,-.4,0,Math.PI*2);ctx.fill();
+      circ(6,-5,6,'#fff');circ(8,-5,3,'#1b1b1b');
+      ctx.fillStyle='#ff6b35';ctx.beginPath();ctx.moveTo(13,0);ctx.lineTo(24,3);ctx.lineTo(13,7);ctx.closePath();ctx.fill();
+      ctx.restore();
+      drawFx();
+      txt(String(score),W/2,70,64,'#fff','center','900');
+      if(st==='ready')overlay('Flap','Tap to flap','Fly through the gaps');
+      if(st==='over'&&deadT>.4)overlay('Game over','Score '+score,'Tap to try again');
+    };
+    return G;
+  })();
+
+  /* ======================================================================
+     BREAKOUT
+     ====================================================================== */
+  const brick=(function(){
+    const G={name:'breakout',title:'Breakout',help:'Move your finger or mouse to slide the paddle. Bounce the ball to break every brick. You have 3 lives.'};
+    const PY=596,PW0=96,BR=8,COLS=8,ROWS=6,BW=54,BH=22;
+    let px,pw,ball,bricks,lives,score,st,lvl,clock,spd;
+    function build(){bricks=[];const cs=['#ff5a5f','#ff9f1c','#ffd166','#06d6a0','#4cc9f0','#7c5cff'];for(let r=0;r<ROWS;r++)for(let c=0;c<COLS;c++)bricks.push({x:12+c*(BW+3.5),y:88+r*(BH+5),c:cs[r],alive:true})}
+    function serve(){ball={x:px,y:PY-BR-2,vx:0,vy:0,stuck:true}}
+    G.reset=function(){px=W/2;pw=PW0;lives=3;score=0;st='ready';lvl=1;spd=340;clock=0;fx.length=0;build();serve()};
+    function launch(){if(ball.stuck){ball.stuck=false;const a=rnd(-.4,.4);ball.vx=Math.sin(a)*spd;ball.vy=-Math.cos(a)*spd}}
+    G.tap=function(){if(st==='ready'){st='play';launch()}else if(st==='play'){launch()}else if(st==='over'||st==='won'){if(st==='won'){lvl++;spd=Math.min(560,spd+40);build();serve();st='play'}else G.reset()}};
+    G.down=G.tap;
+    G.move=function(x){px=clamp(x,pw/2+4,W-pw/2-4);if(ball&&ball.stuck)ball.x=px};
+    G.key=function(k){if(k==='ArrowLeft'||k==='a'){G.move(px-40);return true}if(k==='ArrowRight'||k==='d'){G.move(px+40);return true}if(k===' '||k==='Enter'){G.tap();return true}return false};
+    G.update=function(dt){
+      clock+=dt;updFx(dt);
+      if(st!=='play')return;
+      if(ball.stuck){ball.x=px;return}
+      const steps=3;
+      for(let s=0;s<steps;s++){
+        ball.x+=ball.vx*dt/steps;ball.y+=ball.vy*dt/steps;
+        if(ball.x<BR){ball.x=BR;ball.vx=Math.abs(ball.vx)}
+        if(ball.x>W-BR){ball.x=W-BR;ball.vx=-Math.abs(ball.vx)}
+        if(ball.y<BR+4){ball.y=BR+4;ball.vy=Math.abs(ball.vy)}
+        if(ball.vy>0&&ball.y+BR>=PY&&ball.y+BR<=PY+16&&ball.x>=px-pw/2-BR&&ball.x<=px+pw/2+BR){
+          const k=clamp((ball.x-px)/(pw/2),-1,1),a=k*1.05,v=Math.min(620,Math.hypot(ball.vx,ball.vy)*1.01+1);
+          ball.vx=Math.sin(a)*v;ball.vy=-Math.cos(a)*v;ball.y=PY-BR;
+        }
+        for(const b of bricks){
+          if(!b.alive)continue;
+          if(ball.x+BR>b.x&&ball.x-BR<b.x+BW&&ball.y+BR>b.y&&ball.y-BR<b.y+BH){
+            b.alive=false;score+=10*lvl;burst(b.x+BW/2,b.y+BH/2,10,[b.c,'#fff'],150,300);
+            const ox=Math.min(ball.x+BR-b.x,b.x+BW-(ball.x-BR)),oy=Math.min(ball.y+BR-b.y,b.y+BH-(ball.y-BR));
+            if(ox<oy)ball.vx=-ball.vx;else ball.vy=-ball.vy;
+            break;
+          }
+        }
+      }
+      if(ball.y>H+20){
+        lives--;
+        if(lives<=0){st='over';const b=getBest('breakout');if(score>b)setBest('breakout',score)}
+        else{serve()}
+      }
+      if(!bricks.some(b=>b.alive)){st='won';burst(W/2,200,60,['#ffd166','#4cc9f0','#ff5a5f','#06d6a0'],300)}
+    };
+    G.score=function(){return score};
+    G.draw=function(){
+      let g=ctx.createLinearGradient(0,0,0,H);g.addColorStop(0,'#160f3a');g.addColorStop(1,'#0a0a24');ctx.fillStyle=g;ctx.fillRect(0,0,W,H);
+      for(let i=0;i<30;i++){const x=(i*97)%W,y=(i*53+clock*10*(1+i%3))%H;ctx.fillStyle='rgba(255,255,255,'+(.15+(i%4)*.06)+')';ctx.fillRect(x,y,2,2)}
+      bricks.forEach(b=>{if(!b.alive)return;ctx.fillStyle=b.c;rr(b.x,b.y,BW,BH,6);ctx.fill();ctx.fillStyle='rgba(255,255,255,.28)';rr(b.x+3,b.y+3,BW-6,6,3);ctx.fill()});
+      /* paddle */
+      g=ctx.createLinearGradient(0,PY,0,PY+14);g.addColorStop(0,'#9fb0ff');g.addColorStop(1,'#4c5fd1');ctx.fillStyle=g;rr(px-pw/2,PY,pw,14,7);ctx.fill();
+      /* ball */
+      ctx.fillStyle='rgba(255,255,255,.18)';ctx.beginPath();ctx.arc(ball.x,ball.y,BR*1.9,0,Math.PI*2);ctx.fill();circ(ball.x,ball.y,BR,'#fff');
+      drawFx();
+      txt('Score '+score,14,30,20,'#fff','left','800');
+      for(let i=0;i<3;i++)circ(W-24-i*22,30,7,i<lives?'#ff5a5f':'rgba(255,255,255,.2)');
+      txt('Level '+lvl,W/2,30,16,'#a9b4ee','center','700');
+      if(st==='ready')overlay('Breakout','Slide to move the paddle','Tap to launch the ball');
+      if(st==='over')overlay('Game over','Score '+score,'Tap to play again');
+      if(st==='won')overlay('Level cleared!','Score '+score,'Tap for the next level');
+      if(st==='play'&&ball.stuck)txt('Tap to launch',W/2,PY-44,18,'rgba(255,255,255,.85)','center','800');
+    };
+    return G;
+  })();
+
+  /* ======================================================================
+     MORE GAMES: Tic-Tac-Toe, Connect 4, 2048, Memory
+     ====================================================================== */
+  function gbg(){const g=ctx.createLinearGradient(0,0,0,H);g.addColorStop(0,'#10173f');g.addColorStop(1,'#070b25');ctx.fillStyle=g;ctx.fillRect(0,0,W,H)}
+  function gbtn(x,y,w,h,label){ctx.fillStyle='rgba(124,92,255,.35)';rr(x,y,w,h,h/2);ctx.fill();ctx.strokeStyle='rgba(255,255,255,.35)';ctx.lineWidth=1.5;rr(x,y,w,h,h/2);ctx.stroke();txt(label,x+w/2,y+h/2+1,15,'#fff','center','700')}
+  const bestSet=(n,v)=>{if(v>getBest(n))setBest(n,v)};
+  const modeStore=(k)=>{try{return localStorage.getItem(k)==='two'?'two':'cpu'}catch(e){return 'cpu'}};
+  const modeSave=(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}};
+  const pickI=a=>a[Math.floor(Math.random()*a.length)];
+
+  /* ---------------- TIC-TAC-TOE ---------------- */
+  const ttt=(function(){
+    const G={name:'tictactoe',title:'Tic-Tac-Toe',
+      get help(){return mode==='two'
+        ?'2 Players: X goes first, then O. Tap a square to place your mark. Three in a row wins. Tap the top left button to play the computer.'
+        :'You are X and the computer is O. Tap a square to place your X. Three in a row wins. The computer sometimes slips, so you can win. Tap the top left button to play a friend.'}};
+    const LN=[[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+    const BX=60,BY=170,CS=120;
+    let mode=modeStore('oqtttmode'),b,turn,over,msg,wins=0,line=null,aiT=0;
+    const winner=bd=>{for(const l of LN)if(bd[l[0]]&&bd[l[0]]===bd[l[1]]&&bd[l[0]]===bd[l[2]])return l;return null};
+    function mm(bd,p){const w=winner(bd);if(w)return bd[w[0]]==='O'?1:-1;if(bd.every(x=>x))return 0;let best=p==='O'?-2:2;for(let i=0;i<9;i++)if(!bd[i]){bd[i]=p;const v=mm(bd,p==='O'?'X':'O');bd[i]=null;if(p==='O'?v>best:v<best)best=v}return best}
+    function aiPick(){
+      const e=[];for(let i=0;i<9;i++)if(!b[i])e.push(i);
+      if(Math.random()<.2)return pickI(e);
+      let best=-2,mv=[];
+      for(const i of e){b[i]='O';const v=mm(b,'X');b[i]=null;if(v>best){best=v;mv=[i]}else if(v===best)mv.push(i)}
+      return pickI(mv);
+    }
+    function round(){b=Array(9).fill(null);turn='X';over=false;line=null;aiT=0;msg=mode==='two'?'X to move':'Your move';fx.length=0}
+    function place(i){
+      b[i]=turn;const w=winner(b);
+      if(w){
+        over=true;line=w;
+        if(mode==='two')msg=turn+' wins!';
+        else if(turn==='X'){msg='You win!';wins++;bestSet('tictactoe',wins)}
+        else msg='Computer wins';
+        const c=w[1];burst(BX+(c%3)*CS+CS/2,BY+Math.floor(c/3)*CS+CS/2,28,['#7CFFD0','#ffd166','#fff'],220,300);
+        return;
+      }
+      if(b.every(x=>x)){over=true;msg='Draw';return}
+      turn=turn==='X'?'O':'X';
+      if(mode==='two')msg=turn+' to move';
+      else if(turn==='O'){msg='Computer is thinking...';aiT=.45}
+      else msg='Your move';
+    }
+    function setMode(m){mode=m;modeSave('oqtttmode',m);wins=0;round();const h=document.getElementById('ghelp');if(h)h.textContent=G.help}
+    G.reset=()=>{wins=0;round()};
+    G.score=()=>mode==='cpu'?wins:0;
+    G.update=dt=>{updFx(dt);if(aiT>0){aiT-=dt;if(aiT<=0&&!over&&mode==='cpu'&&turn==='O')place(aiPick())}};
+    G.tap=(x,y)=>{
+      if(x<150&&y<60){setMode(mode==='cpu'?'two':'cpu');return}
+      if(over){round();return}
+      if(mode==='cpu'&&turn!=='X')return;
+      const c=Math.floor((x-BX)/CS),r=Math.floor((y-BY)/CS);
+      if(c<0||c>2||r<0||r>2||b[r*3+c])return;
+      place(r*3+c);
+    };
+    G.draw=()=>{
+      gbg();txt('Tic-Tac-Toe',W/2,34,26,'#fff');
+      gbtn(12,14,126,32,mode==='two'?'2 Players':'vs Computer');
+      txt(msg,W/2,100,20,over?'#ffd166':'#7CFFD0','center','700');
+      ctx.strokeStyle='#5b6bb8';ctx.lineWidth=6;ctx.lineCap='round';
+      for(let i=1;i<3;i++){ctx.beginPath();ctx.moveTo(BX+i*CS,BY+8);ctx.lineTo(BX+i*CS,BY+3*CS-8);ctx.stroke();ctx.beginPath();ctx.moveTo(BX+8,BY+i*CS);ctx.lineTo(BX+3*CS-8,BY+i*CS);ctx.stroke()}
+      for(let i=0;i<9;i++){
+        if(!b[i])continue;
+        const cx=BX+(i%3)*CS+CS/2,cy=BY+Math.floor(i/3)*CS+CS/2,hot=line&&line.indexOf(i)>=0;
+        ctx.lineWidth=11;
+        if(b[i]==='X'){ctx.strokeStyle=hot?'#ffd166':'#7CFFD0';ctx.beginPath();ctx.moveTo(cx-30,cy-30);ctx.lineTo(cx+30,cy+30);ctx.moveTo(cx+30,cy-30);ctx.lineTo(cx-30,cy+30);ctx.stroke()}
+        else{ctx.strokeStyle=hot?'#ffd166':'#ff7aa8';ctx.beginPath();ctx.arc(cx,cy,32,0,Math.PI*2);ctx.stroke()}
+      }
+      ctx.lineCap='butt';
+      drawFx();
+      txt(mode==='cpu'?'Wins this session: '+wins:'Pass the device between turns',W/2,BY+3*CS+40,16,'#a9b4ee','center','600');
+      if(over)txt('Tap to play again',W/2,BY+3*CS+72,16,'#dfe4ff','center','700');
+    };
+    round();
+    return G;
+  })();
+
+  /* ---------------- CONNECT 4 ---------------- */
+  const c4=(function(){
+    const G={name:'connect4',title:'Connect 4',
+      get help(){return mode==='two'
+        ?'2 Players: Red goes first, then Yellow. Tap a column to drop your disc. Get four in a row to win. Tap the top left button to play the computer.'
+        :'You are Red and the computer is Yellow. Tap a column to drop your disc. Get four in a row in any direction to win. Tap the top left button to play a friend.'}};
+    const R=6,C=7,CW=62,BX=23,BY=150,ORDER=[3,2,4,1,5,0,6];
+    let mode=modeStore('oqc4mode'),b,turn,over,msg,wins=0,win=null,anim=null,pend=null,aiT=0;
+    const dropRow=(bd,c)=>{for(let r=R-1;r>=0;r--)if(!bd[r*C+c])return r;return -1};
+    function check(bd,p){
+      for(let r=0;r<R;r++)for(let c=0;c<C;c++){
+        if(bd[r*C+c]!==p)continue;
+        for(const[dr,dc]of[[0,1],[1,0],[1,1],[1,-1]]){
+          const cells=[];
+          for(let k=0;k<4;k++){const rr2=r+dr*k,cc=c+dc*k;if(rr2<0||rr2>=R||cc<0||cc>=C||bd[rr2*C+cc]!==p)break;cells.push(rr2*C+cc)}
+          if(cells.length===4)return cells;
+        }
+      }
+      return null;
+    }
+    function heur(bd){
+      let s=0;
+      for(let r=0;r<R;r++)if(bd[r*C+3]===2)s+=3;
+      const win4=(r,c,dr,dc)=>{
+        let a=0,o=0,e=0;
+        for(let k=0;k<4;k++){const v=bd[(r+dr*k)*C+c+dc*k];if(v===2)a++;else if(v===1)o++;else e++}
+        if(a===3&&e===1)s+=5;else if(a===2&&e===2)s+=2;
+        if(o===3&&e===1)s-=6;
+      };
+      for(let r=0;r<R;r++)for(let c=0;c<C;c++){
+        if(c+3<C)win4(r,c,0,1);
+        if(r+3<R)win4(r,c,1,0);
+        if(r+3<R&&c+3<C)win4(r,c,1,1);
+        if(r+3<R&&c-3>=0)win4(r,c,1,-1);
+      }
+      return s;
+    }
+    function mm(bd,d,al,be,maxing){
+      if(check(bd,2))return 100000+d;
+      if(check(bd,1))return -100000-d;
+      if(d===0||bd.every(x=>x))return d===0?heur(bd):0;
+      if(maxing){let best=-1e9;for(const c of ORDER){const r=dropRow(bd,c);if(r<0)continue;bd[r*C+c]=2;const v=mm(bd,d-1,al,be,false);bd[r*C+c]=0;if(v>best)best=v;al=Math.max(al,v);if(al>=be)break}return best}
+      let best=1e9;for(const c of ORDER){const r=dropRow(bd,c);if(r<0)continue;bd[r*C+c]=1;const v=mm(bd,d-1,al,be,true);bd[r*C+c]=0;if(v<best)best=v;be=Math.min(be,v);if(al>=be)break}return best;
+    }
+    function aiCol(){
+      const cols=ORDER.filter(c=>dropRow(b,c)>=0);
+      if(Math.random()<.08)return pickI(cols);
+      let best=-1e9,mv=[];
+      for(const c of cols){const r=dropRow(b,c);b[r*C+c]=2;const v=mm(b,4,-1e9,1e9,false)+Math.random()*.5;b[r*C+c]=0;if(v>best){best=v;mv=[c]}}
+      return mv[0];
+    }
+    const name=p=>mode==='two'?(p===1?'Red':'Yellow'):(p===1?'You':'Computer');
+    function round(){b=Array(R*C).fill(0);turn=1;over=false;win=null;anim=null;pend=null;aiT=0;msg=mode==='two'?'Red to move':'Your move';fx.length=0}
+    function play(c){
+      const r=dropRow(b,c);if(r<0)return;
+      b[r*C+c]=turn;
+      anim={idx:r*C+c,t:0,dur:.12+.05*(r+1),c,r,p:turn};
+      pend=()=>{
+        const w=check(b,turn);
+        if(w){
+          over=true;win=w;
+          if(mode==='two')msg=(turn===1?'Red':'Yellow')+' wins!';
+          else if(turn===1){msg='You win!';wins++;bestSet('connect4',wins)}
+          else msg='Computer wins';
+          const i=w[1];burst(BX+(i%C)*CW+CW/2,BY+Math.floor(i/C)*CW+CW/2,28,['#ffd166','#fff','#7CFFD0'],220,300);
+          return;
+        }
+        if(b.every(x=>x)){over=true;msg='Draw';return}
+        turn=3-turn;
+        if(mode==='two')msg=(turn===1?'Red':'Yellow')+' to move';
+        else if(turn===2){msg='Computer is thinking...';aiT=.4}
+        else msg='Your move';
+      };
+    }
+    function setMode(m){mode=m;modeSave('oqc4mode',m);wins=0;round();const h=document.getElementById('ghelp');if(h)h.textContent=G.help}
+    G.reset=()=>{wins=0;round()};
+    G.score=()=>mode==='cpu'?wins:0;
+    G.update=dt=>{
+      updFx(dt);
+      if(anim){anim.t+=dt;if(anim.t>=anim.dur){anim=null;const f=pend;pend=null;if(f)f()}}
+      else if(aiT>0){aiT-=dt;if(aiT<=0&&!over&&mode==='cpu'&&turn===2)play(aiCol())}
+    };
+    G.tap=(x,y)=>{
+      if(x<150&&y<60){setMode(mode==='cpu'?'two':'cpu');return}
+      if(over){round();return}
+      if(anim||pend||aiT>0)return;
+      if(mode==='cpu'&&turn!==1)return;
+      const c=Math.floor((x-BX)/CW);if(c<0||c>=C)return;
+      play(c);
+    };
+    G.draw=()=>{
+      gbg();txt('Connect 4',W/2,34,26,'#fff');
+      gbtn(12,14,126,32,mode==='two'?'2 Players':'vs Computer');
+      txt(msg,W/2,100,19,over?'#ffd166':'#7CFFD0','center','700');
+      ctx.fillStyle='#2b3a9e';rr(BX-8,BY-8,C*CW+16,R*CW+16,18);ctx.fill();
+      for(let r=0;r<R;r++)for(let c=0;c<C;c++){
+        const i=r*C+c,x=BX+c*CW+CW/2,y=BY+r*CW+CW/2,v=b[i];
+        if(anim&&anim.idx===i){circ(x,y,CW/2-6,'#0a1038');continue}
+        const hot=win&&win.indexOf(i)>=0;
+        circ(x,y,CW/2-6,v===1?'#ff5a5f':v===2?'#ffd166':'#0a1038');
+        if(hot){ctx.strokeStyle='#fff';ctx.lineWidth=4;ctx.beginPath();ctx.arc(x,y,CW/2-6,0,Math.PI*2);ctx.stroke()}
+      }
+      if(anim){const k=anim.t/anim.dur,x=BX+anim.c*CW+CW/2,y0=BY-CW/2,y1=BY+anim.r*CW+CW/2,y=y0+(y1-y0)*k*k;circ(x,y,CW/2-6,anim.p===1?'#ff5a5f':'#ffd166')}
+      drawFx();
+      txt(mode==='cpu'?'Wins this session: '+wins:'Pass the device between turns',W/2,BY+R*CW+36,16,'#a9b4ee','center','600');
+      if(over)txt('Tap to play again',W/2,BY+R*CW+66,16,'#dfe4ff','center','700');
+    };
+    round();
+    return G;
+  })();
+
+  /* ---------------- 2048 ---------------- */
+  const g2048=(function(){
+    const G={name:'2048',title:'2048',help:'Swipe on the board (or use the arrow keys or W A S D) to slide all tiles. Equal tiles merge into one. Reach 2048, then keep going for a higher score.'};
+    const BX=36,BY=150,TS=92,GP=8;
+    const COL={0:'#232c75',2:'#dfe4ff',4:'#c9d2ff',8:'#ffb86b',16:'#ff9a4d',32:'#ff7a59',64:'#ff5a5f',128:'#ffd166',256:'#f7c948',512:'#7CFFD0',1024:'#5ee0b0',2048:'#7c5cff'};
+    let b,score,over,won,msg,sx,sy,lx,ly,sdown,born;
+    function spawn(){const e=[];for(let i=0;i<16;i++)if(!b[i])e.push(i);if(!e.length)return;const i=pickI(e);b[i]=Math.random()<.9?2:4;born={i,t:0}}
+    function slide(vals){
+      const a=vals.filter(v=>v),out=[];let gain=0;
+      for(let i=0;i<a.length;i++){if(a[i]===a[i+1]){out.push(a[i]*2);gain+=a[i]*2;i++}else out.push(a[i])}
+      while(out.length<4)out.push(0);
+      return {out,gain};
+    }
+    function idxs(d,i){
+      if(d===0)return [i*4,i*4+1,i*4+2,i*4+3];
+      if(d===1)return [i*4+3,i*4+2,i*4+1,i*4];
+      if(d===2)return [i,i+4,i+8,i+12];
+      return [i+12,i+8,i+4,i];
+    }
+    function stuck(){
+      for(let i=0;i<16;i++){if(!b[i])return false;if((i&3)<3&&b[i]===b[i+1])return false;if(i<12&&b[i]===b[i+4])return false}
+      return true;
+    }
+    function move(d){
+      if(over)return false;
+      let moved=false,gain=0;
+      for(let i=0;i<4;i++){
+        const ix=idxs(d,i),{out,gain:g}=slide(ix.map(k=>b[k]));
+        for(let k=0;k<4;k++){if(b[ix[k]]!==out[k])moved=true;b[ix[k]]=out[k]}
+        gain+=g;
+      }
+      if(!moved)return false;
+      score+=gain;bestSet('2048',score);
+      if(!won&&b.some(v=>v>=2048)){won=true;msg='You made 2048! Keep going';burst(W/2,300,40,['#7c5cff','#7CFFD0','#ffd166','#fff'],260,300)}
+      spawn();
+      if(stuck()){over=true;msg='No moves left'}
+      return true;
+    }
+    G.reset=()=>{b=Array(16).fill(0);score=0;over=false;won=false;msg='Join the tiles';sdown=false;born=null;fx.length=0;spawn();spawn()};
+    G.score=()=>score;
+    G.update=dt=>{updFx(dt);if(born){born.t+=dt;if(born.t>.2)born=null}};
+    G.down=(x,y)=>{if(over){G.reset();return}sx=lx=x;sy=ly=y;sdown=true};
+    G.move=(x,y)=>{lx=x;ly=y};
+    G.up=()=>{
+      if(!sdown)return;sdown=false;
+      const dx=lx-sx,dy=ly-sy;
+      if(Math.max(Math.abs(dx),Math.abs(dy))<24)return;
+      move(Math.abs(dx)>Math.abs(dy)?(dx<0?0:1):(dy<0?2:3));
+    };
+    G.tap=()=>{};
+    G.key=k=>{
+      const m={ArrowLeft:0,a:0,A:0,ArrowRight:1,d:1,D:1,ArrowUp:2,w:2,W:2,ArrowDown:3,s:3,S:3}[k];
+      if(m===undefined)return false;
+      if(over)return true;
+      move(m);return true;
+    };
+    G.draw=()=>{
+      gbg();txt('2048',W/2,34,26,'#fff');
+      txt(msg,W/2,80,18,over?'#ffd166':'#7CFFD0','center','700');
+      ctx.fillStyle='#161d57';rr(BX,BY,4*TS+5*GP,4*TS+5*GP,16);ctx.fill();
+      for(let i=0;i<16;i++){
+        const x=BX+GP+(i&3)*(TS+GP),y=BY+GP+(i>>2)*(TS+GP),v=b[i];
+        let s=1;if(born&&born.i===i)s=.4+.6*Math.min(1,born.t/.2);
+        const w=TS*s,o=(TS-w)/2;
+        ctx.fillStyle=COL[v]||'#7c5cff';rr(x+o,y+o,w,w,10);ctx.fill();
+        if(v)txt(String(v),x+TS/2,y+TS/2+2,(v<100?38:v<1000?32:26)*s,v<=4?'#1a2150':'#fff');
+      }
+      drawFx();
+      txt('Swipe to move the tiles',W/2,BY+4*TS+5*GP+34,16,'#a9b4ee','center','600');
+      if(over)overlay('Game over','Score '+score,'Tap to play again');
+    };
+    G.reset();
+    return G;
+  })();
+
+  /* ---------------- MEMORY MATCH ---------------- */
+  const mem=(function(){
+    const G={name:'memory',title:'Memory',help:'Tap two cards to turn them over. If they match, they stay face up. Find all 8 pairs in as few tries as you can.'};
+    const EM=['🍎','🚀','🐱','⚽','🎸','🌈','🐳','🍕'];
+    const BX=25,BY=150,CS=100,GP=10;
+    let cards,first,pend,lock,moves,pairs,over,msg;
+    const finalBonus=()=>over?Math.max(0,400-moves*20):0;
+    G.reset=()=>{
+      const a=[];EM.forEach(e=>{a.push(e,e)});
+      for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]}
+      cards=a.map(e=>({e,up:false,done:false}));first=-1;pend=null;lock=0;moves=0;pairs=0;over=false;msg='Find the pairs';fx.length=0;
+    };
+    G.score=()=>pairs*100+finalBonus();
+    G.update=dt=>{updFx(dt);if(lock>0){lock-=dt;if(lock<=0&&pend){cards[pend[0]].up=false;cards[pend[1]].up=false;pend=null}}};
+    G.tap=(x,y)=>{
+      if(over){G.reset();return}
+      if(lock>0)return;
+      const c=Math.floor((x-BX)/(CS+GP)),r=Math.floor((y-BY)/(CS+GP));
+      if(c<0||c>3||r<0||r>3)return;
+      const i=r*4+c,cd=cards[i];
+      if(cd.up||cd.done)return;
+      cd.up=true;
+      if(first<0){first=i;return}
+      moves++;
+      const a=cards[first];
+      if(a.e===cd.e){
+        a.done=cd.done=true;pairs++;
+        for(const k of[first,i])burst(BX+(k&3)*(CS+GP)+CS/2,BY+(k>>2)*(CS+GP)+CS/2,14,['#7CFFD0','#ffd166','#fff'],180,300);
+        first=-1;
+        if(pairs===8){over=true;msg='All pairs found in '+moves+' tries!';bestSet('memory',G.score())}
+      }else{pend=[first,i];first=-1;lock=.7}
+    };
+    G.draw=()=>{
+      gbg();txt('Memory',W/2,34,26,'#fff');
+      txt(over?msg:'Tries: '+moves+'   Pairs: '+pairs+'/8',W/2,90,19,over?'#ffd166':'#7CFFD0','center','700');
+      for(let i=0;i<16;i++){
+        const x=BX+(i&3)*(CS+GP),y=BY+(i>>2)*(CS+GP),cd=cards[i];
+        if(cd.up||cd.done){
+          ctx.fillStyle=cd.done?'#2e8f77':'#dfe4ff';rr(x,y,CS,CS,14);ctx.fill();
+          ctx.font='48px "Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillStyle='#000';ctx.fillText(cd.e,x+CS/2,y+CS/2+3);
+        }else{
+          ctx.fillStyle='#5b6bb8';rr(x,y,CS,CS,14);ctx.fill();
+          ctx.strokeStyle='rgba(255,255,255,.25)';ctx.lineWidth=2;rr(x+6,y+6,CS-12,CS-12,10);ctx.stroke();
+          txt('?',x+CS/2,y+CS/2+2,36,'rgba(255,255,255,.7)');
+        }
+      }
+      drawFx();
+      txt('Fewer tries gives a bigger bonus',W/2,BY+4*(CS+GP)+30,15,'#a9b4ee','center','600');
+      if(over)overlay('Well done!','Score '+G.score(),'Tap to play again');
+    };
+    G.reset();
+    return G;
+  })();
+
+  /* ======================================================================
+     runner: picker, input, loop
+     ====================================================================== */
+  const games={chess:chess,snake:snake,flap:flap,breakout:brick,tictactoe:ttt,connect4:c4,'2048':g2048,memory:mem};
+  window.__oqgames=games;
+  let cur=null,last=0;
+  const elHelp=document.getElementById('ghelp'),elScore=document.getElementById('gscore'),elBest=document.getElementById('gbest');
+  function select(n){
+    if(!games[n])n='chess';
+    cur=games[n];cur.reset();
+    root.querySelectorAll('[data-g]').forEach(b=>{const on=b.dataset.g===n;b.classList.toggle('on',on);b.setAttribute('aria-pressed',on)});
+    elHelp.textContent=cur.help;
+    try{localStorage.setItem('oqgame',n)}catch(e){}
+  }
+  root.querySelectorAll('[data-g]').forEach(b=>b.onclick=()=>select(b.dataset.g));
+  document.getElementById('grestart').onclick=()=>{cur.reset()};
+  function pt(e){const r=cv.getBoundingClientRect();return [(e.clientX-r.left)/r.width*W,(e.clientY-r.top)/r.height*H]}
+  let pressed=false;
+  cv.addEventListener('pointerdown',e=>{e.preventDefault();pressed=true;try{cv.setPointerCapture(e.pointerId)}catch(_){}const p=pt(e);if(cur.down)cur.down(p[0],p[1]);else cur.tap(p[0],p[1])});
+  cv.addEventListener('pointermove',e=>{const p=pt(e);if(cur.move)cur.move(p[0],p[1],pressed)});
+  const rel=e=>{pressed=false;if(cur.up)cur.up()};
+  cv.addEventListener('pointerup',rel);cv.addEventListener('pointercancel',rel);
+  cv.addEventListener('contextmenu',e=>e.preventDefault());
+  document.addEventListener('keydown',e=>{
+    if(document.body.dataset.view!=='games')return;
+    if(e.target&&/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName))return;
+    if(cur.key&&cur.key(e.key)){e.preventDefault()}
+  });
+  function frame(t){
+    requestAnimationFrame(frame);
+    const dt=Math.min(.05,(t-last)/1000||0);last=t;
+    if(document.body.dataset.view!=='games'||document.hidden)return;
+    ctx.setTransform(DPR,0,0,DPR,0,0);
+    cur.update(dt);cur.draw();
+    const sc=cur.score(),b=Math.max(getBest(cur.name),sc);
+    elScore.textContent='Score '+sc;elBest.textContent='Best '+b;
+  }
+  let first='chess';try{first=localStorage.getItem('oqgame')||'chess'}catch(e){}
+  select(first);
+  requestAnimationFrame(frame);
 })();
 
 /* ================= saved chats ================= */
@@ -4920,10 +6250,10 @@ async function attach(f,opts){
     if(f.type.startsWith('image/')){
       const d=await shrinkImage(f),doc=await shrinkImage(f,1800,true);att={kind:'image',name:f.name,data:d,doc:doc,thumb:d,solve:!!(opts&&opts.solve)};
     }else if(f.type.startsWith('video/')||ext==='mkv'){
-      if(f.size>300*1048576)throw new Error('That video is over 300 MB. Choose a smaller one.');
+      if(f.size>500*1048576)throw new Error('That video is over 500 MB. Choose a smaller one.');
       const d=await videoGrid(f);att={kind:'video',name:f.name,data:d,thumb:d};
     }else if(ext==='pdf'||f.type==='application/pdf'){
-      if(f.size>20*1048576)throw new Error('That PDF is over 20 MB. Choose a smaller one.');
+      if(f.size>100*1048576)throw new Error('That PDF is over 100 MB. Choose a smaller one.');
       const fd=new FormData();fd.append('file',f);
       const r=await fetch('/readfile',{method:'POST',headers:{'X-Access-Key':localStorage.ak||''},body:fd});
       const j=await r.json().catch(()=>({}));
@@ -5256,7 +6586,7 @@ $('#drawer').setAttribute('aria-hidden','true');
 stats();box.focus();
 
 /* ================= tabs ================= */
-const VIEWS=['chat','code','photo','video','lab','news','music','3d'];
+const VIEWS=['chat','code','photo','video','lab','news','music','3d','games'];
 function showView(v){
   if(!VIEWS.includes(v))v='chat';
   document.body.dataset.view=v;
@@ -5695,7 +7025,7 @@ function dropZone(stage,handler){
 dropZone($('#pstage'),loadPhoto);
 
 /* ================= video ================= */
-const VMAX=2000*1024*1024;
+const VMAX=500*1024*1024;
 let vfmt='mp4',vfile=null,vurl='',vres='';
 const vstatus=m=>$('#vstatus').textContent=m;
 function applyFmt(){
@@ -5706,7 +7036,7 @@ document.querySelectorAll('#vfmt button').forEach(b=>b.onclick=()=>{vfmt=b.datas
 applyFmt();
 function loadVideo(f){
   if(!f)return;
-  if(f.size>VMAX){vstatus('That file is '+(f.size/1048576).toFixed(0)+' MB. The limit is 60 MB.');return}
+  if(f.size>VMAX){vstatus('That file is '+(f.size/1048576).toFixed(0)+' MB. The limit is 500 MB.');return}
   vfile=f;if(vurl)URL.revokeObjectURL(vurl);vurl=URL.createObjectURL(f);
   const v=$('#vsrc');v.src=vurl;v.hidden=false;$('#vdrop').hidden=true;
   $('#vset').disabled=false;$('#vresult').hidden=true;vstatus('');
@@ -7437,7 +8767,7 @@ function playEmbed(src){
 document.querySelector('#embx').onclick=()=>{document.querySelector('#embf').src='about:blank';document.querySelector('#emb').hidden=true};
 mfix.onclick=async()=>{
   if(!lastFile)return;
-  if(lastFile.size>60*1024*1024){mstat.textContent='This file is over 60 MB, the most the converter accepts. Try a shorter clip.';return}
+  if(lastFile.size>500*1024*1024){mstat.textContent='This file is over 500 MB, the most the converter accepts. Try a shorter clip.';return}
   mstat.textContent='Converting for playback. This can take a minute or two...';mfix.disabled=true;
   const go=()=>{const fd=new FormData();fd.append('file',lastFile);fd.append('format','mp4');
     ['start','end'].forEach(k=>fd.append(k,'0'));fd.append('speed','1');fd.append('height','720');
@@ -8285,6 +9615,25 @@ def readfile_route():
     return jsonify(name=f.filename or "file.pdf", text=text[:600000])
 
 
+@app.after_request
+def _scrub_error_responses(resp):
+    """Any JSON error reply from any route: hide AI names, provider links and keys."""
+    try:
+        if resp.status_code >= 400 and resp.mimetype == "application/json" and not resp.direct_passthrough:
+            d = json.loads(resp.get_data(as_text=True))
+            if isinstance(d, dict) and isinstance(d.get("error"), str):
+                d["error"] = hide_ai(d["error"])
+                resp.set_data(json.dumps(d))
+    except Exception:
+        pass
+    return resp
+
+
+@app.errorhandler(500)
+def _err500(e):
+    return jsonify(error="Something went wrong. Please try again."), 500
+
+
 @app.errorhandler(413)
 def too_big(_e):
     return jsonify(error=f"This file is too large. The limit is {MAX_UPLOAD_MB} MB."), 413
@@ -8512,7 +9861,7 @@ LOGIN_PAGE = r"""<!DOCTYPE html>
       <p class="switch" id="switch">New here? <a id="toggle">Create an account</a></p>
 
       <p class="sub" style="font-size:12px;text-align:center;margin:14px 0 0;min-height:0">Chats are saved to your account and the site owner can access them.</p>
-      <a href="/about" style="color:#00d4ff">About</a>, <a href="/terms" style="color:#00d4ff">Terms</a> and <a href="/privacy" style="color:#00d4ff">Privacy</a>
+      <a href="/terms" style="color:#00d4ff">Terms</a> and <a href="/privacy" style="color:#00d4ff">Privacy</a>
 
       <div class="ok" id="ok">
         <svg viewBox="0 0 100 100"><circle cx="50" cy="50" r="41"/><path d="M30 52 L45 66 L71 36"/></svg>
@@ -8717,7 +10066,7 @@ def makevideo_route():
     caps = "no caption" not in low
     motion = bool(re.search(r"(ai|real) motion", low))
     if motion and not os.environ.get("REPLICATE_API_TOKEN", "").strip():
-        return jsonify(error="AI motion needs a REPLICATE_API_TOKEN setting on Render."), 400
+        return jsonify(error=_owner("AI motion is not available right now.", "AI motion needs a REPLICATE_API_TOKEN setting on Render.")), 400
     try:
         n = max(2, min(int(d.get("scenes") or 8), MAX_SCENES))
         secs = max(1, min(int(d.get("secs") or 4), 60))
@@ -8848,7 +10197,7 @@ def editphoto_route():
         return jsonify(error="locked"), 401
     token = os.environ.get("REPLICATE_API_TOKEN", "").strip()
     if not token:
-        return jsonify(error="REPLICATE_API_TOKEN is not set on Render."), 400
+        return jsonify(error=_owner("Photo editing is not available right now.", "REPLICATE_API_TOKEN is not set on Render.")), 400
     d = request.get_json(silent=True) or {}
     prompt = str(d.get("text", "")).strip()[:1000]
     image = str(d.get("image", ""))[:6_000_000]
@@ -8881,7 +10230,7 @@ def editphoto_route():
         return jsonify(image="data:" + ctype + ";base64," + base64.b64encode(data).decode())
     except urllib.error.HTTPError as e:
         print("editphoto failed:", e.code, e.read()[:300])
-        return jsonify(error="Replicate said error %d (check token, billing and model name)." % e.code), 502
+        return jsonify(error=_svc_http_error(e.code, "Photo editing")), 502
     except Exception as e:
         print("editphoto failed:", e)
         return jsonify(error="Could not edit the photo right now."), 500
@@ -8956,7 +10305,7 @@ def thumbnail_route():
             print("thumbnail edit failed:", e)
             note = "Photo editing failed, so the background is a new picture."
     elif image.startswith("data:image/"):
-        note = "REPLICATE_API_TOKEN is not set, so your photo was not used."
+        note = _owner("Your photo was not used.", "REPLICATE_API_TOKEN is not set, so your photo was not used.")
     work = tempfile.mkdtemp(prefix="oq_")
     try:
         if raw is None:
@@ -9044,7 +10393,7 @@ def make3d_route():
     token = os.environ.get("REPLICATE_API_TOKEN", "").strip()
     model = os.environ.get("REPLICATE_3D_MODEL", "").strip()
     if not token or not model:
-        return jsonify(error="AI mesh needs REPLICATE_API_TOKEN and REPLICATE_3D_MODEL (an image-to-3D model that outputs GLB) set on Render."), 400
+        return jsonify(error=_owner("AI mesh is not available right now.", "AI mesh needs REPLICATE_API_TOKEN and REPLICATE_3D_MODEL (an image-to-3D model that outputs GLB) set on Render.")), 400
     work = tempfile.mkdtemp(prefix="oq_")
     try:
         if not image.startswith("data:image/"):
@@ -9059,13 +10408,13 @@ def make3d_route():
         out = _rep_run(model, {key: val}, token)
         url = _find_glb(out)
         if not url:
-            return jsonify(error="That Replicate model did not return a GLB file. Choose a model that outputs GLB."), 502
+            return jsonify(error=_owner("The AI mesh could not make a model from that. Try another picture.", "That Replicate model did not return a GLB file. Choose a model that outputs GLB.")), 502
         with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "DeepOQ/1.0"}), timeout=120) as r:
             data = r.read(30_000_000)
         return jsonify(glb=base64.b64encode(data).decode())
     except urllib.error.HTTPError as e:
         print("make3d failed:", e.code, e.read()[:300])
-        return jsonify(error="Replicate said error %d (check the token, billing, model name and image field name)." % e.code), 502
+        return jsonify(error=_svc_http_error(e.code, "AI mesh")), 502
     except Exception as e:
         print("make3d failed:", e)
         return jsonify(error="Could not make the 3D model right now."), 500
@@ -9265,39 +10614,439 @@ def _legal(title, body):
             "<h1>%s</h1>%s<p><a href='/'>Back to Deep OQ</a></p>" % (title, title, body))
 
 
+_ABOUT_CSS = r"""
+:root{--bg:#0A0E2A;--surface:#141944;--surface2:#1B2158;--ink:#EEF0FF;--ink2:#A3A9D1;--line:#2A3070;--amber:#F2A02E;--teal:#33E6A1;--blue:#2F8CFF;--violet:#7C5CFF}
+*{box-sizing:border-box}html{scroll-behavior:smooth}
+body{margin:0;color:var(--ink);font-family:"Source Serif 4",Georgia,serif;line-height:1.6;-webkit-font-smoothing:antialiased;
+ background:radial-gradient(900px 500px at 15% -10%,rgba(124,92,255,.35),transparent 60%),radial-gradient(800px 480px at 95% 0%,rgba(47,140,255,.28),transparent 55%),radial-gradient(700px 500px at 50% 110%,rgba(51,230,161,.14),transparent 60%),var(--bg);min-height:100vh}
+.ui,h1,h2,h3,.pill,.chip,.btn,.brand{font-family:"Bricolage Grotesque",system-ui,sans-serif}
+.wrap{max-width:1020px;margin:0 auto;padding:22px 20px 60px}
+.top{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:34px}
+.brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:21px;letter-spacing:-.025em;color:var(--ink);text-decoration:none}
+.btn{display:inline-flex;align-items:center;gap:8px;padding:10px 18px;border-radius:999px;font-weight:600;font-size:14px;text-decoration:none;color:var(--ink);border:1px solid var(--line);background:rgba(255,255,255,.04);transition:.2s}
+.btn:hover{background:rgba(255,255,255,.1);transform:translateY(-1px)}
+.btn.pri{background:linear-gradient(135deg,var(--teal),var(--blue));color:#04122b;border-color:transparent}
+.hero{display:grid;grid-template-columns:auto 1fr;gap:30px;align-items:center;padding:34px;border-radius:28px;border:1px solid var(--line);
+ background:linear-gradient(160deg,rgba(255,255,255,.07),rgba(255,255,255,.02));backdrop-filter:blur(8px);box-shadow:0 30px 80px rgba(0,0,0,.35)}
+.avatar{width:132px;height:132px;border-radius:50%;display:grid;place-items:center;font-family:"Bricolage Grotesque",sans-serif;font-weight:800;font-size:46px;letter-spacing:-.04em;color:#04122b;
+ background:conic-gradient(from 210deg,var(--teal),var(--blue),var(--violet),var(--amber),var(--teal));position:relative}
+.avatar img{width:118px;height:118px;border-radius:50%;object-fit:cover;display:block;background:#0e1340}
+.avatar span{width:118px;height:118px;border-radius:50%;display:grid;place-items:center;background:linear-gradient(145deg,#1d2565,#0e1340);color:var(--ink)}
+h1{font-size:clamp(32px,6vw,54px);line-height:1.04;letter-spacing:-.035em;margin:0 0 12px;font-weight:800;background:linear-gradient(90deg,#fff,#b9c2ff);-webkit-background-clip:text;background-clip:text;color:transparent}
+.pill{display:inline-block;padding:6px 14px;border-radius:999px;font-size:13.5px;font-weight:600;color:var(--amber);border:1px solid rgba(242,160,46,.45);background:rgba(242,160,46,.1);margin-bottom:14px}
+.lead{font-size:18.5px;color:#d3d7f5;margin:0;max-width:60ch}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;margin-top:22px}
+@media (max-width:760px){.grid{grid-template-columns:1fr}}
+.card{padding:26px;border-radius:22px;border:1px solid var(--line);background:linear-gradient(180deg,var(--surface),rgba(20,25,68,.55));transition:.25s}
+.card:hover{transform:translateY(-3px);border-color:#3a428f}
+.card.wide{grid-column:1/-1}
+h2{display:flex;align-items:center;gap:10px;font-size:13px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink2);margin:0 0 16px;font-weight:700}
+h2::before{content:"";width:22px;height:3px;border-radius:3px;background:linear-gradient(90deg,var(--teal),var(--blue))}
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip{padding:7px 14px;border-radius:999px;font-size:14px;font-weight:500;background:rgba(124,92,255,.16);border:1px solid rgba(124,92,255,.4);color:#e1dbff}
+.chip.t{background:rgba(51,230,161,.12);border-color:rgba(51,230,161,.4);color:#c8ffe9}
+.group{margin-bottom:16px}.group:last-child{margin-bottom:0}
+.group h3{margin:0 0 8px;font-size:15px;color:var(--ink)}
+.edu{display:flex;gap:14px}.edu .dot{flex:none;width:12px;height:12px;border-radius:50%;margin-top:8px;background:var(--amber);box-shadow:0 0 0 5px rgba(242,160,46,.2)}
+.edu b{font-family:"Bricolage Grotesque",sans-serif;font-size:18px}.edu p{margin:4px 0 0;color:var(--ink2)}
+.projects{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px}
+.proj{padding:18px;border-radius:18px;background:rgba(255,255,255,.04);border:1px solid var(--line);transition:.2s}
+.proj:hover{background:rgba(255,255,255,.08);transform:translateY(-2px)}
+.proj .ic{width:38px;height:38px;border-radius:12px;display:grid;place-items:center;font-family:"Bricolage Grotesque",sans-serif;font-weight:800;color:#04122b;margin-bottom:10px;background:linear-gradient(135deg,var(--amber),#ff7a59)}
+.proj:nth-child(3n+2) .ic{background:linear-gradient(135deg,var(--teal),var(--blue))}.proj:nth-child(3n) .ic{background:linear-gradient(135deg,var(--violet),var(--blue))}
+.proj h3{margin:0 0 4px;font-size:17px}.proj p{margin:0;color:var(--ink2);font-size:15px}
+ol.goals{list-style:none;margin:0;padding:0;counter-reset:g}
+ol.goals li{counter-increment:g;display:flex;gap:14px;align-items:flex-start;padding:12px 0;border-bottom:1px solid var(--line);font-size:17px}
+ol.goals li:last-child{border:0}
+ol.goals li::before{content:counter(g);flex:none;width:30px;height:30px;border-radius:50%;display:grid;place-items:center;font-family:"Bricolage Grotesque",sans-serif;font-weight:700;font-size:14px;background:linear-gradient(135deg,var(--teal),var(--blue));color:#04122b}
+.links{display:flex;flex-wrap:wrap;gap:10px}
+.foot{margin-top:40px;text-align:center;color:var(--ink2);font-size:14px}
+.fade{animation:rise .7s both}.card:nth-child(2){animation-delay:.08s}.card:nth-child(3){animation-delay:.16s}.card:nth-child(4){animation-delay:.24s}
+@keyframes rise{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){.fade{animation:none}*{transition:none!important}}
+@media (max-width:640px){.hero{grid-template-columns:1fr;text-align:center;justify-items:center;padding:26px 20px}.avatar{width:112px;height:112px}.avatar span,.avatar img{width:100px;height:100px}}
+"""
+
+
+def _chips(text, cls=""):
+    return "".join("<span class='chip %s'>%s</span>" % (cls, _html.escape(x.strip())) for x in str(text).split(",") if x.strip())
+
+
+# Built-in photo (used when no photo file is found), so the About page works with deep_oq.py alone.
+_DEFAULT_PHOTO_B64 = (
+    "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"
+)
+
+
+def _creator_photo_path():
+    f = str((CREATOR or {}).get("photo") or "").strip()
+    if not f or "/" in f or "\\" in f or f.startswith("."):
+        return None
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), f)
+    return path if os.path.isfile(path) else None
+
+
+def _has_creator_photo():
+    c = CREATOR or {}
+    if "photo" in c and not str(c.get("photo") or "").strip():  # photo set to "" on purpose: show initials
+        return False
+    return bool(_creator_photo_path() or _DEFAULT_PHOTO_B64)
+
+
+@app.get("/about/photo")
+def about_photo():
+    path = _creator_photo_path()
+    if path:
+        resp = send_file(path)
+    else:
+        import base64 as _b64
+        resp = Response(_b64.b64decode(_DEFAULT_PHOTO_B64), mimetype="image/jpeg")
+    resp.headers["Cache-Control"] = "public, max-age=600"
+    return resp
+
+
 @app.get("/about")
 def about_page():
     c = CREATOR or {}
     e = _html.escape
-    if not c:
-        return _legal("About", "<p>Deep OQ was made by Mayank Kumar Saw.</p>")
-    h = ["<p style='opacity:.75;margin-top:-8px'>%s</p>" % e(c.get("role", ""))] if c.get("role") else []
-    if c.get("about"):
-        h.append("<p>%s</p>" % e(c["about"]))
-    ed = []
-    for x in c.get("education") or []:
-        line = ", ".join(e(x[k]) for k in ("level", "field", "place", "years") if x.get(k))
-        if x.get("note"):
-            line += (". " if line else "") + e(x["note"])
-        if line:
-            ed.append("<li>%s</li>" % line)
-    if ed:
-        h.append("<h2>Education</h2><ul>%s</ul>" % "".join(ed))
-    sk = ["<li><b>%s</b>: %s</li>" % (e(g.get("group", "")), e(g["items"])) for g in c.get("skills") or [] if g.get("items")]
+    name = c.get("name") or "Mayank Kumar Saw"
+    words = [w for w in name.split() if w]
+    initials = (words[0][0] + (words[-1][0] if len(words) > 1 else "")).upper() if words else "M"
+    cards = []
+    if c.get("education"):
+        items = []
+        for x in c["education"]:
+            line = " · ".join(e(x[k]) for k in ("field", "place", "years") if x.get(k))
+            if x.get("level") or line or x.get("note"):
+                items.append("<div class='edu'><div class='dot'></div><div><b>%s</b>%s%s</div></div>" % (
+                    e(x.get("level", "")), "<p>%s</p>" % line if line else "", "<p>%s</p>" % e(x["note"]) if x.get("note") else ""))
+        if items:
+            cards.append("<section class='card fade'><h2>Education</h2>%s</section>" % "".join(items))
+    sk = ["<div class='group'><h3>%s</h3><div class='chips'>%s</div></div>" % (e(g.get("group", "")), _chips(g["items"], "t"))
+          for g in c.get("skills") or [] if g.get("items")]
     if sk:
-        h.append("<h2>Skills</h2><ul>%s</ul>" % "".join(sk))
-    pr = ["<li><b>%s</b>: %s</li>" % (e(x["name"]), e(x.get("text", ""))) for x in c.get("projects") or [] if x.get("name")]
+        cards.append("<section class='card fade'><h2>Skills</h2>%s</section>" % "".join(sk))
+    pr = ["<div class='proj'><div class='ic'>%s</div><h3>%s</h3><p>%s</p></div>" % (e(x["name"][:1].upper()), e(x["name"]), e(x.get("text", "")))
+          for x in c.get("projects") or [] if x.get("name")]
     if pr:
-        h.append("<h2>Projects</h2><ul>%s</ul>" % "".join(pr))
+        cards.append("<section class='card wide fade'><h2>Projects</h2><div class='projects'>%s</div></section>" % "".join(pr))
     if c.get("interests"):
-        h.append("<h2>Interests</h2><p>%s</p>" % e(c["interests"]))
+        cards.append("<section class='card fade'><h2>Interests</h2><div class='chips'>%s</div></section>" % _chips(c["interests"]))
     if c.get("goals"):
-        h.append("<h2>Goals</h2><ul>%s</ul>" % "".join("<li>%s</li>" % e(g) for g in c["goals"]))
-    ln = ["<a href='%s' target='_blank' rel='noopener'>%s</a>" % (e(l["url"], quote=True), e(l.get("label") or l["url"]))
-          for l in c.get("links") or [] if l.get("url", "").startswith(("http://", "https://"))]
+        cards.append("<section class='card fade'><h2>Goals</h2><ol class='goals'>%s</ol></section>" % "".join("<li>%s</li>" % e(g) for g in c["goals"]))
+    ln = ["<a class='btn' href='%s' target='_blank' rel='noopener noreferrer'>%s</a>" % (e(l["url"], quote=True), e(l.get("label") or l["url"]))
+          for l in c.get("links") or [] if str(l.get("url", "")).startswith(("http://", "https://"))]
     if ln:
-        h.append("<h2>Links</h2><p>%s</p>" % " &middot; ".join(ln))
-    return _legal("About " + e(c.get("name", "the creator")), "".join(h))
+        cards.append("<section class='card wide fade'><h2>Find him online</h2><div class='links'>%s</div></section>" % "".join(ln))
+    avatar = ("<img src='/about/photo' alt='%s'>" % e(name, quote=True)) if _has_creator_photo() else "<span>%s</span>" % e(initials)
+    logo = ("<svg width='30' height='30' viewBox='0 0 48 48' aria-hidden='true'><circle cx='24' cy='24' r='15' fill='none' stroke='#EEF0FF' stroke-width='5'/>"
+            "<circle cx='37' cy='34' r='4.5' fill='#F2A02E'/></svg>")
+    page = ("<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
+            "<title>About %s - Deep OQ</title><meta name='theme-color' content='#0A0E2A'>"
+            "<link rel='preconnect' href='https://fonts.googleapis.com'><link rel='preconnect' href='https://fonts.gstatic.com' crossorigin>"
+            "<link href='https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&family=Source+Serif+4:opsz,wght@8..60,400..700&display=swap' rel='stylesheet'>"
+            "<style>%s</style></head><body><div class='wrap'>"
+            "<div class='top'><a class='brand' href='/'>%sDeep OQ</a><a class='btn pri' href='/'>Open Deep OQ</a></div>"
+            "<header class='hero fade'><div class='avatar'>%s</div><div><div class='pill'>%s</div><h1>%s</h1><p class='lead'>%s</p></div></header>"
+            "<main class='grid'>%s</main>"
+            "<div class='foot'>Deep OQ &middot; made by %s</div></div></body></html>") % (
+        e(name), _ABOUT_CSS, logo, avatar, e(c.get("role", "Creator of Deep OQ")), e(name), e(c.get("about", "")), "".join(cards), e(name))
+    return page, 200, {"Content-Type": "text/html; charset=utf-8"}
 
 
 @app.get("/terms")
