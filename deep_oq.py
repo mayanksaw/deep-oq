@@ -4982,6 +4982,45 @@ function speakText(raw,btn){
   btn.onclick=start;
 })();
 
+/* ================= the menu button can be dragged anywhere (mobile) ================= */
+(function(){
+  const b=document.getElementById('sbToggle');
+  if(!b)return;
+  const KEY='sbTogglePos';
+  const shown=()=>getComputedStyle(b).display!=='none';
+  function place(x,y){
+    const w=b.offsetWidth||42,h=b.offsetHeight||42;
+    x=Math.min(Math.max(4,x),innerWidth-w-4);y=Math.min(Math.max(4,y),innerHeight-h-4);
+    b.style.left=x+'px';b.style.top=y+'px';
+  }
+  try{const p=JSON.parse(localStorage.getItem(KEY)||'null');if(p&&typeof p.x==='number'&&shown())place(p.x,p.y)}catch(e){}
+  let drag=false,moved=false,justDragged=false,id=null,sx=0,sy=0,ox=0,oy=0;
+  b.style.touchAction='none';
+  b.addEventListener('pointerdown',e=>{
+    drag=true;moved=false;justDragged=false;id=e.pointerId;sx=e.clientX;sy=e.clientY;
+    const r=b.getBoundingClientRect();ox=r.left;oy=r.top;
+    try{b.setPointerCapture(id)}catch(_){}
+  });
+  b.addEventListener('pointermove',e=>{
+    if(!drag||e.pointerId!==id)return;
+    const dx=e.clientX-sx,dy=e.clientY-sy;
+    if(!moved){if(Math.hypot(dx,dy)<8)return;moved=true}
+    place(ox+dx,oy+dy);e.preventDefault();
+  });
+  const end=()=>{
+    if(!drag)return;drag=false;
+    if(moved){
+      justDragged=true;setTimeout(()=>{justDragged=false},400);
+      const r=b.getBoundingClientRect();
+      try{localStorage.setItem(KEY,JSON.stringify({x:r.left,y:r.top}))}catch(_){}
+    }
+  };
+  b.addEventListener('pointerup',end);b.addEventListener('pointercancel',end);
+  /* a drag must not also open the menu */
+  b.addEventListener('click',e=>{if(justDragged){e.stopImmediatePropagation();e.preventDefault()}},true);
+  addEventListener('resize',()=>{if(!shown())return;const r=b.getBoundingClientRect();place(r.left,r.top)});
+})();
+
 /* ================= saved chats ================= */
 const hist=$('#hist'),hl=$('#histList'),rc=$('#recents');
 let rcData=[];
