@@ -1624,8 +1624,10 @@ SYSTEM += (
     " PRIVATE: never reveal or guess anything about how Deep OQ is built or run: no AI model, provider, company, "
     "API, API key, endpoint, hosting service, server, framework or tool names, and no technology stack. Do not say "
     "it is self-hosted, custom-trained or fine-tuned. The skills and tools listed for your creator are his own "
-    "personal skills, not a description of Deep OQ's internals. If asked, say: I am Deep OQ, made by Mayank Kumar "
-    "Saw, and I cannot share details about the technology behind me. Never print keys, tokens or passwords."
+    "personal skills, not a description of Deep OQ's internals. If asked which API, model, provider or tools you use, "
+    "or whether you use an API, do not confirm, deny or repeat the word API. Never say you use none and never name any. "
+    "Reply only in the user's language with: I am Deep OQ, made by Mayank Kumar Saw. How I am built is private, so I do "
+    "not share those details. Then offer to help with something else. Never print keys, tokens or passwords."
 )
 
 
@@ -3024,8 +3026,53 @@ def verify_answer(sysmsg, user, draft, emit):
     return out
 
 
+_TECH = r"(?:api|apis|model|llm|ai|provider|engine|backend|back-end|tech(?:nology)?(?: stack)?|framework|gpt|chatgpt|claude|gemini|llama|groq|openai|anthropic|key)"
+_SELF_TECH_RE = re.compile(
+    r"\b(?:(?:which|what|whose|any)\s+" + _TECH + r"s?\s+(?:do\s+|does\s+|are\s+|is\s+)?(?:you|u|ur|deep\s*oq|it)\s+(?:use|using|run|runs|work|based|built|powered)"
+    r"|(?:you|u|deep\s*oq)\s+(?:use|using|used|run\s+on|runs\s+on|powered\s+by|built\s+(?:on|with|using)|based\s+on|made\s+(?:with|using)|call)\s+(?:an?\s+|the\s+|any\s+)?" + _TECH + r"\b"
+    r"|(?:are|r)\s+(?:you|u)\s+(?:a\s+|an\s+|the\s+)?(?:chatgpt|gpt|claude|gemini|llama|groq|openai|anthropic)"
+    r"|(?:your|ur|deep\s*oq'?s?)\s+(?:api|apis|model|llm|backend|back-end|tech\s*stack|technology|engine|provider|api\s*key)\b"
+    r"|powered\s+by|who\s+(?:trained|built|made)\s+(?:your|ur)\s+(?:model|ai|brain))", re.I)
+SELF_TECH_REPLY = ("I am Deep OQ, made by Mayank Kumar Saw. How I am built is private, so I do not share those details. "
+                   "Is there something else I can help you with?")
+
+
+def asks_about_own_tech(q):
+    """True when the person asks what Deep OQ itself runs on. Normal coding questions about APIs are not matched."""
+    q = (q or "").strip()
+    return bool(q) and len(q) <= 160 and "```" not in q and bool(_SELF_TECH_RE.search(q))
+
+
+ABOUT_URL = os.environ.get("DEEP_OQ_URL", "https://deep-oq.onrender.com").strip().rstrip("/") + "/about"
+_CREATOR_RE = re.compile(
+    r"(?:\bwho\s+(?:is\s+)?(?:made|created|creater|built|developed|programmed|coded|designed|founded|owns?)\s+(?:you|u|ur|deep\s*oq|this\s+(?:app|ai|bot|website|site|chat))\b"
+    r"|\bwho\s+(?:is|r|are)\s+(?:your|ur)\s+(?:creat(?:or|er)|developer|dev|founder|owner|maker|builder|programmer|boss)\b"
+    r"|\b(?:your|ur|deep\s*oq'?s?)\s+(?:creat(?:or|er)|developer|founder|owner|maker)\b"
+    r"|\babout\s+(?:the\s+|your\s+|ur\s+)?(?:creat(?:or|er)|developer|founder|owner)\s*[?.!]*$"
+    r"|\b(?:who\s+is|about|know\s+about)\s+mayank\b"
+    r"|\bmayank\s+kumar\s+saw\b)", re.I)
+
+
+def asks_about_creator(q):
+    q = (q or "").strip()
+    return bool(q) and len(q) <= 100 and "```" not in q and bool(_CREATOR_RE.search(q))
+
+
+def creator_reply():
+    c = CREATOR or {}
+    name = c.get("name") or "Mayank Kumar Saw"
+    role = (c.get("role") or "").strip().rstrip(".")
+    first = name.split()[0] if name.split() else name
+    return ("Deep OQ was created by %s%s. You can read his full profile here:\n\n[About %s](%s)"
+            % (name, " (" + role[:1].lower() + role[1:] + ")" if role else "", first, ABOUT_URL))
+
+
 def _deep_oq_raw(session, question, force_exam=False, emit=None):
     emit = emit or (lambda kind, val: None)
+    if asks_about_creator(question) and not asks_about_own_tech(question):  # send the About page link
+        return creator_reply()
+    if asks_about_own_tech(question):  # fixed private reply: never names or hints at any technology
+        return SELF_TECH_REPLY
     emit("status", "Thinking")
     force = question.lower().startswith("/deep")  # "/deep your question" = think as hard as possible
     if force:
@@ -3295,7 +3342,7 @@ def index():
            + '</div><div class="btns">')
     if is_admin():
         row += '<a class="adm" href="/admin">Admin</a>'
-    row += '<a href="/about">About</a><a href="/logout">Log out</a></div></div>'
+    row += '<a href="/logout">Log out</a></div></div>'
     html = PAGE.replace("</header>", row + "</header>", 1).replace("</head>", ACCT_CSS + "</head>", 1)
     return html, 200, {"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache"}
 
@@ -4124,7 +4171,6 @@ body:not(.chatting) #v-chat.on{padding-top:12vh;padding-bottom:0}
     <button class="tab" type="button" data-view="music">Music</button>
     <button class="tab" type="button" data-view="3d">3D</button>
     <a class="tab" href="/vr" style="text-decoration:none;display:inline-flex;align-items:center;background:linear-gradient(135deg,#00c9a7,#2f8cff);color:#04122b;font-weight:700">VR</a>
-    <a class="tab" href="/about" style="text-decoration:none;display:inline-flex;align-items:center">About creator</a>
   </nav>
   <div class="tools" id="chatTools">
     <button class="btn" id="kbBtn" type="button" aria-haspopup="dialog">Knowledge <span class="badge" id="count">0</span></button>
@@ -4531,6 +4577,8 @@ const esc=s=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 function inline(s){
   s=esc(s);
   s=s.replace(/&lt;br\s*\/?&gt;/gi,'<br>');
+  s=s.replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>');
+  s=s.replace(/(^|[\s(])(https?:\/\/[^\s<)]*[^\s<).,;:!?])/g,'$1<a href="$2" target="_blank" rel="noopener">$2</a>');
   s=s.replace(/`([^`\n]+)`/g,'<code>$1</code>');
   s=s.replace(/\*\*([^*\n]+)\*\*/g,'<strong>$1</strong>');
   s=s.replace(/(^|[^*])\*([^*\n]+)\*/g,'$1<em>$2</em>');
@@ -8573,7 +8621,7 @@ LOGIN_PAGE = r"""<!DOCTYPE html>
       <p class="switch" id="switch">New here? <a id="toggle">Create an account</a></p>
 
       <p class="sub" style="font-size:12px;text-align:center;margin:14px 0 0;min-height:0">Chats are saved to your account and the site owner can access them.</p>
-      <a href="/about" style="color:#00d4ff">About</a>, <a href="/terms" style="color:#00d4ff">Terms</a> and <a href="/privacy" style="color:#00d4ff">Privacy</a>
+      <a href="/terms" style="color:#00d4ff">Terms</a> and <a href="/privacy" style="color:#00d4ff">Privacy</a>
 
       <div class="ok" id="ok">
         <svg viewBox="0 0 100 100"><circle cx="50" cy="50" r="41"/><path d="M30 52 L45 66 L71 36"/></svg>
@@ -9326,39 +9374,109 @@ def _legal(title, body):
             "<h1>%s</h1>%s<p><a href='/'>Back to Deep OQ</a></p>" % (title, title, body))
 
 
+_ABOUT_CSS = r"""
+:root{--bg:#0A0E2A;--surface:#141944;--surface2:#1B2158;--ink:#EEF0FF;--ink2:#A3A9D1;--line:#2A3070;--amber:#F2A02E;--teal:#33E6A1;--blue:#2F8CFF;--violet:#7C5CFF}
+*{box-sizing:border-box}html{scroll-behavior:smooth}
+body{margin:0;color:var(--ink);font-family:"Source Serif 4",Georgia,serif;line-height:1.6;-webkit-font-smoothing:antialiased;
+ background:radial-gradient(900px 500px at 15% -10%,rgba(124,92,255,.35),transparent 60%),radial-gradient(800px 480px at 95% 0%,rgba(47,140,255,.28),transparent 55%),radial-gradient(700px 500px at 50% 110%,rgba(51,230,161,.14),transparent 60%),var(--bg);min-height:100vh}
+.ui,h1,h2,h3,.pill,.chip,.btn,.brand{font-family:"Bricolage Grotesque",system-ui,sans-serif}
+.wrap{max-width:1020px;margin:0 auto;padding:22px 20px 60px}
+.top{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:34px}
+.brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:21px;letter-spacing:-.025em;color:var(--ink);text-decoration:none}
+.btn{display:inline-flex;align-items:center;gap:8px;padding:10px 18px;border-radius:999px;font-weight:600;font-size:14px;text-decoration:none;color:var(--ink);border:1px solid var(--line);background:rgba(255,255,255,.04);transition:.2s}
+.btn:hover{background:rgba(255,255,255,.1);transform:translateY(-1px)}
+.btn.pri{background:linear-gradient(135deg,var(--teal),var(--blue));color:#04122b;border-color:transparent}
+.hero{display:grid;grid-template-columns:auto 1fr;gap:30px;align-items:center;padding:34px;border-radius:28px;border:1px solid var(--line);
+ background:linear-gradient(160deg,rgba(255,255,255,.07),rgba(255,255,255,.02));backdrop-filter:blur(8px);box-shadow:0 30px 80px rgba(0,0,0,.35)}
+.avatar{width:132px;height:132px;border-radius:50%;display:grid;place-items:center;font-family:"Bricolage Grotesque",sans-serif;font-weight:800;font-size:46px;letter-spacing:-.04em;color:#04122b;
+ background:conic-gradient(from 210deg,var(--teal),var(--blue),var(--violet),var(--amber),var(--teal));position:relative}
+.avatar span{width:118px;height:118px;border-radius:50%;display:grid;place-items:center;background:linear-gradient(145deg,#1d2565,#0e1340);color:var(--ink)}
+h1{font-size:clamp(32px,6vw,54px);line-height:1.04;letter-spacing:-.035em;margin:0 0 12px;font-weight:800;background:linear-gradient(90deg,#fff,#b9c2ff);-webkit-background-clip:text;background-clip:text;color:transparent}
+.pill{display:inline-block;padding:6px 14px;border-radius:999px;font-size:13.5px;font-weight:600;color:var(--amber);border:1px solid rgba(242,160,46,.45);background:rgba(242,160,46,.1);margin-bottom:14px}
+.lead{font-size:18.5px;color:#d3d7f5;margin:0;max-width:60ch}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;margin-top:22px}
+@media (max-width:760px){.grid{grid-template-columns:1fr}}
+.card{padding:26px;border-radius:22px;border:1px solid var(--line);background:linear-gradient(180deg,var(--surface),rgba(20,25,68,.55));transition:.25s}
+.card:hover{transform:translateY(-3px);border-color:#3a428f}
+.card.wide{grid-column:1/-1}
+h2{display:flex;align-items:center;gap:10px;font-size:13px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink2);margin:0 0 16px;font-weight:700}
+h2::before{content:"";width:22px;height:3px;border-radius:3px;background:linear-gradient(90deg,var(--teal),var(--blue))}
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip{padding:7px 14px;border-radius:999px;font-size:14px;font-weight:500;background:rgba(124,92,255,.16);border:1px solid rgba(124,92,255,.4);color:#e1dbff}
+.chip.t{background:rgba(51,230,161,.12);border-color:rgba(51,230,161,.4);color:#c8ffe9}
+.group{margin-bottom:16px}.group:last-child{margin-bottom:0}
+.group h3{margin:0 0 8px;font-size:15px;color:var(--ink)}
+.edu{display:flex;gap:14px}.edu .dot{flex:none;width:12px;height:12px;border-radius:50%;margin-top:8px;background:var(--amber);box-shadow:0 0 0 5px rgba(242,160,46,.2)}
+.edu b{font-family:"Bricolage Grotesque",sans-serif;font-size:18px}.edu p{margin:4px 0 0;color:var(--ink2)}
+.projects{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px}
+.proj{padding:18px;border-radius:18px;background:rgba(255,255,255,.04);border:1px solid var(--line);transition:.2s}
+.proj:hover{background:rgba(255,255,255,.08);transform:translateY(-2px)}
+.proj .ic{width:38px;height:38px;border-radius:12px;display:grid;place-items:center;font-family:"Bricolage Grotesque",sans-serif;font-weight:800;color:#04122b;margin-bottom:10px;background:linear-gradient(135deg,var(--amber),#ff7a59)}
+.proj:nth-child(3n+2) .ic{background:linear-gradient(135deg,var(--teal),var(--blue))}.proj:nth-child(3n) .ic{background:linear-gradient(135deg,var(--violet),var(--blue))}
+.proj h3{margin:0 0 4px;font-size:17px}.proj p{margin:0;color:var(--ink2);font-size:15px}
+ol.goals{list-style:none;margin:0;padding:0;counter-reset:g}
+ol.goals li{counter-increment:g;display:flex;gap:14px;align-items:flex-start;padding:12px 0;border-bottom:1px solid var(--line);font-size:17px}
+ol.goals li:last-child{border:0}
+ol.goals li::before{content:counter(g);flex:none;width:30px;height:30px;border-radius:50%;display:grid;place-items:center;font-family:"Bricolage Grotesque",sans-serif;font-weight:700;font-size:14px;background:linear-gradient(135deg,var(--teal),var(--blue));color:#04122b}
+.links{display:flex;flex-wrap:wrap;gap:10px}
+.foot{margin-top:40px;text-align:center;color:var(--ink2);font-size:14px}
+.fade{animation:rise .7s both}.card:nth-child(2){animation-delay:.08s}.card:nth-child(3){animation-delay:.16s}.card:nth-child(4){animation-delay:.24s}
+@keyframes rise{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){.fade{animation:none}*{transition:none!important}}
+@media (max-width:640px){.hero{grid-template-columns:1fr;text-align:center;justify-items:center;padding:26px 20px}.avatar{width:112px;height:112px}.avatar span{width:100px;height:100px}}
+"""
+
+
+def _chips(text, cls=""):
+    return "".join("<span class='chip %s'>%s</span>" % (cls, _html.escape(x.strip())) for x in str(text).split(",") if x.strip())
+
+
 @app.get("/about")
 def about_page():
     c = CREATOR or {}
     e = _html.escape
-    if not c:
-        return _legal("About", "<p>Deep OQ was made by Mayank Kumar Saw.</p>")
-    h = ["<p style='opacity:.75;margin-top:-8px'>%s</p>" % e(c.get("role", ""))] if c.get("role") else []
-    if c.get("about"):
-        h.append("<p>%s</p>" % e(c["about"]))
-    ed = []
-    for x in c.get("education") or []:
-        line = ", ".join(e(x[k]) for k in ("level", "field", "place", "years") if x.get(k))
-        if x.get("note"):
-            line += (". " if line else "") + e(x["note"])
-        if line:
-            ed.append("<li>%s</li>" % line)
-    if ed:
-        h.append("<h2>Education</h2><ul>%s</ul>" % "".join(ed))
-    sk = ["<li><b>%s</b>: %s</li>" % (e(g.get("group", "")), e(g["items"])) for g in c.get("skills") or [] if g.get("items")]
+    name = c.get("name") or "Mayank Kumar Saw"
+    words = [w for w in name.split() if w]
+    initials = (words[0][0] + (words[-1][0] if len(words) > 1 else "")).upper() if words else "M"
+    cards = []
+    if c.get("education"):
+        items = []
+        for x in c["education"]:
+            line = " · ".join(e(x[k]) for k in ("field", "place", "years") if x.get(k))
+            if x.get("level") or line or x.get("note"):
+                items.append("<div class='edu'><div class='dot'></div><div><b>%s</b>%s%s</div></div>" % (
+                    e(x.get("level", "")), "<p>%s</p>" % line if line else "", "<p>%s</p>" % e(x["note"]) if x.get("note") else ""))
+        if items:
+            cards.append("<section class='card fade'><h2>Education</h2>%s</section>" % "".join(items))
+    sk = ["<div class='group'><h3>%s</h3><div class='chips'>%s</div></div>" % (e(g.get("group", "")), _chips(g["items"], "t"))
+          for g in c.get("skills") or [] if g.get("items")]
     if sk:
-        h.append("<h2>Skills</h2><ul>%s</ul>" % "".join(sk))
-    pr = ["<li><b>%s</b>: %s</li>" % (e(x["name"]), e(x.get("text", ""))) for x in c.get("projects") or [] if x.get("name")]
+        cards.append("<section class='card fade'><h2>Skills</h2>%s</section>" % "".join(sk))
+    pr = ["<div class='proj'><div class='ic'>%s</div><h3>%s</h3><p>%s</p></div>" % (e(x["name"][:1].upper()), e(x["name"]), e(x.get("text", "")))
+          for x in c.get("projects") or [] if x.get("name")]
     if pr:
-        h.append("<h2>Projects</h2><ul>%s</ul>" % "".join(pr))
+        cards.append("<section class='card wide fade'><h2>Projects</h2><div class='projects'>%s</div></section>" % "".join(pr))
     if c.get("interests"):
-        h.append("<h2>Interests</h2><p>%s</p>" % e(c["interests"]))
+        cards.append("<section class='card fade'><h2>Interests</h2><div class='chips'>%s</div></section>" % _chips(c["interests"]))
     if c.get("goals"):
-        h.append("<h2>Goals</h2><ul>%s</ul>" % "".join("<li>%s</li>" % e(g) for g in c["goals"]))
-    ln = ["<a href='%s' target='_blank' rel='noopener'>%s</a>" % (e(l["url"], quote=True), e(l.get("label") or l["url"]))
-          for l in c.get("links") or [] if l.get("url", "").startswith(("http://", "https://"))]
+        cards.append("<section class='card fade'><h2>Goals</h2><ol class='goals'>%s</ol></section>" % "".join("<li>%s</li>" % e(g) for g in c["goals"]))
+    ln = ["<a class='btn' href='%s' target='_blank' rel='noopener noreferrer'>%s</a>" % (e(l["url"], quote=True), e(l.get("label") or l["url"]))
+          for l in c.get("links") or [] if str(l.get("url", "")).startswith(("http://", "https://"))]
     if ln:
-        h.append("<h2>Links</h2><p>%s</p>" % " &middot; ".join(ln))
-    return _legal("About " + e(c.get("name", "the creator")), "".join(h))
+        cards.append("<section class='card wide fade'><h2>Find him online</h2><div class='links'>%s</div></section>" % "".join(ln))
+    logo = ("<svg width='30' height='30' viewBox='0 0 48 48' aria-hidden='true'><circle cx='24' cy='24' r='15' fill='none' stroke='#EEF0FF' stroke-width='5'/>"
+            "<circle cx='37' cy='34' r='4.5' fill='#F2A02E'/></svg>")
+    page = ("<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
+            "<title>About %s - Deep OQ</title><meta name='theme-color' content='#0A0E2A'>"
+            "<link rel='preconnect' href='https://fonts.googleapis.com'><link rel='preconnect' href='https://fonts.gstatic.com' crossorigin>"
+            "<link href='https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&family=Source+Serif+4:opsz,wght@8..60,400..700&display=swap' rel='stylesheet'>"
+            "<style>%s</style></head><body><div class='wrap'>"
+            "<div class='top'><a class='brand' href='/'>%sDeep OQ</a><a class='btn pri' href='/'>Open Deep OQ</a></div>"
+            "<header class='hero fade'><div class='avatar'><span>%s</span></div><div><div class='pill'>%s</div><h1>%s</h1><p class='lead'>%s</p></div></header>"
+            "<main class='grid'>%s</main>"
+            "<div class='foot'>Deep OQ &middot; made by %s</div></div></body></html>") % (
+        e(name), _ABOUT_CSS, logo, e(initials), e(c.get("role", "Creator of Deep OQ")), e(name), e(c.get("about", "")), "".join(cards), e(name))
+    return page, 200, {"Content-Type": "text/html; charset=utf-8"}
 
 
 @app.get("/terms")
