@@ -5223,15 +5223,24 @@ function speakText(raw,btn){
   function drawFx(){fx.forEach(p=>{ctx.globalAlpha=clamp(1-p.t/p.life,0,1);ctx.fillStyle=p.c;ctx.fillRect(p.x-p.s/2,p.y-p.s/2,p.s,p.s)});ctx.globalAlpha=1}
 
   /* ======================================================================
-     CHESS (you are white, Deep OQ plays black)
+     CHESS: vs Computer (you are white) or 2 Players on the same device
+     Tap the button at the top left of the board to switch mode.
      ====================================================================== */
   const chess=(function(){
     const G={name:'chess',title:'Chess',
-      help:'You play white. Tap a piece, then tap a square to move it. Capture pieces to score points. Castling and queen promotion work; en passant is not included.'};
+      get help(){return mode==='two'
+        ?'2 Players: pass the device. White moves first, then Black. Tap a piece, then tap a square to move it. Castling and queen promotion work; en passant is not included. Tap the top left button to play the computer instead. The top right button flips the board: Flip off, Flip on, or Auto (the board turns to face whoever is moving).'
+        :'You play white against Deep OQ. Tap a piece, then tap a square to move it. Castling and queen promotion work; en passant is not included. Tap the top left button to play a friend on this device. The top right button flips the board (Flip on turns it around for Black).'}};
     const VAL={p:100,n:320,b:330,r:500,q:900,k:20000};
     const GL={p:'♟',n:'♞',b:'♝',r:'♜',q:'♛',k:'♚'};
     const SQ=57,BX=12,BY=96;
     let bd,turn,sel,moves,cast,score,over,msg,think,lastMv,anim;
+    let mode='cpu';
+    try{if(localStorage.getItem('oqchessmode')==='two')mode='two'}catch(e){}
+    let fm='off';   /* board flip: off | on | auto (auto = face the side to move, 2 players) */
+    try{const f=localStorage.getItem('oqchessflip');if(f==='on'||f==='auto')fm=f}catch(e){}
+    const flipped=()=>fm==='on'||(fm==='auto'&&mode==='two'&&!turn);
+    const dsq=s=>flipped()?63-s:s;   /* logical square -> screen square */
     const white=c=>c&&c===c.toUpperCase();
     function init(){
       const back='rnbqkbnr';bd=[];
@@ -5304,54 +5313,77 @@ function speakText(raw,btn){
     }
     function finish(side){   /* has the side to move got a move? */
       const ms=legal(bd,side,cast),chk=attacked(bd,kingSq(bd,side),!side);
-      if(!ms.length){over=true;msg=chk?(side?'Checkmate. Deep OQ wins':'Checkmate! You win'):'Stalemate. A draw';if(chk&&!side)score+=500;return}
+      if(!ms.length){
+        over=true;
+        if(!chk)msg='Stalemate. A draw';
+        else if(mode==='two')msg='Checkmate! '+(side?'Black':'White')+' wins';
+        else if(side)msg='Checkmate. Deep OQ wins';
+        else{msg='Checkmate! You win';score+=500}
+        return;
+      }
+      if(mode==='two'){msg=(side?'White':'Black')+"'s move"+(chk?' - check!':'');return}
       msg=chk?(side?'You are in check':'Check!'):(side?'Your move':'Deep OQ is thinking...');
     }
     function play(m){
       const p=bd[m[0]],cap=bd[m[1]];
-      if(cap&&turn)score+=VAL[cap.toLowerCase()]/100*10;
+      if(cap&&turn&&mode==='cpu')score+=VAL[cap.toLowerCase()]/100*10;
       anim={m,t:0,p};
       const col=cap?['#ffd166','#ff5a5f','#fff']:['#7CFFD0','#fff'];
       burst(BX+(m[1]&7)*SQ+SQ/2,BY+(m[1]>>3)*SQ+SQ/2,cap?22:8,col,160,300);
       cast=newCast(cast,m,p);bd=apply(bd,m);lastMv=m;sel=-1;moves=[];
       turn=!turn;finish(turn);
-      if(!over&&!turn){think=true;setTimeout(()=>{if(!over&&!turn&&think){const a=aiMove();think=false;if(a)play(a)}},350)}
+      if(mode==='cpu'&&!over&&!turn){think=true;setTimeout(()=>{if(mode==='cpu'&&!over&&!turn&&think){const a=aiMove();think=false;if(a)play(a)}},350)}
     }
-    G.reset=()=>{init();turn=true;sel=-1;moves=[];cast={wk:1,wq:1,bk:1,bq:1};score=0;over=false;msg='Your move';think=false;lastMv=null;anim=null;fx.length=0};
-    G.score=()=>score;
+    function setMode(m){
+      mode=m;
+      try{localStorage.setItem('oqchessmode',m)}catch(e){}
+      G.reset();
+      const h=document.getElementById('ghelp');if(h)h.textContent=G.help;
+    }
+    G.reset=()=>{init();turn=true;sel=-1;moves=[];cast={wk:1,wq:1,bk:1,bq:1};score=0;over=false;msg=mode==='two'?"White's move":'Your move';think=false;lastMv=null;anim=null;fx.length=0};
+    G.score=()=>mode==='two'?0:score;
     G.update=dt=>{updFx(dt);if(anim){anim.t+=dt;if(anim.t>.18)anim=null}};
     G.tap=(x,y)=>{
+      if(x<150&&y<60){setMode(mode==='cpu'?'two':'cpu');return}   /* mode button */
+      if(x>W-150&&y<60){fm=fm==='off'?'on':fm==='on'?'auto':'off';try{localStorage.setItem('oqchessflip',fm)}catch(e){}return}   /* flip button */
       if(over){G.reset();return}
-      if(!turn||think)return;
+      if(mode==='cpu'&&(!turn||think))return;
       const c=Math.floor((x-BX)/SQ),r=Math.floor((y-BY)/SQ);if(!inb(r,c))return;
-      const s=r*8+c,p=bd[s];
+      const s=dsq(r*8+c),p=bd[s];
       if(sel>=0){const m=moves.find(q=>q[1]===s);if(m){play(m);return}}
-      if(p&&white(p)){sel=s;moves=legal(bd,true,cast).filter(m=>m[0]===s)}else{sel=-1;moves=[]}
+      if(p&&white(p)===turn){sel=s;moves=legal(bd,turn,cast).filter(m=>m[0]===s)}else{sel=-1;moves=[]}
     };
     G.draw=()=>{
       const g=ctx.createLinearGradient(0,0,0,H);g.addColorStop(0,'#10173f');g.addColorStop(1,'#070b25');ctx.fillStyle=g;ctx.fillRect(0,0,W,H);
       txt('Chess',W/2,34,26,'#fff');
+      /* mode button */
+      ctx.fillStyle='rgba(124,92,255,.35)';rr(12,14,126,32,16);ctx.fill();
+      ctx.strokeStyle='rgba(255,255,255,.35)';ctx.lineWidth=1.5;rr(12,14,126,32,16);ctx.stroke();
+      txt(mode==='two'?'2 Players':'vs Computer',75,30,15,'#fff','center','700');
+      ctx.fillStyle='rgba(124,92,255,.35)';rr(W-138,14,126,32,16);ctx.fill();
+      ctx.strokeStyle='rgba(255,255,255,.35)';ctx.lineWidth=1.5;rr(W-138,14,126,32,16);ctx.stroke();
+      txt(fm==='off'?'Flip: Off':fm==='on'?'Flip: On':'Flip: Auto',W-75,30,15,'#fff','center','700');
       txt(msg,W/2,66,17,over?'#ffd166':(think?'#a9b4ee':'#7CFFD0'),'center','700');
       for(let r=0;r<8;r++)for(let c=0;c<8;c++){
-        const s=r*8+c,x=BX+c*SQ,y=BY+r*SQ;
+        const s=dsq(r*8+c),x=BX+c*SQ,y=BY+r*SQ;
         ctx.fillStyle=(r+c)%2?'#5b6bb8':'#dfe4ff';ctx.fillRect(x,y,SQ,SQ);
         if(lastMv&&(lastMv[0]===s||lastMv[1]===s)){ctx.fillStyle='rgba(255,209,102,.45)';ctx.fillRect(x,y,SQ,SQ)}
         if(s===sel){ctx.fillStyle='rgba(124,255,208,.55)';ctx.fillRect(x,y,SQ,SQ)}
       }
-      const kw=kingSq(bd,turn);if(kw>=0&&!over&&attacked(bd,kw,!turn)){ctx.fillStyle='rgba(255,90,95,.6)';ctx.fillRect(BX+(kw&7)*SQ,BY+(kw>>3)*SQ,SQ,SQ)}
-      for(const m of moves){const x=BX+(m[1]&7)*SQ+SQ/2,y=BY+(m[1]>>3)*SQ+SQ/2;if(bd[m[1]]){ctx.strokeStyle='#ff5a5f';ctx.lineWidth=4;ctx.beginPath();ctx.arc(x,y,SQ/2-4,0,Math.PI*2);ctx.stroke()}else circ(x,y,8,'rgba(30,40,90,.6)')}
+      const kw=kingSq(bd,turn);if(kw>=0&&!over&&attacked(bd,kw,!turn)){ctx.fillStyle='rgba(255,90,95,.6)';ctx.fillRect(BX+(dsq(kw)&7)*SQ,BY+(dsq(kw)>>3)*SQ,SQ,SQ)}
+      for(const m of moves){const d=dsq(m[1]),x=BX+(d&7)*SQ+SQ/2,y=BY+(d>>3)*SQ+SQ/2;if(bd[m[1]]){ctx.strokeStyle='#ff5a5f';ctx.lineWidth=4;ctx.beginPath();ctx.arc(x,y,SQ/2-4,0,Math.PI*2);ctx.stroke()}else circ(x,y,8,'rgba(30,40,90,.6)')}
       for(let s=0;s<64;s++){
         const p=bd[s];if(!p)continue;
-        let x=BX+(s&7)*SQ+SQ/2,y=BY+(s>>3)*SQ+SQ/2;
-        if(anim&&anim.m[1]===s){const k=1-anim.t/.18,fx0=BX+(anim.m[0]&7)*SQ+SQ/2,fy0=BY+(anim.m[0]>>3)*SQ+SQ/2;x+=(fx0-x)*k;y+=(fy0-y)*k}
+        const ds=dsq(s);let x=BX+(ds&7)*SQ+SQ/2,y=BY+(ds>>3)*SQ+SQ/2;
+        if(anim&&anim.m[1]===s){const k=1-anim.t/.18,d0=dsq(anim.m[0]),fx0=BX+(d0&7)*SQ+SQ/2,fy0=BY+(d0>>3)*SQ+SQ/2;x+=(fx0-x)*k;y+=(fy0-y)*k}
         ctx.font='42px "Segoe UI Symbol","Noto Sans Symbols 2","Apple Symbols",serif';ctx.textAlign='center';ctx.textBaseline='middle';
         const gl=GL[p.toLowerCase()]+'\uFE0E';ctx.lineWidth=3;ctx.lineJoin='round';
         if(white(p)){ctx.strokeStyle='#1a2150';ctx.strokeText(gl,x,y+2);ctx.fillStyle='#fff';ctx.fillText(gl,x,y+2)}
         else{ctx.strokeStyle='rgba(255,255,255,.55)';ctx.strokeText(gl,x,y+2);ctx.fillStyle='#10163a';ctx.fillText(gl,x,y+2)}
       }
       drawFx();
-      txt('Tap a piece, then tap where it goes',W/2,BY+8*SQ+26,14,'#a9b4ee','center','600');
-      if(over)overlay(msg,'Score '+score,'Tap to play again');
+      txt(mode==='two'?'Pass the device: White and Black take turns':'Tap a piece, then tap where it goes',W/2,BY+8*SQ+26,14,'#a9b4ee','center','600');
+      if(over)overlay(msg,mode==='two'?'':'Score '+score,'Tap to play again');
     };
     G.reset();
     return G;
