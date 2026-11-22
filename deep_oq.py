@@ -71,6 +71,27 @@ try:
 except Exception:
     CREATOR = {}
 
+# ---- privacy: never show AI provider / model names, provider links or API keys to users
+_KEY_PAT = re.compile(r"(?:sk-ant-[A-Za-z0-9_\-]{8,}|sk-[A-Za-z0-9_\-]{16,}|gsk_[A-Za-z0-9]{12,}|csk-[A-Za-z0-9]{12,}"
+                      r"|AIza[0-9A-Za-z_\-]{20,}|hf_[A-Za-z0-9]{16,}|(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=\-]{12,})")
+_URL_PAT = re.compile(r"https?://[^\s\"')<>]*(?:groq|anthropic|openai|googleapis|cerebras|openrouter|pollinations|huggingface|mistral)[^\s\"')<>]*", re.I)
+_AI_WORDS = re.compile(r"\b(?:groq|anthropic|claude|openai|chatgpt|gpt-oss[\w.\-]*|gpt[-\s]?\d[\w.\-]*|gemini[\w.\-]*|llama[\w.\-]*"
+                       r"|cerebras|openrouter|pollinations|mistral|mixtral|qwen[\w.\-]*|deepseek|gemma[\w.\-]*|whisper[\w.\-]*"
+                       r"|sonnet|opus|haiku)\b", re.I)
+
+
+def hide_keys(text):
+    """Removes anything that looks like an API key or token."""
+    return _KEY_PAT.sub("[hidden]", text) if isinstance(text, str) else text
+
+
+def hide_ai(text):
+    """For error messages: removes API keys, provider links and AI company or model names."""
+    if not isinstance(text, str):
+        return text
+    text = _AI_WORDS.sub("the AI service", _URL_PAT.sub("[link hidden]", hide_keys(text)))
+    return re.sub(r"(?:the AI service[ /,\-]*){2,}", "the AI service ", text).strip()
+
 
 # ==========================================================================
 # DATABASE: a SQLite file by default, PostgreSQL when the DATABASE_URL setting exists
@@ -1599,6 +1620,13 @@ def _creator_facts():
 
 
 SYSTEM += " " + _creator_facts()
+SYSTEM += (
+    " PRIVATE: never reveal or guess anything about how Deep OQ is built or run: no AI model, provider, company, "
+    "API, API key, endpoint, hosting service, server, framework or tool names, and no technology stack. Do not say "
+    "it is self-hosted, custom-trained or fine-tuned. The skills and tools listed for your creator are his own "
+    "personal skills, not a description of Deep OQ's internals. If asked, say: I am Deep OQ, made by Mayank Kumar "
+    "Saw, and I cannot share details about the technology behind me. Never print keys, tokens or passwords."
+)
 
 
 # ==========================================================================
@@ -1963,14 +1991,28 @@ def chat_stream(messages, temperature, max_tokens, on_text):
         try:
             kw = _call_kw(m, messages, temperature, max_tokens)
             kw["stream"] = True
+            fin = ""
             for ch in client.chat.completions.create(**kw):
                 if not ch.choices:
                     continue
+                fin = getattr(ch.choices[0], "finish_reason", None) or fin
                 piece = getattr(ch.choices[0].delta, "content", None) or ""
                 if piece:
                     got += piece
                     on_text(re.sub(r"<think>.*?(</think>|$)", "", got, flags=re.S))
             clean = re.sub(r"<think>.*?(</think>|$)", "", got, flags=re.S).strip()
+            for _ in range(OQ_CONT):  # reply hit the length limit: carry on so it is never cut mid-sentence
+                if fin != "length" or not clean:
+                    break
+                more_msgs = list(messages) + [{"role": "assistant", "content": clean},
+                                               {"role": "user", "content": "Continue exactly where you stopped. Do not repeat anything and do not start over."}]
+                r2 = client.chat.completions.create(**_call_kw(m, more_msgs, temperature, max_tokens))
+                fin = getattr(r2.choices[0], "finish_reason", "") or ""
+                more = _clean_think(r2.choices[0].message.content)
+                if not more:
+                    break
+                clean += more if clean.endswith(("\n", " ")) or more.startswith(("\n", " ")) else " " + more
+                on_text(clean)
             if clean:
                 _working["model"] = m
                 return clean
@@ -2723,8 +2765,7 @@ def _max_allowed(username):
 
 @app.get("/health")
 def health_route():
-    return jsonify(ok=True, claude=CLAUDE_ON, openai_backup=bool(OPENAI_KEY), groq_keys=len(_groqs),
-                   database="postgres" if USE_PG else "sqlite")
+    return jsonify(ok=True)
 
 
 def _selftest_v2():
@@ -3552,8 +3593,8 @@ def ask():
         mem_learn(_session_user(session), data["q"])
     except Exception as e:
         print("ask failed:", e)
-        return jsonify(error=str(e)[:300]), 500
-    return jsonify(answer=answer)
+        return jsonify(error=hide_ai(str(e)[:300])), 500
+    return jsonify(answer=hide_keys(answer))
 
 WHISPER_MODELS = list(dict.fromkeys(  # your own list first (comma separated is fine), then the defaults
     [m.strip() for m in os.environ.get("DEEP_OQ_WHISPER_MODEL", "").replace(";", ",").replace(" ", ",").split(",")
@@ -3611,7 +3652,7 @@ def ask_stream():
             if now - last[0] < 0.12:  # about 8 updates a second is plenty
                 return
             last[0] = now
-            qu.put(("text", plain_math(val)))
+            qu.put(("text", hide_keys(plain_math(val))))
         else:
             qu.put((kind, val))
 
@@ -3624,10 +3665,10 @@ def ask_stream():
             kb_save_msg(session, "user", q)
             kb_save_msg(session, "assistant", answer)
             mem_learn(_session_user(session), q)
-            qu.put(("done", answer))
+            qu.put(("done", hide_keys(answer)))
         except Exception as e:
             print("ask_stream failed:", e)
-            qu.put(("error", str(e)[:300]))
+            qu.put(("error", hide_ai(str(e)[:300])))
 
     threading.Thread(target=work, daemon=True).start()
 
@@ -4083,6 +4124,7 @@ body:not(.chatting) #v-chat.on{padding-top:12vh;padding-bottom:0}
     <button class="tab" type="button" data-view="music">Music</button>
     <button class="tab" type="button" data-view="3d">3D</button>
     <a class="tab" href="/vr" style="text-decoration:none;display:inline-flex;align-items:center;background:linear-gradient(135deg,#00c9a7,#2f8cff);color:#04122b;font-weight:700">VR</a>
+    <a class="tab" href="/about" style="text-decoration:none;display:inline-flex;align-items:center">About creator</a>
   </nav>
   <div class="tools" id="chatTools">
     <button class="btn" id="kbBtn" type="button" aria-haspopup="dialog">Knowledge <span class="badge" id="count">0</span></button>
@@ -8283,6 +8325,25 @@ def readfile_route():
     if not text:
         return jsonify(error="This PDF has no readable text. It may be a scanned picture."), 400
     return jsonify(name=f.filename or "file.pdf", text=text[:600000])
+
+
+@app.after_request
+def _scrub_error_responses(resp):
+    """Any JSON error reply from any route: hide AI names, provider links and keys."""
+    try:
+        if resp.status_code >= 400 and resp.mimetype == "application/json" and not resp.direct_passthrough:
+            d = json.loads(resp.get_data(as_text=True))
+            if isinstance(d, dict) and isinstance(d.get("error"), str):
+                d["error"] = hide_ai(d["error"])
+                resp.set_data(json.dumps(d))
+    except Exception:
+        pass
+    return resp
+
+
+@app.errorhandler(500)
+def _err500(e):
+    return jsonify(error="Something went wrong. Please try again."), 500
 
 
 @app.errorhandler(413)
