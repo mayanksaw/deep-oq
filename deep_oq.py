@@ -7490,6 +7490,24 @@ def _vision(prompt, image, temperature=0.3):
         text = re.sub(r"<think>.*?</think>", "", r.choices[0].message.content or "", flags=re.S).strip()
         if text:
             return text
+    hf = os.environ.get("HF_TOKEN", "").strip()
+    if hf:   # free fallback: a vision model on Hugging Face (same HF_TOKEN as the free pictures)
+        for mdl in dict.fromkeys([os.environ.get("HF_VISION_MODEL", "").strip(), "Qwen/Qwen2.5-VL-72B-Instruct",
+                                  "Qwen/Qwen2.5-VL-7B-Instruct"]):
+            if not mdl:
+                continue
+            try:
+                body = json.dumps({"model": mdl, "max_tokens": 4096, "temperature": temperature, "messages": msgs}).encode()
+                req = urllib.request.Request("https://router.huggingface.co/v1/chat/completions", body,
+                                             {"Authorization": "Bearer " + hf, "Content-Type": "application/json"})
+                with urllib.request.urlopen(req, timeout=120) as ur:
+                    t = (json.loads(ur.read().decode())["choices"][0]["message"]["content"] or "").strip()
+                if t:
+                    return t
+            except Exception as e:
+                last = e
+                print("hf vision failed:", mdl, str(e)[:160])
+                why.append("HF " + mdl + ": " + str(e)[:80])
     if last is not None and any(w in str(last).lower() for w in ("rate", "429", "limit")):
         raise ValueError("Deep OQ is busy reading photos right now. Wait a minute and try again.")
     raise ValueError(_owner("Photo understanding is not available right now. Please try again later.",
@@ -7580,10 +7598,38 @@ def _vision_alt(prompt, image):
     return None
 
 
+def _enhance_image(image):
+    """Make a question photo easier to read: stand it upright (phone rotation), raise the contrast, sharpen it and
+    enlarge small ones. Returns the original if anything goes wrong."""
+    try:
+        from PIL import Image, ImageOps, ImageFilter
+        head, b64 = image.split(",", 1)
+        im = Image.open(io.BytesIO(base64.b64decode(b64)))
+        im = ImageOps.exif_transpose(im).convert("RGB")
+        w, h = im.size
+        if min(w, h) < 1000:
+            k = min(2.0, 1400 / min(w, h))
+            im = im.resize((int(w * k), int(h * k)), Image.LANCZOS)
+        elif max(w, h) > 2600:
+            k = 2600 / max(w, h)
+            im = im.resize((int(w * k), int(h * k)), Image.LANCZOS)
+        im = ImageOps.autocontrast(im, cutoff=1).filter(ImageFilter.UnsharpMask(radius=1.6, percent=110, threshold=3))
+        out = io.BytesIO()
+        im.save(out, "JPEG", quality=92)
+        if out.tell() > 4_500_000:
+            out = io.BytesIO()
+            im.save(out, "JPEG", quality=80)
+        return "data:image/jpeg;base64," + base64.b64encode(out.getvalue()).decode()
+    except Exception as e:
+        print("photo clean-up skipped:", str(e)[:120])
+        return image
+
+
 def _read_photo(image):
     """Read a question photo twice with two different AIs and settle any difference by looking at the photo again."""
     import difflib
     from concurrent.futures import ThreadPoolExecutor
+    image = _enhance_image(image)
     with ThreadPoolExecutor(max_workers=2) as ex:
         f1 = ex.submit(_vision, SNAP_READ_PROMPT, image, 0.1)
         f2 = ex.submit(_vision_alt, SNAP_READ_PROMPT, image)
@@ -10045,7 +10091,7 @@ def _openai_image(prompt, quality=None):
     for mdl in dict.fromkeys([m for m in (first, "gpt-image-1", "dall-e-3") if m]):
         try:
             if mdl.startswith("dall-e"):
-                kw = dict(model=mdl, prompt=prompt[:3900], size="1024x1024", response_format="b64_json")
+                kw = dict(model=mdl, prompt=prompt[:3900], size="1024x1024")
                 if mdl == "dall-e-3":
                     kw["quality"] = "hd" if q == "high" else "standard"
                 r = _openai_client().images.generate(**kw)
@@ -10056,12 +10102,91 @@ def _openai_image(prompt, quality=None):
                     if "verif" in str(e1).lower() or "403" in str(e1) or "401" in str(e1):
                         raise
                     r = _openai_client().images.generate(model=mdl, prompt=prompt, size="1024x1024")
-            b64 = r.data[0].b64_json
+            b64 = getattr(r.data[0], "b64_json", None)
             if b64:
                 return base64.b64decode(b64), "image/png"
+            link = getattr(r.data[0], "url", None)   # dall-e answers with a link
+            if link:
+                with urllib.request.urlopen(urllib.request.Request(link, headers={"User-Agent": "DeepOQ/1.0"}), timeout=60) as ur:
+                    return ur.read(15_000_000), (ur.headers.get("Content-Type") or "image/png")
             _img_note("openai " + mdl + " returned no picture")
         except Exception as e:
-            _img_note("openai " + mdl + ": " + str(e)[:200])
+            msg = str(e)
+            _img_note("openai " + mdl + ": " + msg[:200])
+            if "credits" in msg.lower() or "insufficient_quota" in msg or "billing" in msg.lower():
+                break   # out of money: the other OpenAI models would fail the same way
+    return None
+
+
+def _hf_image(prompt):
+    """FREE picture: Hugging Face FLUX.1-schnell. Make a free token at huggingface.co/settings/tokens
+    (role: Read) and set HF_TOKEN on Render. HF_IMAGE_MODEL changes the model."""
+    tok = os.environ.get("HF_TOKEN", "").strip()
+    if not tok:
+        return None
+    mdl = os.environ.get("HF_IMAGE_MODEL", "black-forest-labs/FLUX.1-schnell").strip()
+    try:
+        req = urllib.request.Request("https://router.huggingface.co/hf-inference/models/" + mdl,
+                                     json.dumps({"inputs": prompt}).encode(),
+                                     {"Authorization": "Bearer " + tok, "Content-Type": "application/json",
+                                      "Accept": "image/png"})
+        with urllib.request.urlopen(req, timeout=100) as r:
+            ct = r.headers.get("Content-Type", "")
+            if ct.startswith("image/"):
+                return r.read(15_000_000), ct
+            _img_note("huggingface gave " + ct)
+    except urllib.error.HTTPError as e:
+        _img_note("huggingface: HTTP %s %s" % (e.code, e.read()[:140]))
+    except Exception as e:
+        _img_note("huggingface: " + str(e)[:140])
+    return None
+
+
+def _horde_image(prompt):
+    """FREE picture with no account: the Stable Horde volunteer network (anonymous key). Slower: 20 to 120 seconds."""
+    hd = {"apikey": os.environ.get("HORDE_API_KEY", "0000000000").strip() or "0000000000",
+          "Content-Type": "application/json", "Client-Agent": "DeepOQ:1.0:deepoq"}
+    base = "https://stablehorde.net/api/v2/"
+    for size in (1024, 768, 512):
+        try:
+            body = {"prompt": prompt, "params": {"width": size, "height": size, "steps": 25, "n": 1, "cfg_scale": 7,
+                                                 "sampler_name": "k_euler_a"},
+                    "nsfw": False, "censor_nsfw": True, "r2": True, "slow_workers": True}
+            with urllib.request.urlopen(urllib.request.Request(base + "generate/async", json.dumps(body).encode(), hd),
+                                        timeout=40) as r:
+                jid = json.loads(r.read().decode()).get("id")
+            if not jid:
+                continue
+            for _ in range(40):   # about 2.5 minutes
+                time.sleep(4)
+                with urllib.request.urlopen(urllib.request.Request(base + "generate/check/" + jid, headers=hd),
+                                            timeout=30) as r:
+                    chk = json.loads(r.read().decode())
+                if chk.get("done"):
+                    break
+                if chk.get("faulted"):
+                    break
+            with urllib.request.urlopen(urllib.request.Request(base + "generate/status/" + jid, headers=hd),
+                                        timeout=40) as r:
+                st = json.loads(r.read().decode())
+            gens = st.get("generations") or []
+            if not gens:
+                _img_note("horde: no picture at %dpx (queue too long?)" % size)
+                try:
+                    urllib.request.urlopen(urllib.request.Request(base + "generate/status/" + jid, headers=hd, method="DELETE"), timeout=15)
+                except Exception:
+                    pass
+                continue
+            img = gens[0].get("img") or ""
+            if img.startswith("http"):
+                with urllib.request.urlopen(urllib.request.Request(img, headers={"User-Agent": "DeepOQ/1.0"}), timeout=60) as r:
+                    return r.read(15_000_000), (r.headers.get("Content-Type") or "image/webp")
+            if img:
+                return base64.b64decode(img), "image/webp"
+        except urllib.error.HTTPError as e:
+            _img_note("horde %dpx: HTTP %s %s" % (size, e.code, e.read()[:140]))
+        except Exception as e:
+            _img_note("horde %dpx: %s" % (size, str(e)[:140]))
     return None
 
 
@@ -10071,6 +10196,8 @@ def _gen_image_bytes(prompt, seed, quality=None):
     The free Pollinations endpoint is NOT used because it stamps its logo on every picture."""
     prompt = (prompt or "")[:700]
     _img_tl.why = []
+    if os.environ.get("DEEP_OQ_IMAGE_PROVIDER", "").strip().lower() == "free":   # free services only, no paid calls
+        return _hf_image(prompt) or _horde_image(prompt)
     if OPENAI_KEY and os.environ.get("DEEP_OQ_IMAGE_PROVIDER", "openai").strip().lower() != "pollinations":
         got = _openai_image(prompt, quality)   # OpenAI's picture model first (the ChatGPT look); the others are the backup
         if got:
@@ -10099,7 +10226,7 @@ def _gen_image_bytes(prompt, seed, quality=None):
     for name, url, key, model in EXTRA_PROVIDERS:  # Google Gemini picture model (uses the same GEMINI_API_KEY)
         if name != "gemini":
             continue
-        for gm in dict.fromkeys([os.environ.get("DEEP_OQ_GEMINI_IMAGE_MODEL", "").strip(), "gemini-2.5-flash-image"]):
+        for gm in dict.fromkeys([os.environ.get("DEEP_OQ_GEMINI_IMAGE_MODEL", "").strip(), "gemini-2.5-flash-image", "gemini-2.0-flash-preview-image-generation"]):
             if not gm:
                 continue
             try:
@@ -10117,9 +10244,14 @@ def _gen_image_bytes(prompt, seed, quality=None):
                 _img_note("gemini gave no picture")
             except Exception as e:
                 _img_note("gemini " + gm + ": " + str(e)[:200])
-    if OPENAI_KEY:  # OpenAI picture model
-        return _openai_image(prompt, quality)
-    return None
+    if OPENAI_KEY and os.environ.get("DEEP_OQ_IMAGE_PROVIDER", "openai").strip().lower() == "pollinations":
+        got = _openai_image(prompt, quality)
+        if got:
+            return got
+    got = _hf_image(prompt)      # free: Hugging Face FLUX (needs a free HF_TOKEN)
+    if got:
+        return got
+    return _horde_image(prompt)  # free: Stable Horde (no key at all, but it can take a minute)
 
 
 def _fetch_scene_image(prompt, seed, path):
