@@ -57,6 +57,7 @@ import sys
 import tempfile
 import threading
 import uuid
+import math_tools
 
 from flask import Flask, Response, jsonify, redirect, request, send_file, stream_with_context, session as login_session
 import queue
@@ -729,7 +730,7 @@ def research_answer(session, question, emit=None):
 
 
 # ---------- router: decide which tools a question needs ----------
-_NUM = re.compile(r"\d|calculate|compute|sum of|product of|how many|percent|%|sqrt|root|average")
+_NUM = re.compile(r"\d|calculate|compute|sum of|product of|how many|percent|%|sqrt|root|average|integral|limit|series|maxim|minim|factorial|digits")
 _LIVE = re.compile(r"today|latest|news|current|currently|right now|price|rate|score|"
                    r"who is the|weather|this week|this month|this year|2025|2026|"
                    r"recent|update|trending|live|headline|happening|breaking|current affairs|\bwho (is|are|won|wins)\b|"
@@ -758,13 +759,25 @@ def _run_tools_inner(question, fast_chat):
         '{"calc": ["python-style arithmetic expressions to evaluate exactly"], '
         '"count": "exact text whose words/letters must be counted, or empty", '
         '"search": "short web search query if the answer depends on current/recent '
-        'facts, or empty"}\n'
+        'facts, or empty", '
+        '"solve": [["tool", "arg1", "arg2"]]}\n'
         "Use empty lists/strings when a tool is not needed. calc may only use numbers, "
         "+ - * / ** %, parentheses, sqrt, sin, cos, tan, log, log10, exp, factorial, "
-        "pi, e.\n\nQUESTION:\n" + question)
-    schema = {"type": "object", "additionalProperties": False, "required": ["calc", "count", "search"],
+        "pi, e.\n"
+        "Use solve ONLY for calculus, series, limits, equation roots, optimisation, "
+        "number-theory searches, or very large / high-precision numbers. Each item is a "
+        "tool name followed by its arguments. Tools: integral expr lo hi | "
+        "sum expr --lo 1 --hi inf [--alt] | limit expr --at 0 | roots expr lo hi | "
+        "opt expr --vars x --bounds 0:5 [--maximize] | minpoly expr | identify expr | "
+        "identity lhs rhs | calc expr --digits 100 | hpintegral expr lo hi --digits 40 | "
+        "hpsum expr --lo 1 [--alt] | search cond --vars a b --max 200 --collect expr. "
+        "Use x as the variable (n for sums) and ^ for powers.\n\nQUESTION:\n" + question)
+    schema = {"type": "object", "additionalProperties": False,
+              "required": ["calc", "count", "search", "solve"],
               "properties": {"calc": {"type": "array", "items": {"type": "string"}},
-                             "count": {"type": "string"}, "search": {"type": "string"}}}
+                             "count": {"type": "string"}, "search": {"type": "string"},
+                             "solve": {"type": "array",
+                                       "items": {"type": "array", "items": {"type": "string"}}}}}
     plan = openai_json(prompt, schema, "tool_plan")
     if plan is None:
         try:
@@ -783,7 +796,15 @@ def _run_tools_inner(question, fast_chat):
             out.append(f"CALC {ex} = {safe_calc(str(ex))}")
             used.append("calc")
         except Exception:
-            pass
+            big = math_tools.big_calc(str(ex))      # too big for safe_calc: use the exact engine
+            if big:
+                out.append(f"CALC {ex} =\n{big}")
+                used.append("calc")
+    for spec in (plan.get("solve") or [])[:3]:
+        res = math_tools.run_math(spec)
+        if res:
+            out.append("MATH TOOL " + " ".join(map(str, spec))[:200] + ":\n" + res)
+            used.append("math")
     if plan.get("count"):
         out.append(f"COUNT of given text = {count_text(str(plan['count']))}")
         used.append("count")
