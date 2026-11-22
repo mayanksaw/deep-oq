@@ -58,7 +58,12 @@ import tempfile
 import threading
 import uuid
 import math_tools
-
+try:
+    import proof_checker
+    PROOF_OK = True
+except Exception as e:
+    print("proof checker off:", e)
+    PROOF_OK = False
 from flask import Flask, Response, jsonify, redirect, request, send_file, stream_with_context, session as login_session
 import queue
 import base64
@@ -3135,6 +3140,15 @@ def _deep_oq_raw(session, question, force_exam=False, emit=None):
                     "else, ignore them and answer from your own knowledge, saying it may have changed. Never reply that you "
                     "cannot answer because of the search results. Keep it short."}], 0.2, 2048, smart=True)
     if exam:  # JEE / NEET / UPSC style
+        if PROOF_OK and re.search(r"\b(prove|show that|inequalit\w*)\b", question, re.I) \
+                and re.search(r"[<>≤≥]|\\le|\\ge|inequalit", question):
+            try:
+                pr = proof_checker.prove(question, lambda m, t, k: chat(m, t, k, smart=True, prefer=EXAM_MODEL),
+                                         emit=emit, style=" Write the maths with symbols (≤ ≥ √ ²), no LaTeX.")
+                if pr:
+                    return pr.text
+            except Exception as e:
+                print("proof checker failed:", e)
         solve_txt = ("\n\nSolve this like a top teacher. Work one step at a time, explain why each step is done, "
                      "do the arithmetic carefully and check the result.")
         if not is_checkable(question):  # essays, explanations and proofs: one strong answer, then an independent check
