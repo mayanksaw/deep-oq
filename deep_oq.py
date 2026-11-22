@@ -65,6 +65,12 @@ import base64
 from werkzeug.security import check_password_hash, generate_password_hash
 from groq import Groq
 
+# Creator profile: edit about_creator.py (same folder) to change the About page and what Deep OQ knows about its creator.
+try:
+    from about_creator import PROFILE as CREATOR
+except Exception:
+    CREATOR = {}
+
 
 # ==========================================================================
 # DATABASE: a SQLite file by default, PostgreSQL when the DATABASE_URL setting exists
@@ -1562,6 +1568,37 @@ SYSTEM = (
     "make up false claims about your technology, such as saying you were trained from scratch "
     "or that you are a particular named model."
 )
+
+
+def _creator_facts():
+    """Plain-text facts about the creator, built from about_creator.py, for the system prompt."""
+    c = CREATOR or {}
+    if not c:
+        return ""
+    name = c.get("name") or "Mayank Kumar Saw"
+    out = ["ABOUT YOUR CREATOR (use only when someone asks who made you or about him; do not bring it up otherwise): "
+           + name + (", " + c["role"] if c.get("role") else "") + "."]
+    if c.get("about"):
+        out.append(c["about"])
+    for e in c.get("education") or []:
+        bits = [e.get(k) for k in ("level", "field", "place", "years") if e.get(k)]
+        if bits or e.get("note"):
+            out.append("Education: " + ", ".join(bits) + ("." if bits else "") + (" " + e["note"] if e.get("note") else ""))
+    sk = "; ".join("%s: %s" % (g.get("group", ""), g.get("items", "")) for g in c.get("skills") or [] if g.get("items"))
+    if sk:
+        out.append("Skills: " + sk + ".")
+    pr = " ".join("%s: %s" % (x.get("name", ""), x.get("text", "")) for x in c.get("projects") or [] if x.get("name"))
+    if pr:
+        out.append("Projects: " + pr)
+    if c.get("interests"):
+        out.append("Interests: " + c["interests"] + ".")
+    if c.get("goals"):
+        out.append("Goals: " + " ".join(c["goals"]))
+    out.append("Share only what is listed here; if asked something about him that is not listed, say you do not know.")
+    return " ".join(out)
+
+
+SYSTEM += " " + _creator_facts()
 
 
 # ==========================================================================
@@ -3098,7 +3135,7 @@ def _start_login(name, remember):
 def require_login():
     _tl.max = False
     p = request.path
-    if p in ("/login", "/logout", "/favicon.ico", "/health", "/vr", "/terms", "/privacy") or p.startswith(("/api/login", "/api/register", "/api/google")):
+    if p in ("/login", "/logout", "/favicon.ico", "/health", "/vr", "/terms", "/privacy", "/about") or p.startswith(("/api/login", "/api/register", "/api/google")):
         return None
     if login_session.get("user"):
         return None
@@ -3217,7 +3254,7 @@ def index():
            + '</div><div class="btns">')
     if is_admin():
         row += '<a class="adm" href="/admin">Admin</a>'
-    row += '<a href="/logout">Log out</a></div></div>'
+    row += '<a href="/about">About</a><a href="/logout">Log out</a></div></div>'
     html = PAGE.replace("</header>", row + "</header>", 1).replace("</head>", ACCT_CSS + "</head>", 1)
     return html, 200, {"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache"}
 
@@ -8475,7 +8512,7 @@ LOGIN_PAGE = r"""<!DOCTYPE html>
       <p class="switch" id="switch">New here? <a id="toggle">Create an account</a></p>
 
       <p class="sub" style="font-size:12px;text-align:center;margin:14px 0 0;min-height:0">Chats are saved to your account and the site owner can access them.</p>
-      <a href="/terms" style="color:#00d4ff">Terms</a> and <a href="/privacy" style="color:#00d4ff">Privacy</a>
+      <a href="/about" style="color:#00d4ff">About</a>, <a href="/terms" style="color:#00d4ff">Terms</a> and <a href="/privacy" style="color:#00d4ff">Privacy</a>
 
       <div class="ok" id="ok">
         <svg viewBox="0 0 100 100"><circle cx="50" cy="50" r="41"/><path d="M30 52 L45 66 L71 36"/></svg>
@@ -9226,6 +9263,41 @@ def _legal(title, body):
     return ("<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
             "<title>%s</title><body style='font:16px system-ui;max-width:720px;margin:40px auto;padding:0 16px;line-height:1.6'>"
             "<h1>%s</h1>%s<p><a href='/'>Back to Deep OQ</a></p>" % (title, title, body))
+
+
+@app.get("/about")
+def about_page():
+    c = CREATOR or {}
+    e = _html.escape
+    if not c:
+        return _legal("About", "<p>Deep OQ was made by Mayank Kumar Saw.</p>")
+    h = ["<p style='opacity:.75;margin-top:-8px'>%s</p>" % e(c.get("role", ""))] if c.get("role") else []
+    if c.get("about"):
+        h.append("<p>%s</p>" % e(c["about"]))
+    ed = []
+    for x in c.get("education") or []:
+        line = ", ".join(e(x[k]) for k in ("level", "field", "place", "years") if x.get(k))
+        if x.get("note"):
+            line += (". " if line else "") + e(x["note"])
+        if line:
+            ed.append("<li>%s</li>" % line)
+    if ed:
+        h.append("<h2>Education</h2><ul>%s</ul>" % "".join(ed))
+    sk = ["<li><b>%s</b>: %s</li>" % (e(g.get("group", "")), e(g["items"])) for g in c.get("skills") or [] if g.get("items")]
+    if sk:
+        h.append("<h2>Skills</h2><ul>%s</ul>" % "".join(sk))
+    pr = ["<li><b>%s</b>: %s</li>" % (e(x["name"]), e(x.get("text", ""))) for x in c.get("projects") or [] if x.get("name")]
+    if pr:
+        h.append("<h2>Projects</h2><ul>%s</ul>" % "".join(pr))
+    if c.get("interests"):
+        h.append("<h2>Interests</h2><p>%s</p>" % e(c["interests"]))
+    if c.get("goals"):
+        h.append("<h2>Goals</h2><ul>%s</ul>" % "".join("<li>%s</li>" % e(g) for g in c["goals"]))
+    ln = ["<a href='%s' target='_blank' rel='noopener'>%s</a>" % (e(l["url"], quote=True), e(l.get("label") or l["url"]))
+          for l in c.get("links") or [] if l.get("url", "").startswith(("http://", "https://"))]
+    if ln:
+        h.append("<h2>Links</h2><p>%s</p>" % " &middot; ".join(ln))
+    return _legal("About " + e(c.get("name", "the creator")), "".join(h))
 
 
 @app.get("/terms")
