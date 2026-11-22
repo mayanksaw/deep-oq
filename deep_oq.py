@@ -5229,14 +5229,81 @@ function speakText(raw,btn){
   const chess=(function(){
     const G={name:'chess',title:'Chess',
       get help(){return mode==='two'
-        ?'2 Players: pass the device. White moves first, then Black. Tap a piece, then tap a square to move it. Castling and queen promotion work; en passant is not included. Tap the top left button to play the computer instead. The top right button flips the board: Flip off, Flip on, or Auto (the board turns to face whoever is moving).'
-        :'You play white against Deep OQ. Tap a piece, then tap a square to move it. Castling and queen promotion work; en passant is not included. Tap the top left button to play a friend on this device. The top right button flips the board (Flip on turns it around for Black).'}};
+        ?'2 Players: pass the device. White moves first, then Black. Tap a piece, then tap a square to move it. Castling, en passant and queen promotion work. Tap the top left button to play the computer instead. The top right button flips the board: Flip off, Flip on, or Auto (the board turns to face whoever is moving).'
+        :'You play white against Deep OQ. Tap a piece, then tap a square to move it. Castling, en passant and queen promotion work. The bottom button sets the computer level: Basic (built in) or Stockfish Easy, Medium, Hard, Max (needs internet). Tap the top left button to play a friend on this device. The top right button flips the board (Flip on turns it around for Black).'}};
     const VAL={p:100,n:320,b:330,r:500,q:900,k:20000};
     const GL={p:'♟',n:'♞',b:'♝',r:'♜',q:'♛',k:'♚'};
     const SQ=57,BX=12,BY=96;
-    let bd,turn,sel,moves,cast,score,over,msg,think,lastMv,anim;
+    let bd,turn,sel,moves,cast,score,over,msg,think,lastMv,anim,ep=-1,aiTok=0;
     let mode='cpu';
     try{if(localStorage.getItem('oqchessmode')==='two')mode='two'}catch(e){}
+    const LVS=['basic','easy','medium','hard','max'];
+    const LV={basic:{n:'Basic'},easy:{n:'Easy',sk:2,ms:250},medium:{n:'Medium',sk:8,ms:600},hard:{n:'Hard',sk:15,ms:1200},max:{n:'Max',sk:20,ms:2500}};
+    let lvl='max';
+    try{const l=localStorage.getItem('oqchesslvl');if(LV[l])lvl=l}catch(e){}
+    /* Stockfish (loaded from a CDN into a Web Worker); the built-in engine is the fallback */
+    const SFU=['https://cdnjs.cloudflare.com/ajax/libs/stockfish.js/10.0.2/stockfish.js','https://cdn.jsdelivr.net/npm/stockfish.js@10.0.2/stockfish.js','https://unpkg.com/stockfish.js@10.0.2/stockfish.js'];
+    let sf=null,sfState='idle',sfCb=null,sfBusy=false,sfSkip=0;
+    function sfFail(){sfState='fail';sf=null}
+    function sfLoad(){
+      if(sfState!=='idle')return;
+      sfState='loading';
+      const tryUrl=i=>{
+        if(i>=SFU.length){sfFail();return}
+        fetch(SFU[i]).then(r=>r.ok?r.text():Promise.reject(0)).then(t=>{
+          const w=new Worker(URL.createObjectURL(new Blob([t],{type:'application/javascript'})));
+          w.onmessage=e=>sfMsg(String(e.data));
+          w.onerror=()=>{if(sfState!=='ready'){try{w.terminate()}catch(x){}tryUrl(i+1)}};
+          sf=w;w.postMessage('uci');
+        }).catch(()=>tryUrl(i+1));
+      };
+      tryUrl(0);
+    }
+    function sfMsg(line){
+      if(line==='uciok'){sf.postMessage('isready');return}
+      if(line==='readyok'){if(sfState!=='ready')sfState='ready';return}
+      if(line.indexOf('bestmove')===0){
+        if(sfSkip>0){sfSkip--;return}
+        sfBusy=false;
+        const cb=sfCb;sfCb=null;if(cb)cb(line);
+      }
+    }
+    function toFen(){
+      let f='';
+      for(let r=0;r<8;r++){let e=0;for(let c=0;c<8;c++){const q=bd[r*8+c];if(!q)e++;else{if(e){f+=e;e=0}f+=q}}if(e)f+=e;if(r<7)f+='/'}
+      let ca=(cast.wk?'K':'')+(cast.wq?'Q':'')+(cast.bk?'k':'')+(cast.bq?'q':'');
+      const eps=ep>=0?'abcdefgh'[ep&7]+(8-(ep>>3)):'-';
+      return f+' '+(turn?'w':'b')+' '+(ca||'-')+' '+eps+' 0 1';
+    }
+    function parseUci(line){
+      const t=line.split(' ')[1];if(!t||t.length<4)return null;
+      const fl='abcdefgh',f=(8-parseInt(t[1]))*8+fl.indexOf(t[0]),d=(8-parseInt(t[3]))*8+fl.indexOf(t[2]);
+      const m=legal(bd,turn,cast,ep).find(q=>q[0]===f&&q[1]===d);
+      if(!m)return null;
+      const mv=[m[0],m[1]];if(t.length>4)mv[2]=t[4];
+      return mv;
+    }
+    function aiTurn(){
+      const tok=aiTok;think=true;
+      const fallback=()=>{if(tok!==aiTok)return;const a=aiMove();think=false;if(a)play(a)};
+      if(lvl==='basic'){setTimeout(fallback,350);return}
+      sfLoad();
+      let waited=0;
+      const go=()=>{
+        if(tok!==aiTok)return;
+        if(sfState==='ready'&&sf){
+          const L=LV[lvl];let done=false;
+          const to=setTimeout(()=>{if(done)return;done=true;sfCb=null;if(sfBusy){sfSkip++;sfBusy=false;try{sf.postMessage('stop')}catch(e){}}fallback()},L.ms+8000);
+          sfCb=line=>{if(done)return;done=true;clearTimeout(to);if(tok!==aiTok)return;const mv=parseUci(line);if(mv){think=false;play(mv)}else fallback()};
+          sfBusy=true;
+          sf.postMessage('setoption name Skill Level value '+L.sk);
+          sf.postMessage('position fen '+toFen());
+          sf.postMessage('go movetime '+L.ms);
+        }else if(sfState==='fail'||waited>15000){fallback()}
+        else{waited+=200;if(sfState==='loading')msg='Loading Stockfish...';setTimeout(go,200)}
+      };
+      go();
+    }
     let fm='off';   /* board flip: off | on | auto (auto = face the side to move, 2 players) */
     try{const f=localStorage.getItem('oqchessflip');if(f==='on'||f==='auto')fm=f}catch(e){}
     const flipped=()=>fm==='on'||(fm==='auto'&&mode==='two'&&!turn);
@@ -5251,7 +5318,7 @@ function speakText(raw,btn){
       for(let i=0;i<8;i++)bd[56+i]=back[i].toUpperCase();
     }
     const inb=(r,c)=>r>=0&&r<8&&c>=0&&c<8;
-    function gen(b,side,ca,attOnly){   /* pseudo-legal moves for one side */
+    function gen(b,side,ca,attOnly,ep){   /* pseudo-legal moves for one side */
       const out=[];
       for(let s=0;s<64;s++){
         const p=b[s];if(!p||white(p)!==side)continue;
@@ -5260,7 +5327,7 @@ function speakText(raw,btn){
         if(t==='p'){
           const dir=side?-1:1,sr=side?6:1;
           if(!attOnly&&inb(r+dir,c)&&!b[(r+dir)*8+c]){out.push([s,(r+dir)*8+c]);if(r===sr&&!b[(r+2*dir)*8+c])out.push([s,(r+2*dir)*8+c])}
-          for(const dc of[-1,1]){if(!inb(r+dir,c+dc))continue;const d=(r+dir)*8+c+dc,q=b[d];if(attOnly||(q&&white(q)!==side))out.push([s,d])}
+          for(const dc of[-1,1]){if(!inb(r+dir,c+dc))continue;const d=(r+dir)*8+c+dc,q=b[d];if(attOnly||(q&&white(q)!==side)||(!q&&d===ep))out.push([s,d])}
         }else if(t==='n'){for(const[a,d]of[[1,2],[2,1],[-1,2],[-2,1],[1,-2],[2,-1],[-1,-2],[-2,-1]])add(r+a,c+d)}
         else if(t==='k'){
           for(let a=-1;a<=1;a++)for(let d=-1;d<=1;d++)if(a||d)add(r+a,c+d);
@@ -5281,12 +5348,15 @@ function speakText(raw,btn){
     function attacked(b,sq,bySide){return gen(b,bySide,null,true).some(m=>m[1]===sq)}
     function kingSq(b,side){return b.indexOf(side?'K':'k')}
     function apply(b,m){
-      const nb=b.slice(),p=nb[m[0]];nb[m[1]]=p;nb[m[0]]=null;
+      const nb=b.slice(),p=nb[m[0]];
+      if(p&&p.toLowerCase()==='p'&&((m[0]^m[1])&7)&&!nb[m[1]])nb[(m[0]&~7)+(m[1]&7)]=null;   /* en passant */
+      nb[m[1]]=p;nb[m[0]]=null;
       if(p&&p.toLowerCase()==='k'&&Math.abs(m[1]-m[0])===2){const row=m[0]&~7;if(m[1]>m[0]){nb[row+5]=nb[row+7];nb[row+7]=null}else{nb[row+3]=nb[row];nb[row]=null}}
-      if(p==='P'&&m[1]<8)nb[m[1]]='Q';if(p==='p'&&m[1]>=56)nb[m[1]]='q';
+      if(p==='P'&&m[1]<8)nb[m[1]]=m[2]?m[2].toUpperCase():'Q';if(p==='p'&&m[1]>=56)nb[m[1]]=m[2]?m[2].toLowerCase():'q';
       return nb;
     }
-    function legal(b,side,ca){return gen(b,side,ca).filter(m=>{const nb=apply(b,m),k=kingSq(nb,side);return k>=0&&!attacked(nb,k,!side)})}
+    function newEp(b,m){const p=b[m[0]];return p&&p.toLowerCase()==='p'&&Math.abs(m[1]-m[0])===16?(m[0]+m[1])>>1:-1}
+    function legal(b,side,ca,ep){return gen(b,side,ca,false,ep).filter(m=>{const nb=apply(b,m),k=kingSq(nb,side);return k>=0&&!attacked(nb,k,!side)})}
     function newCast(ca,m,p){
       const c=Object.assign({},ca);
       if(p==='K'){c.wk=c.wq=false}if(p==='k'){c.bk=c.bq=false}
@@ -5296,23 +5366,23 @@ function speakText(raw,btn){
     function evalB(b){let v=0;for(let s=0;s<64;s++){const p=b[s];if(!p)continue;const t=p.toLowerCase(),r=s>>3,c=s&7;let x=VAL[t];
       const cen=3.5-Math.abs(c-3.5)+3.5-Math.abs(r-3.5);if(t==='p')x+=(white(p)?6-r:r-1)*6+cen*2;else if(t==='n'||t==='b')x+=cen*5;else if(t==='k')x-=cen*0;
       v+=white(p)?x:-x}return v}
-    function search(b,ca,side,depth,al,be){   /* white maximises, black minimises */
+    function search(b,ca,side,depth,al,be,ep){   /* white maximises, black minimises */
       if(depth===0)return evalB(b);
-      let ms=legal(b,side,ca);
+      let ms=legal(b,side,ca,ep);
       if(!ms.length)return attacked(b,kingSq(b,side),!side)?(side?-99999-depth:99999+depth):0;
       ms.sort((x,y)=>(b[y[1]]?VAL[b[y[1]].toLowerCase()]:0)-(b[x[1]]?VAL[b[x[1]].toLowerCase()]:0));
-      if(side){let best=-1e9;for(const m of ms){const v=search(apply(b,m),newCast(ca,m,b[m[0]]),false,depth-1,al,be);if(v>best)best=v;al=Math.max(al,v);if(al>=be)break}return best}
-      let best=1e9;for(const m of ms){const v=search(apply(b,m),newCast(ca,m,b[m[0]]),true,depth-1,al,be);if(v<best)best=v;be=Math.min(be,v);if(al>=be)break}return best;
+      if(side){let best=-1e9;for(const m of ms){const v=search(apply(b,m),newCast(ca,m,b[m[0]]),false,depth-1,al,be,newEp(b,m));if(v>best)best=v;al=Math.max(al,v);if(al>=be)break}return best}
+      let best=1e9;for(const m of ms){const v=search(apply(b,m),newCast(ca,m,b[m[0]]),true,depth-1,al,be,newEp(b,m));if(v<best)best=v;be=Math.min(be,v);if(al>=be)break}return best;
     }
     function aiMove(){
-      const ms=legal(bd,false,cast);if(!ms.length)return null;
+      const ms=legal(bd,false,cast,ep);if(!ms.length)return null;
       let best=null,bv=1e9;
       ms.sort(()=>Math.random()-.5);
-      for(const m of ms){const v=search(apply(bd,m),newCast(cast,m,bd[m[0]]),true,2,-1e9,1e9)+Math.random()*8;if(v<bv){bv=v;best=m}}
+      for(const m of ms){const v=search(apply(bd,m),newCast(cast,m,bd[m[0]]),true,2,-1e9,1e9,newEp(bd,m))+Math.random()*8;if(v<bv){bv=v;best=m}}
       return best;
     }
     function finish(side){   /* has the side to move got a move? */
-      const ms=legal(bd,side,cast),chk=attacked(bd,kingSq(bd,side),!side);
+      const ms=legal(bd,side,cast,ep),chk=attacked(bd,kingSq(bd,side),!side);
       if(!ms.length){
         over=true;
         if(!chk)msg='Stalemate. A draw';
@@ -5325,14 +5395,14 @@ function speakText(raw,btn){
       msg=chk?(side?'You are in check':'Check!'):(side?'Your move':'Deep OQ is thinking...');
     }
     function play(m){
-      const p=bd[m[0]],cap=bd[m[1]];
+      const p=bd[m[0]],isEp=p&&p.toLowerCase()==='p'&&((m[0]^m[1])&7)&&!bd[m[1]],cap=bd[m[1]]||(isEp?'p':null);
       if(cap&&turn&&mode==='cpu')score+=VAL[cap.toLowerCase()]/100*10;
       anim={m,t:0,p};
       const col=cap?['#ffd166','#ff5a5f','#fff']:['#7CFFD0','#fff'];
       burst(BX+(m[1]&7)*SQ+SQ/2,BY+(m[1]>>3)*SQ+SQ/2,cap?22:8,col,160,300);
-      cast=newCast(cast,m,p);bd=apply(bd,m);lastMv=m;sel=-1;moves=[];
+      const ne=newEp(bd,m);cast=newCast(cast,m,p);bd=apply(bd,m);ep=ne;lastMv=m;sel=-1;moves=[];
       turn=!turn;finish(turn);
-      if(mode==='cpu'&&!over&&!turn){think=true;setTimeout(()=>{if(mode==='cpu'&&!over&&!turn&&think){const a=aiMove();think=false;if(a)play(a)}},350)}
+      if(mode==='cpu'&&!over&&!turn)aiTurn();
     }
     function setMode(m){
       mode=m;
@@ -5340,18 +5410,19 @@ function speakText(raw,btn){
       G.reset();
       const h=document.getElementById('ghelp');if(h)h.textContent=G.help;
     }
-    G.reset=()=>{init();turn=true;sel=-1;moves=[];cast={wk:1,wq:1,bk:1,bq:1};score=0;over=false;msg=mode==='two'?"White's move":'Your move';think=false;lastMv=null;anim=null;fx.length=0};
+    G.reset=()=>{aiTok++;if(sfBusy&&sf){sfSkip++;sfBusy=false;sfCb=null;try{sf.postMessage('stop')}catch(e){}}ep=-1;init();turn=true;sel=-1;moves=[];cast={wk:1,wq:1,bk:1,bq:1};score=0;over=false;msg=mode==='two'?"White's move":'Your move';think=false;lastMv=null;anim=null;fx.length=0};
     G.score=()=>mode==='two'?0:score;
     G.update=dt=>{updFx(dt);if(anim){anim.t+=dt;if(anim.t>.18)anim=null}};
     G.tap=(x,y)=>{
       if(x<150&&y<60){setMode(mode==='cpu'?'two':'cpu');return}   /* mode button */
       if(x>W-150&&y<60){fm=fm==='off'?'on':fm==='on'?'auto':'off';try{localStorage.setItem('oqchessflip',fm)}catch(e){}return}   /* flip button */
+      if(mode==='cpu'&&y>590&&Math.abs(x-W/2)<80){lvl=LVS[(LVS.indexOf(lvl)+1)%LVS.length];try{localStorage.setItem('oqchesslvl',lvl)}catch(e){}return}   /* level button */
       if(over){G.reset();return}
       if(mode==='cpu'&&(!turn||think))return;
       const c=Math.floor((x-BX)/SQ),r=Math.floor((y-BY)/SQ);if(!inb(r,c))return;
       const s=dsq(r*8+c),p=bd[s];
       if(sel>=0){const m=moves.find(q=>q[1]===s);if(m){play(m);return}}
-      if(p&&white(p)===turn){sel=s;moves=legal(bd,turn,cast).filter(m=>m[0]===s)}else{sel=-1;moves=[]}
+      if(p&&white(p)===turn){sel=s;moves=legal(bd,turn,cast,ep).filter(m=>m[0]===s)}else{sel=-1;moves=[]}
     };
     G.draw=()=>{
       const g=ctx.createLinearGradient(0,0,0,H);g.addColorStop(0,'#10173f');g.addColorStop(1,'#070b25');ctx.fillStyle=g;ctx.fillRect(0,0,W,H);
@@ -5383,6 +5454,12 @@ function speakText(raw,btn){
       }
       drawFx();
       txt(mode==='two'?'Pass the device: White and Black take turns':'Tap a piece, then tap where it goes',W/2,BY+8*SQ+26,14,'#a9b4ee','center','600');
+      if(mode==='cpu'){
+        ctx.fillStyle='rgba(124,92,255,.35)';rr(W/2-75,596,150,30,15);ctx.fill();
+        ctx.strokeStyle='rgba(255,255,255,.35)';ctx.lineWidth=1.5;rr(W/2-75,596,150,30,15);ctx.stroke();
+        txt('Level: '+LV[lvl].n,W/2,611,15,'#fff','center','700');
+        if(lvl!=='basic'&&sfState==='fail')txt('Stockfish offline - using basic engine',W/2,BY+8*SQ+36,12,'#ffd166','center','600');
+      }
       if(over)overlay(msg,mode==='two'?'':'Score '+score,'Tap to play again');
     };
     G.reset();
