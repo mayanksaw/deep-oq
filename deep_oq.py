@@ -4543,10 +4543,6 @@ body:not(.chatting) #v-chat.on{padding-top:12vh;padding-bottom:0}
       <button type="button" data-g="snake" aria-pressed="false">Snake</button>
       <button type="button" data-g="flap" aria-pressed="false">Flap</button>
       <button type="button" data-g="breakout" aria-pressed="false">Breakout</button>
-      <button type="button" data-g="tictactoe" aria-pressed="false">Tic-Tac-Toe</button>
-      <button type="button" data-g="connect4" aria-pressed="false">Connect 4</button>
-      <button type="button" data-g="2048" aria-pressed="false">2048</button>
-      <button type="button" data-g="memory" aria-pressed="false">Memory</button>
     </div>
     <div class="gwrap"><canvas id="gcv" width="960" height="1280" aria-label="Game board"></canvas></div>
     <p class="ghelp" id="ghelp"></p>
@@ -5200,7 +5196,7 @@ function speakText(raw,btn){
   addEventListener('resize',()=>{if(!shown())return;const r=b.getBoundingClientRect();place(r.left,r.top)});
 })();
 
-/* ================= games: chess, snake, flap, breakout, tic-tac-toe, connect 4, 2048, memory ================= */
+/* ================= games: chess, snake, flap, breakout ================= */
 (function(){
   const root=document.getElementById('v-games');
   if(!root)return;
@@ -5227,91 +5223,15 @@ function speakText(raw,btn){
   function drawFx(){fx.forEach(p=>{ctx.globalAlpha=clamp(1-p.t/p.life,0,1);ctx.fillStyle=p.c;ctx.fillRect(p.x-p.s/2,p.y-p.s/2,p.s,p.s)});ctx.globalAlpha=1}
 
   /* ======================================================================
-     CHESS: vs Computer (you are white) or 2 Players on the same device
-     Tap the button at the top left of the board to switch mode.
+     CHESS (you are white, Deep OQ plays black)
      ====================================================================== */
   const chess=(function(){
     const G={name:'chess',title:'Chess',
-      get help(){return mode==='two'
-        ?'2 Players: pass the device. White moves first, then Black. Tap a piece, then tap a square to move it. Castling, en passant and queen promotion work. Tap the top left button to play the computer instead. The top right button flips the board: Flip off, Flip on, or Auto (the board turns to face whoever is moving).'
-        :'You play white against Deep OQ. Tap a piece, then tap a square to move it. Castling, en passant and queen promotion work. The bottom button sets the computer level: Basic (built in) or Stockfish Easy, Medium, Hard, Max (needs internet). Tap the top left button to play a friend on this device. The top right button flips the board (Flip on turns it around for Black).'}};
+      help:'You play white. Tap a piece, then tap a square to move it. Capture pieces to score points. Castling and queen promotion work; en passant is not included.'};
     const VAL={p:100,n:320,b:330,r:500,q:900,k:20000};
     const GL={p:'♟',n:'♞',b:'♝',r:'♜',q:'♛',k:'♚'};
     const SQ=57,BX=12,BY=96;
-    let bd,turn,sel,moves,cast,score,over,msg,think,lastMv,anim,ep=-1,aiTok=0;
-    let mode='cpu';
-    try{if(localStorage.getItem('oqchessmode')==='two')mode='two'}catch(e){}
-    const LVS=['basic','easy','medium','hard','max'];
-    const LV={basic:{n:'Basic'},easy:{n:'Easy',sk:2,ms:250},medium:{n:'Medium',sk:8,ms:600},hard:{n:'Hard',sk:15,ms:1200},max:{n:'Max',sk:20,ms:2500}};
-    let lvl='max';
-    try{const l=localStorage.getItem('oqchesslvl');if(LV[l])lvl=l}catch(e){}
-    /* Stockfish (loaded from a CDN into a Web Worker); the built-in engine is the fallback */
-    const SFU=['https://cdnjs.cloudflare.com/ajax/libs/stockfish.js/10.0.2/stockfish.js','https://cdn.jsdelivr.net/npm/stockfish.js@10.0.2/stockfish.js','https://unpkg.com/stockfish.js@10.0.2/stockfish.js'];
-    let sf=null,sfState='idle',sfCb=null,sfBusy=false,sfSkip=0;
-    function sfFail(){sfState='fail';sf=null}
-    function sfLoad(){
-      if(sfState!=='idle')return;
-      sfState='loading';
-      const tryUrl=i=>{
-        if(i>=SFU.length){sfFail();return}
-        fetch(SFU[i]).then(r=>r.ok?r.text():Promise.reject(0)).then(t=>{
-          const w=new Worker(URL.createObjectURL(new Blob([t],{type:'application/javascript'})));
-          w.onmessage=e=>sfMsg(String(e.data));
-          w.onerror=()=>{if(sfState!=='ready'){try{w.terminate()}catch(x){}tryUrl(i+1)}};
-          sf=w;w.postMessage('uci');
-        }).catch(()=>tryUrl(i+1));
-      };
-      tryUrl(0);
-    }
-    function sfMsg(line){
-      if(line==='uciok'){sf.postMessage('isready');return}
-      if(line==='readyok'){if(sfState!=='ready')sfState='ready';return}
-      if(line.indexOf('bestmove')===0){
-        if(sfSkip>0){sfSkip--;return}
-        sfBusy=false;
-        const cb=sfCb;sfCb=null;if(cb)cb(line);
-      }
-    }
-    function toFen(){
-      let f='';
-      for(let r=0;r<8;r++){let e=0;for(let c=0;c<8;c++){const q=bd[r*8+c];if(!q)e++;else{if(e){f+=e;e=0}f+=q}}if(e)f+=e;if(r<7)f+='/'}
-      let ca=(cast.wk?'K':'')+(cast.wq?'Q':'')+(cast.bk?'k':'')+(cast.bq?'q':'');
-      const eps=ep>=0?'abcdefgh'[ep&7]+(8-(ep>>3)):'-';
-      return f+' '+(turn?'w':'b')+' '+(ca||'-')+' '+eps+' 0 1';
-    }
-    function parseUci(line){
-      const t=line.split(' ')[1];if(!t||t.length<4)return null;
-      const fl='abcdefgh',f=(8-parseInt(t[1]))*8+fl.indexOf(t[0]),d=(8-parseInt(t[3]))*8+fl.indexOf(t[2]);
-      const m=legal(bd,turn,cast,ep).find(q=>q[0]===f&&q[1]===d);
-      if(!m)return null;
-      const mv=[m[0],m[1]];if(t.length>4)mv[2]=t[4];
-      return mv;
-    }
-    function aiTurn(){
-      const tok=aiTok;think=true;
-      const fallback=()=>{if(tok!==aiTok)return;const a=aiMove();think=false;if(a)play(a)};
-      if(lvl==='basic'){setTimeout(fallback,350);return}
-      sfLoad();
-      let waited=0;
-      const go=()=>{
-        if(tok!==aiTok)return;
-        if(sfState==='ready'&&sf){
-          const L=LV[lvl];let done=false;
-          const to=setTimeout(()=>{if(done)return;done=true;sfCb=null;if(sfBusy){sfSkip++;sfBusy=false;try{sf.postMessage('stop')}catch(e){}}fallback()},L.ms+8000);
-          sfCb=line=>{if(done)return;done=true;clearTimeout(to);if(tok!==aiTok)return;const mv=parseUci(line);if(mv){think=false;play(mv)}else fallback()};
-          sfBusy=true;
-          sf.postMessage('setoption name Skill Level value '+L.sk);
-          sf.postMessage('position fen '+toFen());
-          sf.postMessage('go movetime '+L.ms);
-        }else if(sfState==='fail'||waited>15000){fallback()}
-        else{waited+=200;if(sfState==='loading')msg='Loading Stockfish...';setTimeout(go,200)}
-      };
-      go();
-    }
-    let fm='off';   /* board flip: off | on | auto (auto = face the side to move, 2 players) */
-    try{const f=localStorage.getItem('oqchessflip');if(f==='on'||f==='auto')fm=f}catch(e){}
-    const flipped=()=>fm==='on'||(fm==='auto'&&mode==='two'&&!turn);
-    const dsq=s=>flipped()?63-s:s;   /* logical square -> screen square */
+    let bd,turn,sel,moves,cast,score,over,msg,think,lastMv,anim;
     const white=c=>c&&c===c.toUpperCase();
     function init(){
       const back='rnbqkbnr';bd=[];
@@ -5322,7 +5242,7 @@ function speakText(raw,btn){
       for(let i=0;i<8;i++)bd[56+i]=back[i].toUpperCase();
     }
     const inb=(r,c)=>r>=0&&r<8&&c>=0&&c<8;
-    function gen(b,side,ca,attOnly,ep){   /* pseudo-legal moves for one side */
+    function gen(b,side,ca,attOnly){   /* pseudo-legal moves for one side */
       const out=[];
       for(let s=0;s<64;s++){
         const p=b[s];if(!p||white(p)!==side)continue;
@@ -5331,7 +5251,7 @@ function speakText(raw,btn){
         if(t==='p'){
           const dir=side?-1:1,sr=side?6:1;
           if(!attOnly&&inb(r+dir,c)&&!b[(r+dir)*8+c]){out.push([s,(r+dir)*8+c]);if(r===sr&&!b[(r+2*dir)*8+c])out.push([s,(r+2*dir)*8+c])}
-          for(const dc of[-1,1]){if(!inb(r+dir,c+dc))continue;const d=(r+dir)*8+c+dc,q=b[d];if(attOnly||(q&&white(q)!==side)||(!q&&d===ep))out.push([s,d])}
+          for(const dc of[-1,1]){if(!inb(r+dir,c+dc))continue;const d=(r+dir)*8+c+dc,q=b[d];if(attOnly||(q&&white(q)!==side))out.push([s,d])}
         }else if(t==='n'){for(const[a,d]of[[1,2],[2,1],[-1,2],[-2,1],[1,-2],[2,-1],[-1,-2],[-2,-1]])add(r+a,c+d)}
         else if(t==='k'){
           for(let a=-1;a<=1;a++)for(let d=-1;d<=1;d++)if(a||d)add(r+a,c+d);
@@ -5352,15 +5272,12 @@ function speakText(raw,btn){
     function attacked(b,sq,bySide){return gen(b,bySide,null,true).some(m=>m[1]===sq)}
     function kingSq(b,side){return b.indexOf(side?'K':'k')}
     function apply(b,m){
-      const nb=b.slice(),p=nb[m[0]];
-      if(p&&p.toLowerCase()==='p'&&((m[0]^m[1])&7)&&!nb[m[1]])nb[(m[0]&~7)+(m[1]&7)]=null;   /* en passant */
-      nb[m[1]]=p;nb[m[0]]=null;
+      const nb=b.slice(),p=nb[m[0]];nb[m[1]]=p;nb[m[0]]=null;
       if(p&&p.toLowerCase()==='k'&&Math.abs(m[1]-m[0])===2){const row=m[0]&~7;if(m[1]>m[0]){nb[row+5]=nb[row+7];nb[row+7]=null}else{nb[row+3]=nb[row];nb[row]=null}}
-      if(p==='P'&&m[1]<8)nb[m[1]]=m[2]?m[2].toUpperCase():'Q';if(p==='p'&&m[1]>=56)nb[m[1]]=m[2]?m[2].toLowerCase():'q';
+      if(p==='P'&&m[1]<8)nb[m[1]]='Q';if(p==='p'&&m[1]>=56)nb[m[1]]='q';
       return nb;
     }
-    function newEp(b,m){const p=b[m[0]];return p&&p.toLowerCase()==='p'&&Math.abs(m[1]-m[0])===16?(m[0]+m[1])>>1:-1}
-    function legal(b,side,ca,ep){return gen(b,side,ca,false,ep).filter(m=>{const nb=apply(b,m),k=kingSq(nb,side);return k>=0&&!attacked(nb,k,!side)})}
+    function legal(b,side,ca){return gen(b,side,ca).filter(m=>{const nb=apply(b,m),k=kingSq(nb,side);return k>=0&&!attacked(nb,k,!side)})}
     function newCast(ca,m,p){
       const c=Object.assign({},ca);
       if(p==='K'){c.wk=c.wq=false}if(p==='k'){c.bk=c.bq=false}
@@ -5370,101 +5287,71 @@ function speakText(raw,btn){
     function evalB(b){let v=0;for(let s=0;s<64;s++){const p=b[s];if(!p)continue;const t=p.toLowerCase(),r=s>>3,c=s&7;let x=VAL[t];
       const cen=3.5-Math.abs(c-3.5)+3.5-Math.abs(r-3.5);if(t==='p')x+=(white(p)?6-r:r-1)*6+cen*2;else if(t==='n'||t==='b')x+=cen*5;else if(t==='k')x-=cen*0;
       v+=white(p)?x:-x}return v}
-    function search(b,ca,side,depth,al,be,ep){   /* white maximises, black minimises */
+    function search(b,ca,side,depth,al,be){   /* white maximises, black minimises */
       if(depth===0)return evalB(b);
-      let ms=legal(b,side,ca,ep);
+      let ms=legal(b,side,ca);
       if(!ms.length)return attacked(b,kingSq(b,side),!side)?(side?-99999-depth:99999+depth):0;
       ms.sort((x,y)=>(b[y[1]]?VAL[b[y[1]].toLowerCase()]:0)-(b[x[1]]?VAL[b[x[1]].toLowerCase()]:0));
-      if(side){let best=-1e9;for(const m of ms){const v=search(apply(b,m),newCast(ca,m,b[m[0]]),false,depth-1,al,be,newEp(b,m));if(v>best)best=v;al=Math.max(al,v);if(al>=be)break}return best}
-      let best=1e9;for(const m of ms){const v=search(apply(b,m),newCast(ca,m,b[m[0]]),true,depth-1,al,be,newEp(b,m));if(v<best)best=v;be=Math.min(be,v);if(al>=be)break}return best;
+      if(side){let best=-1e9;for(const m of ms){const v=search(apply(b,m),newCast(ca,m,b[m[0]]),false,depth-1,al,be);if(v>best)best=v;al=Math.max(al,v);if(al>=be)break}return best}
+      let best=1e9;for(const m of ms){const v=search(apply(b,m),newCast(ca,m,b[m[0]]),true,depth-1,al,be);if(v<best)best=v;be=Math.min(be,v);if(al>=be)break}return best;
     }
     function aiMove(){
-      const ms=legal(bd,false,cast,ep);if(!ms.length)return null;
+      const ms=legal(bd,false,cast);if(!ms.length)return null;
       let best=null,bv=1e9;
       ms.sort(()=>Math.random()-.5);
-      for(const m of ms){const v=search(apply(bd,m),newCast(cast,m,bd[m[0]]),true,2,-1e9,1e9,newEp(bd,m))+Math.random()*8;if(v<bv){bv=v;best=m}}
+      for(const m of ms){const v=search(apply(bd,m),newCast(cast,m,bd[m[0]]),true,2,-1e9,1e9)+Math.random()*8;if(v<bv){bv=v;best=m}}
       return best;
     }
     function finish(side){   /* has the side to move got a move? */
-      const ms=legal(bd,side,cast,ep),chk=attacked(bd,kingSq(bd,side),!side);
-      if(!ms.length){
-        over=true;
-        if(!chk)msg='Stalemate. A draw';
-        else if(mode==='two')msg='Checkmate! '+(side?'Black':'White')+' wins';
-        else if(side)msg='Checkmate. Deep OQ wins';
-        else{msg='Checkmate! You win';score+=500}
-        return;
-      }
-      if(mode==='two'){msg=(side?'White':'Black')+"'s move"+(chk?' - check!':'');return}
+      const ms=legal(bd,side,cast),chk=attacked(bd,kingSq(bd,side),!side);
+      if(!ms.length){over=true;msg=chk?(side?'Checkmate. Deep OQ wins':'Checkmate! You win'):'Stalemate. A draw';if(chk&&!side)score+=500;return}
       msg=chk?(side?'You are in check':'Check!'):(side?'Your move':'Deep OQ is thinking...');
     }
     function play(m){
-      const p=bd[m[0]],isEp=p&&p.toLowerCase()==='p'&&((m[0]^m[1])&7)&&!bd[m[1]],cap=bd[m[1]]||(isEp?'p':null);
-      if(cap&&turn&&mode==='cpu')score+=VAL[cap.toLowerCase()]/100*10;
+      const p=bd[m[0]],cap=bd[m[1]];
+      if(cap&&turn)score+=VAL[cap.toLowerCase()]/100*10;
       anim={m,t:0,p};
       const col=cap?['#ffd166','#ff5a5f','#fff']:['#7CFFD0','#fff'];
       burst(BX+(m[1]&7)*SQ+SQ/2,BY+(m[1]>>3)*SQ+SQ/2,cap?22:8,col,160,300);
-      const ne=newEp(bd,m);cast=newCast(cast,m,p);bd=apply(bd,m);ep=ne;lastMv=m;sel=-1;moves=[];
+      cast=newCast(cast,m,p);bd=apply(bd,m);lastMv=m;sel=-1;moves=[];
       turn=!turn;finish(turn);
-      if(mode==='cpu'&&!over&&!turn)aiTurn();
+      if(!over&&!turn){think=true;setTimeout(()=>{if(!over&&!turn&&think){const a=aiMove();think=false;if(a)play(a)}},350)}
     }
-    function setMode(m){
-      mode=m;
-      try{localStorage.setItem('oqchessmode',m)}catch(e){}
-      G.reset();
-      const h=document.getElementById('ghelp');if(h)h.textContent=G.help;
-    }
-    G.reset=()=>{aiTok++;if(sfBusy&&sf){sfSkip++;sfBusy=false;sfCb=null;try{sf.postMessage('stop')}catch(e){}}ep=-1;init();turn=true;sel=-1;moves=[];cast={wk:1,wq:1,bk:1,bq:1};score=0;over=false;msg=mode==='two'?"White's move":'Your move';think=false;lastMv=null;anim=null;fx.length=0};
-    G.score=()=>mode==='two'?0:score;
+    G.reset=()=>{init();turn=true;sel=-1;moves=[];cast={wk:1,wq:1,bk:1,bq:1};score=0;over=false;msg='Your move';think=false;lastMv=null;anim=null;fx.length=0};
+    G.score=()=>score;
     G.update=dt=>{updFx(dt);if(anim){anim.t+=dt;if(anim.t>.18)anim=null}};
     G.tap=(x,y)=>{
-      if(x<150&&y<60){setMode(mode==='cpu'?'two':'cpu');return}   /* mode button */
-      if(x>W-150&&y<60){fm=fm==='off'?'on':fm==='on'?'auto':'off';try{localStorage.setItem('oqchessflip',fm)}catch(e){}return}   /* flip button */
-      if(mode==='cpu'&&y>590&&Math.abs(x-W/2)<80){lvl=LVS[(LVS.indexOf(lvl)+1)%LVS.length];try{localStorage.setItem('oqchesslvl',lvl)}catch(e){}return}   /* level button */
       if(over){G.reset();return}
-      if(mode==='cpu'&&(!turn||think))return;
+      if(!turn||think)return;
       const c=Math.floor((x-BX)/SQ),r=Math.floor((y-BY)/SQ);if(!inb(r,c))return;
-      const s=dsq(r*8+c),p=bd[s];
+      const s=r*8+c,p=bd[s];
       if(sel>=0){const m=moves.find(q=>q[1]===s);if(m){play(m);return}}
-      if(p&&white(p)===turn){sel=s;moves=legal(bd,turn,cast,ep).filter(m=>m[0]===s)}else{sel=-1;moves=[]}
+      if(p&&white(p)){sel=s;moves=legal(bd,true,cast).filter(m=>m[0]===s)}else{sel=-1;moves=[]}
     };
     G.draw=()=>{
       const g=ctx.createLinearGradient(0,0,0,H);g.addColorStop(0,'#10173f');g.addColorStop(1,'#070b25');ctx.fillStyle=g;ctx.fillRect(0,0,W,H);
       txt('Chess',W/2,34,26,'#fff');
-      /* mode button */
-      ctx.fillStyle='rgba(124,92,255,.35)';rr(12,14,126,32,16);ctx.fill();
-      ctx.strokeStyle='rgba(255,255,255,.35)';ctx.lineWidth=1.5;rr(12,14,126,32,16);ctx.stroke();
-      txt(mode==='two'?'2 Players':'vs Computer',75,30,15,'#fff','center','700');
-      ctx.fillStyle='rgba(124,92,255,.35)';rr(W-138,14,126,32,16);ctx.fill();
-      ctx.strokeStyle='rgba(255,255,255,.35)';ctx.lineWidth=1.5;rr(W-138,14,126,32,16);ctx.stroke();
-      txt(fm==='off'?'Flip: Off':fm==='on'?'Flip: On':'Flip: Auto',W-75,30,15,'#fff','center','700');
       txt(msg,W/2,66,17,over?'#ffd166':(think?'#a9b4ee':'#7CFFD0'),'center','700');
       for(let r=0;r<8;r++)for(let c=0;c<8;c++){
-        const s=dsq(r*8+c),x=BX+c*SQ,y=BY+r*SQ;
+        const s=r*8+c,x=BX+c*SQ,y=BY+r*SQ;
         ctx.fillStyle=(r+c)%2?'#5b6bb8':'#dfe4ff';ctx.fillRect(x,y,SQ,SQ);
         if(lastMv&&(lastMv[0]===s||lastMv[1]===s)){ctx.fillStyle='rgba(255,209,102,.45)';ctx.fillRect(x,y,SQ,SQ)}
         if(s===sel){ctx.fillStyle='rgba(124,255,208,.55)';ctx.fillRect(x,y,SQ,SQ)}
       }
-      const kw=kingSq(bd,turn);if(kw>=0&&!over&&attacked(bd,kw,!turn)){ctx.fillStyle='rgba(255,90,95,.6)';ctx.fillRect(BX+(dsq(kw)&7)*SQ,BY+(dsq(kw)>>3)*SQ,SQ,SQ)}
-      for(const m of moves){const d=dsq(m[1]),x=BX+(d&7)*SQ+SQ/2,y=BY+(d>>3)*SQ+SQ/2;if(bd[m[1]]){ctx.strokeStyle='#ff5a5f';ctx.lineWidth=4;ctx.beginPath();ctx.arc(x,y,SQ/2-4,0,Math.PI*2);ctx.stroke()}else circ(x,y,8,'rgba(30,40,90,.6)')}
+      const kw=kingSq(bd,turn);if(kw>=0&&!over&&attacked(bd,kw,!turn)){ctx.fillStyle='rgba(255,90,95,.6)';ctx.fillRect(BX+(kw&7)*SQ,BY+(kw>>3)*SQ,SQ,SQ)}
+      for(const m of moves){const x=BX+(m[1]&7)*SQ+SQ/2,y=BY+(m[1]>>3)*SQ+SQ/2;if(bd[m[1]]){ctx.strokeStyle='#ff5a5f';ctx.lineWidth=4;ctx.beginPath();ctx.arc(x,y,SQ/2-4,0,Math.PI*2);ctx.stroke()}else circ(x,y,8,'rgba(30,40,90,.6)')}
       for(let s=0;s<64;s++){
         const p=bd[s];if(!p)continue;
-        const ds=dsq(s);let x=BX+(ds&7)*SQ+SQ/2,y=BY+(ds>>3)*SQ+SQ/2;
-        if(anim&&anim.m[1]===s){const k=1-anim.t/.18,d0=dsq(anim.m[0]),fx0=BX+(d0&7)*SQ+SQ/2,fy0=BY+(d0>>3)*SQ+SQ/2;x+=(fx0-x)*k;y+=(fy0-y)*k}
+        let x=BX+(s&7)*SQ+SQ/2,y=BY+(s>>3)*SQ+SQ/2;
+        if(anim&&anim.m[1]===s){const k=1-anim.t/.18,fx0=BX+(anim.m[0]&7)*SQ+SQ/2,fy0=BY+(anim.m[0]>>3)*SQ+SQ/2;x+=(fx0-x)*k;y+=(fy0-y)*k}
         ctx.font='42px "Segoe UI Symbol","Noto Sans Symbols 2","Apple Symbols",serif';ctx.textAlign='center';ctx.textBaseline='middle';
         const gl=GL[p.toLowerCase()]+'\uFE0E';ctx.lineWidth=3;ctx.lineJoin='round';
         if(white(p)){ctx.strokeStyle='#1a2150';ctx.strokeText(gl,x,y+2);ctx.fillStyle='#fff';ctx.fillText(gl,x,y+2)}
         else{ctx.strokeStyle='rgba(255,255,255,.55)';ctx.strokeText(gl,x,y+2);ctx.fillStyle='#10163a';ctx.fillText(gl,x,y+2)}
       }
       drawFx();
-      txt(mode==='two'?'Pass the device: White and Black take turns':'Tap a piece, then tap where it goes',W/2,BY+8*SQ+26,14,'#a9b4ee','center','600');
-      if(mode==='cpu'){
-        ctx.fillStyle='rgba(124,92,255,.35)';rr(W/2-75,596,150,30,15);ctx.fill();
-        ctx.strokeStyle='rgba(255,255,255,.35)';ctx.lineWidth=1.5;rr(W/2-75,596,150,30,15);ctx.stroke();
-        txt('Level: '+LV[lvl].n,W/2,611,15,'#fff','center','700');
-        if(lvl!=='basic'&&sfState==='fail')txt('Stockfish offline - using basic engine',W/2,BY+8*SQ+36,12,'#ffd166','center','600');
-      }
-      if(over)overlay(msg,mode==='two'?'':'Score '+score,'Tap to play again');
+      txt('Tap a piece, then tap where it goes',W/2,BY+8*SQ+26,14,'#a9b4ee','center','600');
+      if(over)overlay(msg,'Score '+score,'Tap to play again');
     };
     G.reset();
     return G;
@@ -5666,328 +5553,9 @@ function speakText(raw,btn){
   })();
 
   /* ======================================================================
-     MORE GAMES: Tic-Tac-Toe, Connect 4, 2048, Memory
-     ====================================================================== */
-  function gbg(){const g=ctx.createLinearGradient(0,0,0,H);g.addColorStop(0,'#10173f');g.addColorStop(1,'#070b25');ctx.fillStyle=g;ctx.fillRect(0,0,W,H)}
-  function gbtn(x,y,w,h,label){ctx.fillStyle='rgba(124,92,255,.35)';rr(x,y,w,h,h/2);ctx.fill();ctx.strokeStyle='rgba(255,255,255,.35)';ctx.lineWidth=1.5;rr(x,y,w,h,h/2);ctx.stroke();txt(label,x+w/2,y+h/2+1,15,'#fff','center','700')}
-  const bestSet=(n,v)=>{if(v>getBest(n))setBest(n,v)};
-  const modeStore=(k)=>{try{return localStorage.getItem(k)==='two'?'two':'cpu'}catch(e){return 'cpu'}};
-  const modeSave=(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}};
-  const pickI=a=>a[Math.floor(Math.random()*a.length)];
-
-  /* ---------------- TIC-TAC-TOE ---------------- */
-  const ttt=(function(){
-    const G={name:'tictactoe',title:'Tic-Tac-Toe',
-      get help(){return mode==='two'
-        ?'2 Players: X goes first, then O. Tap a square to place your mark. Three in a row wins. Tap the top left button to play the computer.'
-        :'You are X and the computer is O. Tap a square to place your X. Three in a row wins. The computer sometimes slips, so you can win. Tap the top left button to play a friend.'}};
-    const LN=[[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
-    const BX=60,BY=170,CS=120;
-    let mode=modeStore('oqtttmode'),b,turn,over,msg,wins=0,line=null,aiT=0;
-    const winner=bd=>{for(const l of LN)if(bd[l[0]]&&bd[l[0]]===bd[l[1]]&&bd[l[0]]===bd[l[2]])return l;return null};
-    function mm(bd,p){const w=winner(bd);if(w)return bd[w[0]]==='O'?1:-1;if(bd.every(x=>x))return 0;let best=p==='O'?-2:2;for(let i=0;i<9;i++)if(!bd[i]){bd[i]=p;const v=mm(bd,p==='O'?'X':'O');bd[i]=null;if(p==='O'?v>best:v<best)best=v}return best}
-    function aiPick(){
-      const e=[];for(let i=0;i<9;i++)if(!b[i])e.push(i);
-      if(Math.random()<.2)return pickI(e);
-      let best=-2,mv=[];
-      for(const i of e){b[i]='O';const v=mm(b,'X');b[i]=null;if(v>best){best=v;mv=[i]}else if(v===best)mv.push(i)}
-      return pickI(mv);
-    }
-    function round(){b=Array(9).fill(null);turn='X';over=false;line=null;aiT=0;msg=mode==='two'?'X to move':'Your move';fx.length=0}
-    function place(i){
-      b[i]=turn;const w=winner(b);
-      if(w){
-        over=true;line=w;
-        if(mode==='two')msg=turn+' wins!';
-        else if(turn==='X'){msg='You win!';wins++;bestSet('tictactoe',wins)}
-        else msg='Computer wins';
-        const c=w[1];burst(BX+(c%3)*CS+CS/2,BY+Math.floor(c/3)*CS+CS/2,28,['#7CFFD0','#ffd166','#fff'],220,300);
-        return;
-      }
-      if(b.every(x=>x)){over=true;msg='Draw';return}
-      turn=turn==='X'?'O':'X';
-      if(mode==='two')msg=turn+' to move';
-      else if(turn==='O'){msg='Computer is thinking...';aiT=.45}
-      else msg='Your move';
-    }
-    function setMode(m){mode=m;modeSave('oqtttmode',m);wins=0;round();const h=document.getElementById('ghelp');if(h)h.textContent=G.help}
-    G.reset=()=>{wins=0;round()};
-    G.score=()=>mode==='cpu'?wins:0;
-    G.update=dt=>{updFx(dt);if(aiT>0){aiT-=dt;if(aiT<=0&&!over&&mode==='cpu'&&turn==='O')place(aiPick())}};
-    G.tap=(x,y)=>{
-      if(x<150&&y<60){setMode(mode==='cpu'?'two':'cpu');return}
-      if(over){round();return}
-      if(mode==='cpu'&&turn!=='X')return;
-      const c=Math.floor((x-BX)/CS),r=Math.floor((y-BY)/CS);
-      if(c<0||c>2||r<0||r>2||b[r*3+c])return;
-      place(r*3+c);
-    };
-    G.draw=()=>{
-      gbg();txt('Tic-Tac-Toe',W/2,34,26,'#fff');
-      gbtn(12,14,126,32,mode==='two'?'2 Players':'vs Computer');
-      txt(msg,W/2,100,20,over?'#ffd166':'#7CFFD0','center','700');
-      ctx.strokeStyle='#5b6bb8';ctx.lineWidth=6;ctx.lineCap='round';
-      for(let i=1;i<3;i++){ctx.beginPath();ctx.moveTo(BX+i*CS,BY+8);ctx.lineTo(BX+i*CS,BY+3*CS-8);ctx.stroke();ctx.beginPath();ctx.moveTo(BX+8,BY+i*CS);ctx.lineTo(BX+3*CS-8,BY+i*CS);ctx.stroke()}
-      for(let i=0;i<9;i++){
-        if(!b[i])continue;
-        const cx=BX+(i%3)*CS+CS/2,cy=BY+Math.floor(i/3)*CS+CS/2,hot=line&&line.indexOf(i)>=0;
-        ctx.lineWidth=11;
-        if(b[i]==='X'){ctx.strokeStyle=hot?'#ffd166':'#7CFFD0';ctx.beginPath();ctx.moveTo(cx-30,cy-30);ctx.lineTo(cx+30,cy+30);ctx.moveTo(cx+30,cy-30);ctx.lineTo(cx-30,cy+30);ctx.stroke()}
-        else{ctx.strokeStyle=hot?'#ffd166':'#ff7aa8';ctx.beginPath();ctx.arc(cx,cy,32,0,Math.PI*2);ctx.stroke()}
-      }
-      ctx.lineCap='butt';
-      drawFx();
-      txt(mode==='cpu'?'Wins this session: '+wins:'Pass the device between turns',W/2,BY+3*CS+40,16,'#a9b4ee','center','600');
-      if(over)txt('Tap to play again',W/2,BY+3*CS+72,16,'#dfe4ff','center','700');
-    };
-    round();
-    return G;
-  })();
-
-  /* ---------------- CONNECT 4 ---------------- */
-  const c4=(function(){
-    const G={name:'connect4',title:'Connect 4',
-      get help(){return mode==='two'
-        ?'2 Players: Red goes first, then Yellow. Tap a column to drop your disc. Get four in a row to win. Tap the top left button to play the computer.'
-        :'You are Red and the computer is Yellow. Tap a column to drop your disc. Get four in a row in any direction to win. Tap the top left button to play a friend.'}};
-    const R=6,C=7,CW=62,BX=23,BY=150,ORDER=[3,2,4,1,5,0,6];
-    let mode=modeStore('oqc4mode'),b,turn,over,msg,wins=0,win=null,anim=null,pend=null,aiT=0;
-    const dropRow=(bd,c)=>{for(let r=R-1;r>=0;r--)if(!bd[r*C+c])return r;return -1};
-    function check(bd,p){
-      for(let r=0;r<R;r++)for(let c=0;c<C;c++){
-        if(bd[r*C+c]!==p)continue;
-        for(const[dr,dc]of[[0,1],[1,0],[1,1],[1,-1]]){
-          const cells=[];
-          for(let k=0;k<4;k++){const rr2=r+dr*k,cc=c+dc*k;if(rr2<0||rr2>=R||cc<0||cc>=C||bd[rr2*C+cc]!==p)break;cells.push(rr2*C+cc)}
-          if(cells.length===4)return cells;
-        }
-      }
-      return null;
-    }
-    function heur(bd){
-      let s=0;
-      for(let r=0;r<R;r++)if(bd[r*C+3]===2)s+=3;
-      const win4=(r,c,dr,dc)=>{
-        let a=0,o=0,e=0;
-        for(let k=0;k<4;k++){const v=bd[(r+dr*k)*C+c+dc*k];if(v===2)a++;else if(v===1)o++;else e++}
-        if(a===3&&e===1)s+=5;else if(a===2&&e===2)s+=2;
-        if(o===3&&e===1)s-=6;
-      };
-      for(let r=0;r<R;r++)for(let c=0;c<C;c++){
-        if(c+3<C)win4(r,c,0,1);
-        if(r+3<R)win4(r,c,1,0);
-        if(r+3<R&&c+3<C)win4(r,c,1,1);
-        if(r+3<R&&c-3>=0)win4(r,c,1,-1);
-      }
-      return s;
-    }
-    function mm(bd,d,al,be,maxing){
-      if(check(bd,2))return 100000+d;
-      if(check(bd,1))return -100000-d;
-      if(d===0||bd.every(x=>x))return d===0?heur(bd):0;
-      if(maxing){let best=-1e9;for(const c of ORDER){const r=dropRow(bd,c);if(r<0)continue;bd[r*C+c]=2;const v=mm(bd,d-1,al,be,false);bd[r*C+c]=0;if(v>best)best=v;al=Math.max(al,v);if(al>=be)break}return best}
-      let best=1e9;for(const c of ORDER){const r=dropRow(bd,c);if(r<0)continue;bd[r*C+c]=1;const v=mm(bd,d-1,al,be,true);bd[r*C+c]=0;if(v<best)best=v;be=Math.min(be,v);if(al>=be)break}return best;
-    }
-    function aiCol(){
-      const cols=ORDER.filter(c=>dropRow(b,c)>=0);
-      if(Math.random()<.08)return pickI(cols);
-      let best=-1e9,mv=[];
-      for(const c of cols){const r=dropRow(b,c);b[r*C+c]=2;const v=mm(b,4,-1e9,1e9,false)+Math.random()*.5;b[r*C+c]=0;if(v>best){best=v;mv=[c]}}
-      return mv[0];
-    }
-    const name=p=>mode==='two'?(p===1?'Red':'Yellow'):(p===1?'You':'Computer');
-    function round(){b=Array(R*C).fill(0);turn=1;over=false;win=null;anim=null;pend=null;aiT=0;msg=mode==='two'?'Red to move':'Your move';fx.length=0}
-    function play(c){
-      const r=dropRow(b,c);if(r<0)return;
-      b[r*C+c]=turn;
-      anim={idx:r*C+c,t:0,dur:.12+.05*(r+1),c,r,p:turn};
-      pend=()=>{
-        const w=check(b,turn);
-        if(w){
-          over=true;win=w;
-          if(mode==='two')msg=(turn===1?'Red':'Yellow')+' wins!';
-          else if(turn===1){msg='You win!';wins++;bestSet('connect4',wins)}
-          else msg='Computer wins';
-          const i=w[1];burst(BX+(i%C)*CW+CW/2,BY+Math.floor(i/C)*CW+CW/2,28,['#ffd166','#fff','#7CFFD0'],220,300);
-          return;
-        }
-        if(b.every(x=>x)){over=true;msg='Draw';return}
-        turn=3-turn;
-        if(mode==='two')msg=(turn===1?'Red':'Yellow')+' to move';
-        else if(turn===2){msg='Computer is thinking...';aiT=.4}
-        else msg='Your move';
-      };
-    }
-    function setMode(m){mode=m;modeSave('oqc4mode',m);wins=0;round();const h=document.getElementById('ghelp');if(h)h.textContent=G.help}
-    G.reset=()=>{wins=0;round()};
-    G.score=()=>mode==='cpu'?wins:0;
-    G.update=dt=>{
-      updFx(dt);
-      if(anim){anim.t+=dt;if(anim.t>=anim.dur){anim=null;const f=pend;pend=null;if(f)f()}}
-      else if(aiT>0){aiT-=dt;if(aiT<=0&&!over&&mode==='cpu'&&turn===2)play(aiCol())}
-    };
-    G.tap=(x,y)=>{
-      if(x<150&&y<60){setMode(mode==='cpu'?'two':'cpu');return}
-      if(over){round();return}
-      if(anim||pend||aiT>0)return;
-      if(mode==='cpu'&&turn!==1)return;
-      const c=Math.floor((x-BX)/CW);if(c<0||c>=C)return;
-      play(c);
-    };
-    G.draw=()=>{
-      gbg();txt('Connect 4',W/2,34,26,'#fff');
-      gbtn(12,14,126,32,mode==='two'?'2 Players':'vs Computer');
-      txt(msg,W/2,100,19,over?'#ffd166':'#7CFFD0','center','700');
-      ctx.fillStyle='#2b3a9e';rr(BX-8,BY-8,C*CW+16,R*CW+16,18);ctx.fill();
-      for(let r=0;r<R;r++)for(let c=0;c<C;c++){
-        const i=r*C+c,x=BX+c*CW+CW/2,y=BY+r*CW+CW/2,v=b[i];
-        if(anim&&anim.idx===i){circ(x,y,CW/2-6,'#0a1038');continue}
-        const hot=win&&win.indexOf(i)>=0;
-        circ(x,y,CW/2-6,v===1?'#ff5a5f':v===2?'#ffd166':'#0a1038');
-        if(hot){ctx.strokeStyle='#fff';ctx.lineWidth=4;ctx.beginPath();ctx.arc(x,y,CW/2-6,0,Math.PI*2);ctx.stroke()}
-      }
-      if(anim){const k=anim.t/anim.dur,x=BX+anim.c*CW+CW/2,y0=BY-CW/2,y1=BY+anim.r*CW+CW/2,y=y0+(y1-y0)*k*k;circ(x,y,CW/2-6,anim.p===1?'#ff5a5f':'#ffd166')}
-      drawFx();
-      txt(mode==='cpu'?'Wins this session: '+wins:'Pass the device between turns',W/2,BY+R*CW+36,16,'#a9b4ee','center','600');
-      if(over)txt('Tap to play again',W/2,BY+R*CW+66,16,'#dfe4ff','center','700');
-    };
-    round();
-    return G;
-  })();
-
-  /* ---------------- 2048 ---------------- */
-  const g2048=(function(){
-    const G={name:'2048',title:'2048',help:'Swipe on the board (or use the arrow keys or W A S D) to slide all tiles. Equal tiles merge into one. Reach 2048, then keep going for a higher score.'};
-    const BX=36,BY=150,TS=92,GP=8;
-    const COL={0:'#232c75',2:'#dfe4ff',4:'#c9d2ff',8:'#ffb86b',16:'#ff9a4d',32:'#ff7a59',64:'#ff5a5f',128:'#ffd166',256:'#f7c948',512:'#7CFFD0',1024:'#5ee0b0',2048:'#7c5cff'};
-    let b,score,over,won,msg,sx,sy,lx,ly,sdown,born;
-    function spawn(){const e=[];for(let i=0;i<16;i++)if(!b[i])e.push(i);if(!e.length)return;const i=pickI(e);b[i]=Math.random()<.9?2:4;born={i,t:0}}
-    function slide(vals){
-      const a=vals.filter(v=>v),out=[];let gain=0;
-      for(let i=0;i<a.length;i++){if(a[i]===a[i+1]){out.push(a[i]*2);gain+=a[i]*2;i++}else out.push(a[i])}
-      while(out.length<4)out.push(0);
-      return {out,gain};
-    }
-    function idxs(d,i){
-      if(d===0)return [i*4,i*4+1,i*4+2,i*4+3];
-      if(d===1)return [i*4+3,i*4+2,i*4+1,i*4];
-      if(d===2)return [i,i+4,i+8,i+12];
-      return [i+12,i+8,i+4,i];
-    }
-    function stuck(){
-      for(let i=0;i<16;i++){if(!b[i])return false;if((i&3)<3&&b[i]===b[i+1])return false;if(i<12&&b[i]===b[i+4])return false}
-      return true;
-    }
-    function move(d){
-      if(over)return false;
-      let moved=false,gain=0;
-      for(let i=0;i<4;i++){
-        const ix=idxs(d,i),{out,gain:g}=slide(ix.map(k=>b[k]));
-        for(let k=0;k<4;k++){if(b[ix[k]]!==out[k])moved=true;b[ix[k]]=out[k]}
-        gain+=g;
-      }
-      if(!moved)return false;
-      score+=gain;bestSet('2048',score);
-      if(!won&&b.some(v=>v>=2048)){won=true;msg='You made 2048! Keep going';burst(W/2,300,40,['#7c5cff','#7CFFD0','#ffd166','#fff'],260,300)}
-      spawn();
-      if(stuck()){over=true;msg='No moves left'}
-      return true;
-    }
-    G.reset=()=>{b=Array(16).fill(0);score=0;over=false;won=false;msg='Join the tiles';sdown=false;born=null;fx.length=0;spawn();spawn()};
-    G.score=()=>score;
-    G.update=dt=>{updFx(dt);if(born){born.t+=dt;if(born.t>.2)born=null}};
-    G.down=(x,y)=>{if(over){G.reset();return}sx=lx=x;sy=ly=y;sdown=true};
-    G.move=(x,y)=>{lx=x;ly=y};
-    G.up=()=>{
-      if(!sdown)return;sdown=false;
-      const dx=lx-sx,dy=ly-sy;
-      if(Math.max(Math.abs(dx),Math.abs(dy))<24)return;
-      move(Math.abs(dx)>Math.abs(dy)?(dx<0?0:1):(dy<0?2:3));
-    };
-    G.tap=()=>{};
-    G.key=k=>{
-      const m={ArrowLeft:0,a:0,A:0,ArrowRight:1,d:1,D:1,ArrowUp:2,w:2,W:2,ArrowDown:3,s:3,S:3}[k];
-      if(m===undefined)return false;
-      if(over)return true;
-      move(m);return true;
-    };
-    G.draw=()=>{
-      gbg();txt('2048',W/2,34,26,'#fff');
-      txt(msg,W/2,80,18,over?'#ffd166':'#7CFFD0','center','700');
-      ctx.fillStyle='#161d57';rr(BX,BY,4*TS+5*GP,4*TS+5*GP,16);ctx.fill();
-      for(let i=0;i<16;i++){
-        const x=BX+GP+(i&3)*(TS+GP),y=BY+GP+(i>>2)*(TS+GP),v=b[i];
-        let s=1;if(born&&born.i===i)s=.4+.6*Math.min(1,born.t/.2);
-        const w=TS*s,o=(TS-w)/2;
-        ctx.fillStyle=COL[v]||'#7c5cff';rr(x+o,y+o,w,w,10);ctx.fill();
-        if(v)txt(String(v),x+TS/2,y+TS/2+2,(v<100?38:v<1000?32:26)*s,v<=4?'#1a2150':'#fff');
-      }
-      drawFx();
-      txt('Swipe to move the tiles',W/2,BY+4*TS+5*GP+34,16,'#a9b4ee','center','600');
-      if(over)overlay('Game over','Score '+score,'Tap to play again');
-    };
-    G.reset();
-    return G;
-  })();
-
-  /* ---------------- MEMORY MATCH ---------------- */
-  const mem=(function(){
-    const G={name:'memory',title:'Memory',help:'Tap two cards to turn them over. If they match, they stay face up. Find all 8 pairs in as few tries as you can.'};
-    const EM=['🍎','🚀','🐱','⚽','🎸','🌈','🐳','🍕'];
-    const BX=25,BY=150,CS=100,GP=10;
-    let cards,first,pend,lock,moves,pairs,over,msg;
-    const finalBonus=()=>over?Math.max(0,400-moves*20):0;
-    G.reset=()=>{
-      const a=[];EM.forEach(e=>{a.push(e,e)});
-      for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]}
-      cards=a.map(e=>({e,up:false,done:false}));first=-1;pend=null;lock=0;moves=0;pairs=0;over=false;msg='Find the pairs';fx.length=0;
-    };
-    G.score=()=>pairs*100+finalBonus();
-    G.update=dt=>{updFx(dt);if(lock>0){lock-=dt;if(lock<=0&&pend){cards[pend[0]].up=false;cards[pend[1]].up=false;pend=null}}};
-    G.tap=(x,y)=>{
-      if(over){G.reset();return}
-      if(lock>0)return;
-      const c=Math.floor((x-BX)/(CS+GP)),r=Math.floor((y-BY)/(CS+GP));
-      if(c<0||c>3||r<0||r>3)return;
-      const i=r*4+c,cd=cards[i];
-      if(cd.up||cd.done)return;
-      cd.up=true;
-      if(first<0){first=i;return}
-      moves++;
-      const a=cards[first];
-      if(a.e===cd.e){
-        a.done=cd.done=true;pairs++;
-        for(const k of[first,i])burst(BX+(k&3)*(CS+GP)+CS/2,BY+(k>>2)*(CS+GP)+CS/2,14,['#7CFFD0','#ffd166','#fff'],180,300);
-        first=-1;
-        if(pairs===8){over=true;msg='All pairs found in '+moves+' tries!';bestSet('memory',G.score())}
-      }else{pend=[first,i];first=-1;lock=.7}
-    };
-    G.draw=()=>{
-      gbg();txt('Memory',W/2,34,26,'#fff');
-      txt(over?msg:'Tries: '+moves+'   Pairs: '+pairs+'/8',W/2,90,19,over?'#ffd166':'#7CFFD0','center','700');
-      for(let i=0;i<16;i++){
-        const x=BX+(i&3)*(CS+GP),y=BY+(i>>2)*(CS+GP),cd=cards[i];
-        if(cd.up||cd.done){
-          ctx.fillStyle=cd.done?'#2e8f77':'#dfe4ff';rr(x,y,CS,CS,14);ctx.fill();
-          ctx.font='48px "Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillStyle='#000';ctx.fillText(cd.e,x+CS/2,y+CS/2+3);
-        }else{
-          ctx.fillStyle='#5b6bb8';rr(x,y,CS,CS,14);ctx.fill();
-          ctx.strokeStyle='rgba(255,255,255,.25)';ctx.lineWidth=2;rr(x+6,y+6,CS-12,CS-12,10);ctx.stroke();
-          txt('?',x+CS/2,y+CS/2+2,36,'rgba(255,255,255,.7)');
-        }
-      }
-      drawFx();
-      txt('Fewer tries gives a bigger bonus',W/2,BY+4*(CS+GP)+30,15,'#a9b4ee','center','600');
-      if(over)overlay('Well done!','Score '+G.score(),'Tap to play again');
-    };
-    G.reset();
-    return G;
-  })();
-
-  /* ======================================================================
      runner: picker, input, loop
      ====================================================================== */
-  const games={chess:chess,snake:snake,flap:flap,breakout:brick,tictactoe:ttt,connect4:c4,'2048':g2048,memory:mem};
+  const games={chess:chess,snake:snake,flap:flap,breakout:brick};
   window.__oqgames=games;
   let cur=null,last=0;
   const elHelp=document.getElementById('ghelp'),elScore=document.getElementById('gscore'),elBest=document.getElementById('gbest');
