@@ -58,12 +58,7 @@ import tempfile
 import threading
 import uuid
 import math_tools
-try:
-    import proof_checker
-    PROOF_OK = True
-except Exception as e:
-    print("proof checker off:", e)
-    PROOF_OK = False
+
 from flask import Flask, Response, jsonify, redirect, request, send_file, stream_with_context, session as login_session
 import queue
 import base64
@@ -2149,7 +2144,10 @@ _tl = threading.local()  # per-request flags (max mode)
 VOICE_NOTE = (" VOICE CHAT: your reply will be read aloud in a live spoken conversation. Answer like a friendly person "
               "talking: natural spoken sentences, usually 2 to 6, and as long as needed when the person asks for detail or "
               "an explanation. No lists, headings, tables, code, links or emojis. Say maths steps simply in words that "
-              "sound natural when spoken.")
+              "sound natural when spoken. Always answer in the same language the person spoke in (Hindi, English or any other).")
+PEOPLE_NOTE = (" Several different people take turns talking in this voice chat. Each message begins with a label like [Person 2]. "
+               "Treat them as different people: answer the person who just spoke, keep what each one asked or said separate, "
+               "and use the label (say Person 2) only when it helps to make clear who you are answering.")
 CLAUDE_KEY = os.environ.get("ANTHROPIC_API_KEY", "").strip()
 CLAUDE_ON = bool(CLAUDE_KEY)
 CLAUDE_FAST = os.environ.get("DEEP_OQ_MODEL_FAST", "claude-sonnet-5-5")
@@ -3124,7 +3122,7 @@ def _deep_oq_raw(session, question, force_exam=False, emit=None):
         emit("status", "Solving step by step")
     today = datetime.date.today().strftime("%A, %d %B %Y")
     rigorous = force or exam or is_hard(question)
-    sysmsg = (SYSTEM + (VOICE_NOTE if getattr(_tl, "voice", False) else "") + (EXAM_SYSTEM if exam else "") + (REASON_RULES if rigorous else "") + f" Today's date is {today}. TOOL RESULTS (calculator, counter, "
+    sysmsg = (SYSTEM + (VOICE_NOTE + (PEOPLE_NOTE if getattr(_tl, "people", False) else "") if getattr(_tl, "voice", False) else "") + (EXAM_SYSTEM if exam else "") + (REASON_RULES if rigorous else "") + f" Today's date is {today}. TOOL RESULTS (calculator, counter, "
               "web search) are exact or current: trust them over your own arithmetic "
               "and memory, and do not mention the tools. When a result says 'Current holder (incumbent)', that is "
               "the answer; never prefer your older memory over it." + (" " + me if me else ""))
@@ -3140,15 +3138,6 @@ def _deep_oq_raw(session, question, force_exam=False, emit=None):
                     "else, ignore them and answer from your own knowledge, saying it may have changed. Never reply that you "
                     "cannot answer because of the search results. Keep it short."}], 0.2, 2048, smart=True)
     if exam:  # JEE / NEET / UPSC style
-        if PROOF_OK and re.search(r"\b(prove|show that|inequalit\w*)\b", question, re.I) \
-                and re.search(r"[<>≤≥]|\\le|\\ge|inequalit", question):
-            try:
-                pr = proof_checker.prove(question, lambda m, t, k: chat(m, t, k, smart=True, prefer=EXAM_MODEL),
-                                         emit=emit, style=" Write the maths with symbols (≤ ≥ √ ²), no LaTeX.")
-                if pr:
-                    return pr.text
-            except Exception as e:
-                print("proof checker failed:", e)
         solve_txt = ("\n\nSolve this like a top teacher. Work one step at a time, explain why each step is done, "
                      "do the arithmetic carefully and check the result.")
         if not is_checkable(question):  # essays, explanations and proofs: one strong answer, then an independent check
@@ -3678,6 +3667,7 @@ def ask():
         kb_drop_last(session, data.get("drop"))
         _tl.max = _max_allowed(_session_user(session)) if data.get("research") else False
         _tl.voice = bool(data.get("voice"))
+        _tl.people = bool(data.get("people"))
         answer = (research_answer(session, data["q"]) if data.get("research") else None) or deep_oq(session, data["q"])
         kb_save_msg(session, "user", data["q"])
         kb_save_msg(session, "assistant", answer)
@@ -3689,7 +3679,15 @@ def ask():
 
 WHISPER_MODELS = list(dict.fromkeys(  # your own list first (comma separated is fine), then the defaults
     [m.strip() for m in os.environ.get("DEEP_OQ_WHISPER_MODEL", "").replace(";", ",").replace(" ", ",").split(",")
-     if m.strip()] + ["whisper-large-v3", "whisper-large-v3-turbo"]))
+     if m.strip()] + ["whisper-large-v3-turbo", "whisper-large-v3"]))
+
+
+_WH_CODES_BY_NAME = {"english": "en", "hindi": "hi", "spanish": "es", "french": "fr", "german": "de", "arabic": "ar",
+                     "bengali": "bn", "tamil": "ta", "telugu": "te", "marathi": "mr", "gujarati": "gu", "punjabi": "pa",
+                     "urdu": "ur", "kannada": "kn", "malayalam": "ml", "nepali": "ne", "japanese": "ja", "korean": "ko",
+                     "chinese": "zh", "portuguese": "pt", "russian": "ru", "italian": "it", "turkish": "tr",
+                     "indonesian": "id", "dutch": "nl", "thai": "th", "vietnamese": "vi", "polish": "pl"}
+_WH_CODES = set(_WH_CODES_BY_NAME.values())
 
 
 @app.post("/api/transcribe")
@@ -3705,17 +3703,22 @@ def api_transcribe():
         return jsonify(text="")
     lang = str(request.form.get("lang", "")).lower()[:2]
     last = None
-    models = sorted(WHISPER_MODELS, key=lambda m: 0 if "turbo" in m else 1) if request.form.get("fast") == "1" else WHISPER_MODELS
-    for model in models:
-        kw = dict(file=(f.filename or "voice.webm", raw), model=model, temperature=0)
-        if lang in ("en", "hi"):
-            kw["language"] = lang
+    auto = lang not in _WH_CODES   # "auto": Whisper listens and works out the language itself
+    for model in WHISPER_MODELS:
+        kw = dict(file=(f.filename or "voice.webm", raw), model=model, temperature=0,
+                  response_format="verbose_json" if auto else "json", timeout=20.0)
+        if not auto:
+            kw["language"] = lang   # knowing the language skips detection, which is quicker
         try:
             r = client.audio.transcriptions.create(**kw)
             text = getattr(r, "text", None)
             if text is None and isinstance(r, str):
                 text = r
-            return jsonify(text=(text or "").strip())
+            det = lang
+            if auto:
+                name = str(getattr(r, "language", "") or "").strip().lower()
+                det = _WH_CODES_BY_NAME.get(name, name[:2] if len(name) == 2 else "")
+            return jsonify(text=(text or "").strip(), lang=det)
         except Exception as e:
             last = e
             print("transcribe", model, "failed:", str(e)[:160])
@@ -3753,6 +3756,7 @@ def ask_stream():
             kb_drop_last(session, data.get("drop"))
             _tl.max = _max_allowed(_session_user(session)) if data.get("research") else False
             _tl.voice = bool(data.get("voice"))
+            _tl.people = bool(data.get("people"))
             answer = (research_answer(session, q, emit) if data.get("research") else None)
             answer = plain_math(answer if answer else collapse_repeats(_deep_oq_raw(session, q, False, emit)))
             kb_save_msg(session, "user", q)
@@ -4093,6 +4097,13 @@ a.primary{text-decoration:none;display:inline-block}
 @keyframes micp{50%{opacity:.65}}
 .vlang{height:30px;min-width:30px;padding:0 6px;border-radius:15px;font-size:12px;font-weight:700;align-self:center}
 #vlang{display:none}  /* language still switches from the voice chat screen */
+.gpick{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 16px}
+.gpick button{font-family:var(--ui);font-weight:700;font-size:14.5px;padding:9px 18px;border-radius:999px;border:1px solid var(--line);background:transparent;color:var(--ink);cursor:pointer}
+.gpick button.on{background:var(--accent);color:var(--accent-ink);border-color:transparent}
+.gwrap{display:flex;justify-content:center}
+#gcv{display:block;width:min(100%,calc(72vh*.75),520px);aspect-ratio:3/4;height:auto;border-radius:22px;box-shadow:0 18px 50px var(--shade);touch-action:none;user-select:none;-webkit-user-select:none;background:#0b1030}
+.ghelp{max-width:520px;margin:14px auto 0;color:var(--ink-2);font-size:15.5px;line-height:1.5;text-align:center}
+.gbar{display:flex;align-items:center;justify-content:center;gap:16px;margin:12px auto 28px;font-family:var(--ui);font-weight:700;color:var(--ink)}
 .field{gap:2px;padding:4px 4px 4px 4px;border-radius:24px}
 .field textarea{font-size:16.5px;padding:6px 8px;min-width:0}
 .plus,.mic,.send{width:36px;height:36px}
@@ -4232,6 +4243,7 @@ body:not(.chatting) #v-chat.on{padding-top:12vh;padding-bottom:0}
     <button class="tab" type="button" data-view="news">News</button>
     <button class="tab" type="button" data-view="music">Music</button>
     <button class="tab" type="button" data-view="3d">3D</button>
+    <button class="tab" type="button" data-view="games">Games</button>
     <a class="tab" href="/vr" style="text-decoration:none;display:inline-flex;align-items:center;background:linear-gradient(135deg,#00c9a7,#2f8cff);color:#04122b;font-weight:700">VR</a>
   </nav>
   <div class="tools" id="chatTools">
@@ -4519,6 +4531,21 @@ body:not(.chatting) #v-chat.on{padding-top:12vh;padding-bottom:0}
     </div>
   </div>
 </section>
+<section class="view studio" id="v-games">
+  <div class="wrap">
+    <h2 class="st-title">Games</h2>
+    <p class="st-sub">Quick animated games. Tap, click or swipe to play. Your best scores are saved on this device.</p>
+    <div class="gpick" role="group" aria-label="Choose a game">
+      <button type="button" data-g="cricket" aria-pressed="true">Cricket</button>
+      <button type="button" data-g="snake" aria-pressed="false">Snake</button>
+      <button type="button" data-g="flap" aria-pressed="false">Flap</button>
+      <button type="button" data-g="breakout" aria-pressed="false">Breakout</button>
+    </div>
+    <div class="gwrap"><canvas id="gcv" width="960" height="1280" aria-label="Game board"></canvas></div>
+    <p class="ghelp" id="ghelp"></p>
+    <div class="gbar"><span id="gscore">Score 0</span><span id="gbest">Best 0</span><button class="btn" id="grestart" type="button">Restart</button></div>
+  </div>
+</section>
 <section class="view studio" id="v-music">
   <div class="wrap">
     <h2 class="st-title">Music</h2>
@@ -4716,7 +4743,7 @@ function paint(bot,text){
 }
 let rsOn=false,dropN=0;
 async function askStream(q,bot){
-  const r=await fetch('/ask_stream',{method:'POST',headers:{'Content-Type':'application/json','X-Access-Key':localStorage.ak||''},body:JSON.stringify({q,session:sid,research:rsOn,drop:dropN,voice:!!window.voiceOn})});
+  const r=await fetch('/ask_stream',{method:'POST',headers:{'Content-Type':'application/json','X-Access-Key':localStorage.ak||''},body:JSON.stringify({q,session:sid,research:rsOn,drop:dropN,voice:!!window.voiceOn,people:!!(window.voiceOn&&window.voicePeople)})});
   if(r.status===401){localStorage.ak='';throw new Error('That access key was not accepted. Reload the page and enter it again.')}
   if(!r.ok||!r.body)return null;                       /* old server or proxy: use the normal way */
   const rd=r.body.getReader(),dec=new TextDecoder();let buf='',fin=null,err=null;
@@ -4747,7 +4774,7 @@ async function ask(q){
     let answer=null;
     try{answer=await askStream(q,bot)}catch(e){if(bot.raw)throw e;if(!/connection was cut/.test(e.message))throw e}
     if(answer===null){
-      const r=await api('/ask',{q,session:sid,research:rsOn,drop:dropN,voice:!!window.voiceOn});
+      const r=await api('/ask',{q,session:sid,research:rsOn,drop:dropN,voice:!!window.voiceOn,people:!!(window.voiceOn&&window.voicePeople)});
       const j=await r.json().catch(()=>({}));
       if(r.status===401){localStorage.ak='';throw new Error('That access key was not accepted. Reload the page and enter it again.')}
       if(!r.ok||j.error)throw new Error(j.error||'The server did not answer.');
@@ -4825,7 +4852,7 @@ function speakText(raw,btn){
     try{stream=await navigator.mediaDevices.getUserMedia({audio:true})}
     catch(e){alert('Allow the microphone for this site (click the lock icon next to the web address), then try again.');return}
     const mt=['audio/webm;codecs=opus','audio/webm','audio/mp4','audio/ogg'].find(t=>MediaRecorder.isTypeSupported(t))||'';
-    rec=new MediaRecorder(stream,mt?{mimeType:mt}:{});chunks=[];prev=box.placeholder;
+    rec=new MediaRecorder(stream,mt?{mimeType:mt,audioBitsPerSecond:24000}:{audioBitsPerSecond:24000});chunks=[];prev=box.placeholder;
     rec.ondataavailable=e=>{if(e.data.size)chunks.push(e.data)};
     rec.onstop=async()=>{
       clearTimeout(timer);mic.classList.remove('rec');stopTracks();
@@ -4861,8 +4888,18 @@ function speakText(raw,btn){
   st.textContent=`
 .vc{position:fixed;inset:0;z-index:99999;display:flex;flex-direction:column;align-items:center;justify-content:space-between;padding:22px 20px 36px;color:#EEF0FF;font-family:var(--ui);background:radial-gradient(900px 620px at 50% 38%,#1b2260,#0A0E2A 72%)}
 .vc button{font:inherit;cursor:pointer}
-.vc-top{align-self:flex-end}
-.vc-lang{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.22);color:#fff;border-radius:999px;padding:8px 16px;font-weight:600}
+.vc-top{align-self:stretch;display:flex;flex-direction:column;align-items:flex-end;gap:10px}
+.vc-bar{display:flex;gap:8px;align-items:center}
+.vc-lang,.vc select,.vc-set{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.22);color:#fff;border-radius:999px;padding:8px 14px;font-weight:600;font-size:14px;font-family:inherit;max-width:60vw}
+.vc select option{color:#111;background:#fff}
+.vc-panel{display:none;flex-direction:column;gap:12px;width:min(340px,92vw);background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.18);border-radius:18px;padding:14px;font-size:14px}
+.vc-panel.on{display:flex}
+.vc-panel label{display:flex;flex-direction:column;gap:6px;color:#C9CDEE}
+.vc-panel label.row{flex-direction:row;align-items:center;justify-content:space-between}
+.vc-panel select{width:100%;max-width:none;border-radius:12px}
+.vc-panel input[type=range]{width:100%}
+.vc-hint{font-size:12px;color:#A3A9D1;line-height:1.4}
+.vc .vcwho{font-size:13px;color:#7CFFD0;min-height:16px}
 .vc-mid{display:flex;flex-direction:column;align-items:center;gap:18px;text-align:center;max-width:640px;width:100%}
 .vc .vcorb{width:176px;height:176px;border-radius:50%;position:relative;cursor:pointer;margin-bottom:30px}
 .vc .vcorb i{position:absolute;inset:0;border-radius:50%;background:radial-gradient(circle at 35% 30%,#7CFFD0,#2F8CFF 55%,#7C5CFF);box-shadow:0 0 70px rgba(47,140,255,.55);transform:scale(calc(.82 + var(--lv,0)*.32));transition:transform .08s linear}
@@ -4883,16 +4920,54 @@ function speakText(raw,btn){
   if(typeof paint0==='function')window.paint=function(bot,text){paint0.apply(this,arguments);if(voiceFeed){try{voiceFeed(text)}catch(e){}}};
   const qs=s=>ov&&ov.querySelector(s);
   const setTxt=(s,t)=>{const e=qs(s);if(e)e.textContent=t};
-  const hi=()=>(localStorage.vl||'en-IN')==='hi-IN';
+  const LANGS=[['auto','Auto (detects what you speak)'],['en','English'],['hi','हिन्दी Hindi'],['bn','বাংলা Bengali'],['ta','தமிழ் Tamil'],['te','తెలుగు Telugu'],['mr','मराठी Marathi'],['gu','ગુજરાતી Gujarati'],['pa','ਪੰਜਾਬੀ Punjabi'],['ur','اردو Urdu'],['kn','ಕನ್ನಡ Kannada'],['ml','മലയാളം Malayalam'],['ne','नेपाली Nepali'],['es','Español'],['fr','Français'],['de','Deutsch'],['pt','Português'],['it','Italiano'],['ru','Русский'],['ar','العربية'],['tr','Türkçe'],['id','Bahasa Indonesia'],['nl','Nederlands'],['pl','Polski'],['vi','Tiếng Việt'],['th','ไทย'],['ja','日本語'],['ko','한국어'],['zh','中文']];
+  const BCP={en:'en-IN',hi:'hi-IN',es:'es-ES',fr:'fr-FR',de:'de-DE',ar:'ar-SA',bn:'bn-IN',ta:'ta-IN',te:'te-IN',mr:'mr-IN',gu:'gu-IN',pa:'pa-IN',ur:'ur-PK',kn:'kn-IN',ml:'ml-IN',ne:'ne-NP',ja:'ja-JP',ko:'ko-KR',zh:'zh-CN',pt:'pt-BR',ru:'ru-RU',it:'it-IT',tr:'tr-TR',id:'id-ID',nl:'nl-NL',th:'th-TH',vi:'vi-VN',pl:'pl-PL'};
+  const SCRIPTS=[[/[ऀ-ॿ]/,'hi',['mr','ne']],[/[ঀ-৿]/,'bn'],[/[਀-੿]/,'pa'],[/[઀-૿]/,'gu'],[/[஀-௿]/,'ta'],[/[ఀ-౿]/,'te'],[/[ಀ-೿]/,'kn'],[/[ഀ-ൿ]/,'ml'],[/[ก-๿]/,'th'],[/[぀-ヿ]/,'ja'],[/[가-힯]/,'ko'],[/[Ѐ-ӿ]/,'ru'],[/[؀-ۿ]/,'ar',['ur']],[/[一-鿿]/,'zh',['ja']]];
+  let heard='',vcLang=localStorage.vcl||'auto',vcRate=parseFloat(localStorage.vcRate)||1,vcVoice=localStorage.vcVoice||'',people=localStorage.vcPeople==='1';
+  if(!LANGS.some(x=>x[0]===vcLang))vcLang='auto';
+  const cur=()=>vcLang!=='auto'?vcLang:(heard||((localStorage.vl||'en-IN')==='hi-IN'?'hi':'en'));
+  const hi=()=>cur()==='hi';
+  function sayLang(t){   /* which language a sentence is in: its writing system first, then the language you speak */
+    const c=cur();
+    for(const [re,code,alts] of SCRIPTS)if(re.test(t))return (alts&&alts.includes(c))?c:code;
+    return ['ru','ar','zh','ja','ko','th','hi','bn','ta','te','mr','gu','pa','ur','kn','ml','ne'].includes(c)?'en':c;
+  }
+  function pickVoice(lang){
+    let vs=[];try{vs=speechSynthesis.getVoices()}catch(e){}
+    const bcp=BCP[lang]||'en-IN',two=bcp.slice(0,2);
+    const ok=vs.filter(x=>x.lang.replace('_','-').slice(0,2).toLowerCase()===two);
+    const mine=vcVoice&&ok.find(x=>x.name===vcVoice);
+    return {bcp,voice:mine||ok.find(x=>x.lang.replace('_','-')===bcp)||ok[0]||null,list:ok};
+  }
+  /* several people: tell voices apart by their pitch (best effort) */
+  const spk=[];let f0s=[],lastSpk=0;
+  function pitch(){
+    const sr=ac.sampleRate,n=1024,lo=Math.floor(sr/400),hiL=Math.floor(sr/70);
+    if(buf.length<n+hiL)return 0;
+    let e0=0;for(let i=0;i<n;i++)e0+=buf[i]*buf[i];
+    if(e0<1e-6)return 0;
+    let best=0,bl=0;
+    for(let L=lo;L<=hiL;L++){let c=0,e1=0;for(let i=0;i<n;i++){c+=buf[i]*buf[i+L];e1+=buf[i+L]*buf[i+L]}const r=c/Math.sqrt(e0*e1+1e-9);if(r>best){best=r;bl=L}}
+    return best>0.6?sr/bl:0;
+  }
+  function whoSpoke(){
+    const a=f0s.slice().sort((x,y)=>x-y);f0s=[];
+    if(a.length<4)return lastSpk||1;
+    const f=a[a.length>>1];let bi=-1,bd=9;
+    spk.forEach((p,i)=>{const d=Math.abs(Math.log2(f/p.f));if(d<bd){bd=d;bi=i}});
+    if(bi>=0&&bd<0.22){spk[bi].f=spk[bi].f*0.7+f*0.3;lastSpk=bi+1;return lastSpk}
+    if(spk.length<5){spk.push({f});lastSpk=spk.length;return lastSpk}
+    spk[bi].f=spk[bi].f*0.7+f*0.3;lastSpk=bi+1;return lastSpk;
+  }
   const LAB={listen:['Listening...','सुन रहा हूँ...'],think:['Thinking...','सोच रहा हूँ...'],speak:['Speaking... talk to interrupt me','बोल रहा हूँ... बीच में बोलकर रोक सकते हैं']};
   function setState(s){state=s;if(!ov)return;ov.dataset.s=s;setTxt('.vcs',LAB[s][hi()?1:0])}
 
   function newRec(){
     chunks=[];
     mt=['audio/webm;codecs=opus','audio/webm','audio/mp4','audio/ogg'].find(t=>MediaRecorder.isTypeSupported(t))||'';
-    rec=new MediaRecorder(stream,mt?{mimeType:mt}:{});
+    rec=new MediaRecorder(stream,mt?{mimeType:mt,audioBitsPerSecond:24000}:{audioBitsPerSecond:24000});
     const mine=chunks;rec.ondataavailable=e=>{if(e.data.size)mine.push(e.data)};
-    rec.start();recStart=Date.now();voiced=false;loud=0;silenceMs=0;
+    rec.start();recStart=Date.now();voiced=false;loud=0;silenceMs=0;f0s=[];
   }
   function finishRec(keep){
     const r=rec,mine=chunks;rec=null;
@@ -4902,10 +4977,11 @@ function speakText(raw,btn){
   async function transcribe(blob){
     const type=blob.type||'audio/webm',fd=new FormData();
     fd.append('audio',blob,'voice.'+(type.includes('mp4')?'mp4':type.includes('ogg')?'ogg':'webm'));
-    fd.append('lang',(localStorage.vl||'en-IN').slice(0,2));fd.append('fast','1');
+    fd.append('lang',vcLang);
     const r=await fetch('/api/transcribe',{method:'POST',headers:{'X-Access-Key':localStorage.ak||''},body:fd});
     const j=await r.json().catch(()=>({}));
     if(!r.ok||j.error)throw new Error(j.error||'Could not understand the recording.');
+    if(vcLang==='auto'&&j.lang&&BCP[j.lang])heard=j.lang;
     return (j.text||'').trim();
   }
   function listen(){if(!active)return;newRec();if(barged){barged=false;voiced=true;loud=150}setState('listen')}
@@ -4920,14 +4996,17 @@ function speakText(raw,btn){
     try{text=await transcribe(blob)}catch(e){if(active){setTxt('.vctext',e.message);await sleep(1200);listen()}return}
     if(!active)return;
     if(text.replace(/[^\p{L}\p{N}]/gu,'').length<2)return listen();
-    setTxt('.vcyou',text);setTxt('.vctext','');
-    await converse(text);
+    let label=0;if(people)label=whoSpoke();
+    setTxt('.vcyou',(label?'Person '+label+': ':'')+text);setTxt('.vctext','');setTxt('.vcwho',label?'Voice recognised as Person '+label:'');
+    await converse(label?'[Person '+label+'] '+text:text);
   }
   /* speaks the answer while it is still being written: every finished sentence is read out at once */
   function makeSpeaker(){
     const ss=window.speechSynthesis,queue=[];
     let sent=0,speaking=false,finished=false,over=false,wd=null,started=false,res;
+    queue.length=0;
     const done=new Promise(r=>res=r);
+    cancelSpeak=()=>{queue.length=0;finished=true;over=true;clearTimeout(wd);try{ss.cancel()}catch(e){}cancelSpeak=null;res()};   /* you can already talk over it while it is still thinking */
     const clean=t=>t.replace(/```[\s\S]*?```/g,' ').replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g,'$1').replace(/https?:\/\/\S+/g,'')
       .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu,'').replace(/[*#`_>|~]/g,'').replace(/\s+/g,' ').trim();
     const stop=()=>{if(over)return;over=true;clearTimeout(wd);cancelSpeak=null;res()};
@@ -4944,9 +5023,9 @@ function speakText(raw,btn){
       speaking=true;
       if(!started){started=true;setState('speak');echoPeak=0;bargeMs=0;speakAt=Date.now();cancelSpeak=cancel}
       setTxt('.vctext',s.slice(0,400));
-      const lang=/[ऀ-ॿ]/.test(s)?'hi-IN':(localStorage.vl||'en-IN');
-      const u=new SpeechSynthesisUtterance(s);u.lang=lang;
-      const vs=ss.getVoices(),v=vs.find(x=>x.lang===lang)||vs.find(x=>x.lang.slice(0,2)===lang.slice(0,2));if(v)u.voice=v;
+      const pv=pickVoice(sayLang(s));
+      const u=new SpeechSynthesisUtterance(s);u.lang=pv.bcp;u.rate=vcRate;
+      if(pv.voice)u.voice=pv.voice;
       let moved=false;const go=()=>{if(moved)return;moved=true;clearTimeout(wd);speaking=false;pump()};
       u.onend=go;u.onerror=go;
       wd=setTimeout(go,4000+s.length*110);   /* safety: some browsers never fire onend */
@@ -4973,7 +5052,7 @@ function speakText(raw,btn){
   async function converse(text){
     while(busy&&active)await sleep(150);
     if(!active)return;
-    window.voiceOn=true;
+    window.voiceOn=true;window.voicePeople=people;
     const sp=makeSpeaker();
     voiceFeed=t=>sp.feed(t);
     const SORRY=hi()?'माफ़ कीजिए, मैं जवाब नहीं दे पाया। कृपया फिर से बोलिए।':'Sorry, I could not answer that. Please try again.';
@@ -4995,15 +5074,16 @@ function speakText(raw,btn){
     let s=0;for(let i=0;i<buf.length;i++)s+=buf[i]*buf[i];
     const rms=Math.sqrt(s/buf.length);
     if(ov)ov.style.setProperty('--lv',state==='listen'?Math.min(1,rms*9):0);
-    if(state==='speak'&&cancelSpeak){   /* talk over it to interrupt: must be clearly louder than its own echo */
-      if(Date.now()-speakAt<700)echoPeak=Math.max(echoPeak,rms);
+    if((state==='speak'||state==='think')&&cancelSpeak){   /* talk over it (even while it thinks) to interrupt: must be clearly louder than its own echo */
+      if(state==='think')bargeMs=rms>Math.max(0.05,noise*4)?bargeMs+50:0;
+      else if(Date.now()-speakAt<700)echoPeak=Math.max(echoPeak,rms);
       else if(rms>Math.max(0.07,echoPeak*2.2))bargeMs+=50;else bargeMs=0;
       if(bargeMs>=250){bargeMs=0;barged=true;const c=cancelSpeak;c()}
       return;
     }
     if(state!=='listen'||!rec)return;
     const thr=Math.max(0.025,noise*3.2);
-    if(rms>thr){loud+=50;silenceMs=0;if(loud>=150)voiced=true}
+    if(rms>thr){loud+=50;silenceMs=0;if(loud>=150)voiced=true;if(people&&loud%100===0){const f=pitch();if(f)f0s.push(f)}}
     else{if(!voiced){loud=0;noise=noise*0.95+rms*0.05}else silenceMs+=50}
     const len=Date.now()-recStart;
     if(voiced&&(silenceMs>=850||len>120000))endUtterance();
@@ -5016,12 +5096,33 @@ function speakText(raw,btn){
 
   function build(){
     ov=document.createElement('div');ov.className='vc';ov.setAttribute('role','dialog');ov.setAttribute('aria-label','Voice chat');
-    ov.innerHTML='<div class="vc-top"><button type="button" class="vc-lang"></button></div>'
-      +'<div class="vc-mid"><div class="vcorb" title="Tap to skip"><i></i></div><div class="vcs"></div><div class="vcyou"></div><div class="vctext"></div></div>'
+    ov.innerHTML='<div class="vc-top"><div class="vc-bar"><select class="vc-langsel" aria-label="Language"></select><button type="button" class="vc-set" aria-label="Voice settings">Settings</button></div>'
+      +'<div class="vc-panel"><label>Deep OQ voice<select class="vc-voice"></select></label>'
+      +'<label>Speaking speed <span class="vc-rv"></span><input type="range" class="vc-rate" min="0.6" max="1.6" step="0.1"></label>'
+      +'<label class="row"><span>Several people talking</span><input type="checkbox" class="vc-ppl"></label>'
+      +'<div class="vc-hint">Several people: Deep OQ tells voices apart by pitch, so it works best when the voices are clearly different. It is a best guess, not exact.</div></div></div>'
+      +'<div class="vc-mid"><div class="vcorb" title="Tap to skip"><i></i></div><div class="vcs"></div><div class="vcwho"></div><div class="vcyou"></div><div class="vctext"></div></div>'
       +'<div class="vc-foot"><button type="button" class="vc-end">End</button></div>';
     document.body.append(ov);
-    const lb=()=>{qs('.vc-lang').textContent=hi()?'हि':'EN'};lb();
-    qs('.vc-lang').onclick=()=>{const v=document.getElementById('vlang');if(v)v.click();else localStorage.vl=hi()?'en-IN':'hi-IN';lb();if(state)setState(state)};
+    const ls=qs('.vc-langsel');LANGS.forEach(([c,n])=>{const o=document.createElement('option');o.value=c;o.textContent=n;ls.append(o)});ls.value=vcLang;
+    ls.onchange=()=>{vcLang=ls.value;localStorage.vcl=vcLang;heard='';fillVoices();if(state)setState(state)};
+    qs('.vc-set').onclick=()=>qs('.vc-panel').classList.toggle('on');
+    const vsel=qs('.vc-voice');
+    function fillVoices(){
+      const pv=pickVoice(cur());vsel.innerHTML='<option value="">Automatic</option>';
+      pv.list.forEach(v=>{const o=document.createElement('option');o.value=v.name;o.textContent=v.name;vsel.append(o)});
+      vsel.value=pv.list.some(v=>v.name===vcVoice)?vcVoice:'';
+    }
+    fillVoices();try{speechSynthesis.addEventListener('voiceschanged',fillVoices)}catch(e){}
+    vsel.onchange=()=>{vcVoice=vsel.value;localStorage.vcVoice=vcVoice;sample()};
+    const rt=qs('.vc-rate'),rv=qs('.vc-rv');rt.value=vcRate;rv.textContent=vcRate.toFixed(1)+'x';
+    rt.oninput=()=>{vcRate=parseFloat(rt.value)||1;localStorage.vcRate=vcRate;rv.textContent=vcRate.toFixed(1)+'x'};
+    rt.onchange=sample;
+    const pp=qs('.vc-ppl');pp.checked=people;pp.onchange=()=>{people=pp.checked;localStorage.vcPeople=people?'1':'0';window.voicePeople=people;spk.length=0;lastSpk=0;if(!people)setTxt('.vcwho','')};
+    function sample(){
+      if(state==='speak'||state==='think')return;
+      try{const pv=pickVoice(cur()),u=new SpeechSynthesisUtterance(cur()==='hi'?'नमस्ते, मैं डीप ओक्यू हूँ।':'Hello, I am Deep OQ.');u.lang=pv.bcp;u.rate=vcRate;if(pv.voice)u.voice=pv.voice;speechSynthesis.cancel();speechSynthesis.speak(u)}catch(e){}
+    }
     qs('.vc-end').onclick=stop;
     qs('.vcorb').onclick=()=>{if(state==='speak'&&cancelSpeak)cancelSpeak()};
   }
@@ -5030,7 +5131,7 @@ function speakText(raw,btn){
     try{stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}})}
     catch(e){alert('Allow the microphone for this site (click the lock icon next to the web address), then try again.');return}
     active=true;build();
-    try{ac=new AC();if(ac.state==='suspended')ac.resume();const src=ac.createMediaStreamSource(stream);an=ac.createAnalyser();an.fftSize=1024;src.connect(an);buf=new Float32Array(an.fftSize)}
+    try{ac=new AC();if(ac.state==='suspended')ac.resume();const src=ac.createMediaStreamSource(stream);an=ac.createAnalyser();an.fftSize=2048;src.connect(an);buf=new Float32Array(an.fftSize)}
     catch(e){stop();alert('Voice chat is not supported in this browser.');return}
     try{const u=new SpeechSynthesisUtterance(' ');u.volume=0;speechSynthesis.speak(u)}catch(e){}   /* unlocks speech on iPhone */
     keepRs=rsOn;rsOn=false;
@@ -5089,6 +5190,517 @@ function speakText(raw,btn){
   /* a drag must not also open the menu */
   b.addEventListener('click',e=>{if(justDragged){e.stopImmediatePropagation();e.preventDefault()}},true);
   addEventListener('resize',()=>{if(!shown())return;const r=b.getBoundingClientRect();place(r.left,r.top)});
+})();
+
+/* ================= games: cricket, snake, flap, breakout ================= */
+(function(){
+  const root=document.getElementById('v-games');
+  if(!root)return;
+  const cv=document.getElementById('gcv');
+  const W=480,H=640,DPR=2;
+  cv.width=W*DPR;cv.height=H*DPR;
+  let ctx=cv.getContext('2d');
+  const clamp=(v,a,b)=>Math.max(a,Math.min(b,v)),lerp=(a,b,t)=>a+(b-a)*t,rnd=(a,b)=>a+Math.random()*(b-a);
+  const getBest=n=>{try{return +localStorage.getItem('oqbest_'+n)||0}catch(e){return 0}};
+  const setBest=(n,v)=>{try{localStorage.setItem('oqbest_'+n,String(v))}catch(e){}};
+  function rr(x,y,w,h,r){ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath()}
+  function txt(s,x,y,size,col,al,wt){ctx.font=(wt||'800')+' '+size+'px system-ui,-apple-system,Segoe UI,Roboto,sans-serif';ctx.textAlign=al||'center';ctx.textBaseline='middle';ctx.fillStyle=col||'#fff';ctx.fillText(s,x,y)}
+  function circ(x,y,r,col){ctx.beginPath();ctx.arc(x,y,Math.max(.1,r),0,Math.PI*2);ctx.fillStyle=col;ctx.fill()}
+  function overlay(title,sub,sub2){
+    ctx.fillStyle='rgba(6,10,40,.66)';ctx.fillRect(0,0,W,H);
+    txt(title,W/2,H/2-40,38,'#fff');
+    if(sub)txt(sub,W/2,H/2+8,20,'#dfe4ff','center','700');
+    if(sub2)txt(sub2,W/2,H/2+44,16,'#a9b4ee','center','600');
+  }
+  /* particles shared by all games */
+  const fx=[];
+  function burst(x,y,n,cols,sp,grav){for(let i=0;i<n;i++){const a=rnd(0,Math.PI*2),v=rnd(.3,1)*(sp||200);fx.push({x,y,vx:Math.cos(a)*v,vy:Math.sin(a)*v-(sp||200)*.3,life:rnd(.6,1.2),t:0,c:cols[i%cols.length],g:grav==null?420:grav,s:rnd(2,5)})}}
+  function updFx(dt){for(let i=fx.length-1;i>=0;i--){const p=fx[i];p.t+=dt;p.vy+=p.g*dt;p.x+=p.vx*dt;p.y+=p.vy*dt;if(p.t>p.life)fx.splice(i,1)}}
+  function drawFx(){fx.forEach(p=>{ctx.globalAlpha=clamp(1-p.t/p.life,0,1);ctx.fillStyle=p.c;ctx.fillRect(p.x-p.s/2,p.y-p.s/2,p.s,p.s)});ctx.globalAlpha=1}
+
+  /* ======================================================================
+     CRICKET
+     ====================================================================== */
+  const cricket=(function(){
+    const G={name:'cricket',title:'Cricket',
+      help:'Tap where you want the ball to go, at the moment it reaches the bat. Tap high up for a six, but you need perfect timing. Reach the target in 12 balls before you lose 2 wickets.'};
+    const FAR=244,NEAR=612,CX=240,ROPE=232,MAXB=12,MAXW=2;
+    const FIELD=[[112,336],[370,330],[60,268],[422,272],[184,288],[300,290],[148,436],[338,440]];
+    const bgc=document.createElement('canvas');bgc.width=W*DPR;bgc.height=H*DPR;
+    let st,runs,wk,balls,target,del,shot,pop,rt,flash,clock,win,first,fielderHot;
+    function buildBG(){
+      const keep=ctx;ctx=bgc.getContext('2d');ctx.setTransform(DPR,0,0,DPR,0,0);
+      let g=ctx.createLinearGradient(0,0,0,150);g.addColorStop(0,'#0a1248');g.addColorStop(1,'#4a3590');ctx.fillStyle=g;ctx.fillRect(0,0,W,160);
+      [[64,36],[416,36]].forEach(a=>{const rg=ctx.createRadialGradient(a[0],a[1],2,a[0],a[1],100);rg.addColorStop(0,'rgba(255,246,205,.95)');rg.addColorStop(1,'rgba(255,246,205,0)');ctx.fillStyle=rg;ctx.fillRect(a[0]-100,a[1]-100,200,200)});
+      ctx.fillStyle='#1c1738';ctx.fillRect(0,122,W,108);
+      const cols=['#ff5a5f','#ffd166','#06d6a0','#4cc9f0','#f1f3f9','#f78fb3','#ff9f1c'];
+      for(let r=0;r<7;r++)for(let i=0;i<49;i++){const x=i*10+(r%2?5:0)+rnd(-1,1),y=130+r*14+rnd(-1,1);circ(x,y-3,3.3,'#f0c8a0');ctx.fillStyle=cols[(i*7+r*3)%cols.length];rr(x-4,y,8,9,3);ctx.fill()}
+      /* ad boards */
+      const ab=['#0f2a66','#a4161a','#0b6e4f','#7a3e9d','#c26a00'];
+      for(let i=0;i<10;i++){ctx.fillStyle=ab[i%5];ctx.fillRect(i*48,224,48,16);ctx.fillStyle='rgba(255,255,255,.18)';ctx.fillRect(i*48+6,229,36,3)}
+      /* grass */
+      g=ctx.createLinearGradient(0,240,0,H);g.addColorStop(0,'#2f8f3f');g.addColorStop(1,'#1d6a2d');ctx.fillStyle=g;ctx.fillRect(0,240,W,H-240);
+      for(let i=0;i<12;i++){ctx.fillStyle=i%2?'rgba(255,255,255,.055)':'rgba(0,0,0,.06)';ctx.fillRect(0,240+i*34,W,34)}
+      /* rope */
+      ctx.strokeStyle='rgba(255,255,255,.9)';ctx.lineWidth=3;ctx.setLineDash([10,8]);ctx.beginPath();ctx.moveTo(0,246);ctx.quadraticCurveTo(240,236,480,246);ctx.stroke();ctx.setLineDash([]);
+      /* pitch */
+      g=ctx.createLinearGradient(0,FAR,0,NEAR+30);g.addColorStop(0,'#c9b27b');g.addColorStop(1,'#dcc48a');ctx.fillStyle=g;
+      ctx.beginPath();ctx.moveTo(CX-11,FAR);ctx.lineTo(CX+11,FAR);ctx.lineTo(CX+104,NEAR+40);ctx.lineTo(CX-104,NEAR+40);ctx.closePath();ctx.fill();
+      ctx.strokeStyle='rgba(255,255,255,.85)';ctx.lineWidth=2;
+      ctx.beginPath();ctx.moveTo(CX-16,FAR+4);ctx.lineTo(CX+16,FAR+4);ctx.moveTo(CX-112,NEAR-8);ctx.lineTo(CX+112,NEAR-8);ctx.stroke();
+      ctx.fillStyle='rgba(0,0,0,.05)';for(let i=0;i<40;i++){const y=rnd(FAR,NEAR),w=11+(y-FAR)/(NEAR-FAR)*92;ctx.fillRect(CX+rnd(-w,w),y,rnd(1,3),rnd(1,3))}
+      ctx=keep;
+    }
+    let built=false;
+    const ease=u=>1-(1-u)*(1-u);
+    const dpos=p=>.03+.97*p;
+    function bpos(p){
+      const d=dpos(p),y0=FAR+(NEAR-FAR)*d,s=.1+.9*Math.min(d,1.15),pb=del.pb;
+      let h;
+      if(p<pb){const u=p/pb;h=70*(1-u*u)+2}
+      else{const q=(p-pb)/(1-pb);h=Math.max(0,(1-(2*q-1)*(2*q-1))*62*(1-.12*Math.min(q,1)))}
+      const x=CX+del.L0*d+(p>pb?del.turn*Math.min(1,(p-pb)/(1-pb))*d:0);
+      return {x:x,y:y0-h*s,gy:y0,s:s,h:h};
+    }
+    function person(x,y,sc,shirt,o){
+      o=o||{};
+      ctx.fillStyle='rgba(0,0,0,.25)';ctx.beginPath();ctx.ellipse(x,y,13*sc,4*sc,0,0,Math.PI*2);ctx.fill();
+      ctx.strokeStyle='#f1f3f9';ctx.lineWidth=5*sc;ctx.lineCap='round';
+      ctx.beginPath();ctx.moveTo(x-4*sc,y-18*sc);ctx.lineTo(x-5*sc,y-1*sc);ctx.moveTo(x+4*sc,y-18*sc);ctx.lineTo(x+5*sc,y-1*sc);ctx.stroke();
+      ctx.fillStyle=shirt;rr(x-8*sc,y-40*sc,16*sc,24*sc,5*sc);ctx.fill();
+      if(o.arm!=null){ctx.strokeStyle=shirt;ctx.lineWidth=5*sc;ctx.beginPath();ctx.moveTo(x+6*sc,y-36*sc);ctx.lineTo(x+6*sc+Math.cos(o.arm)*18*sc,y-36*sc+Math.sin(o.arm)*18*sc);ctx.stroke()}
+      circ(x,y-47*sc,6.5*sc,'#e8b78c');
+      ctx.fillStyle=o.cap||'#12206b';ctx.beginPath();ctx.arc(x,y-49*sc,6.8*sc,Math.PI,0);ctx.fill();
+    }
+    function stumps(x,y,sc,fall){
+      ctx.lineCap='round';
+      for(let i=-1;i<=1;i++){
+        ctx.strokeStyle='#f6e7b4';ctx.lineWidth=Math.max(1.2,3.2*sc);
+        ctx.beginPath();
+        if(fall>0){const a=fall*(i*.9+.5);ctx.moveTo(x+i*12*sc,y);ctx.lineTo(x+i*12*sc+Math.sin(a)*58*sc*fall*1.4,y-58*sc*Math.cos(a*.5)+fall*30*sc)}
+        else{ctx.moveTo(x+i*12*sc,y);ctx.lineTo(x+i*12*sc,y-58*sc)}
+        ctx.stroke();
+      }
+      if(!(fall>0)){ctx.strokeStyle='#e5c76b';ctx.lineWidth=Math.max(1,2.2*sc);ctx.beginPath();ctx.moveTo(x-17*sc,y-58*sc);ctx.lineTo(x-4*sc,y-58*sc);ctx.moveTo(x+4*sc,y-58*sc);ctx.lineTo(x+17*sc,y-58*sc);ctx.stroke()}
+    }
+    function batsman(){
+      const bx=CX-52,by=NEAR+14;
+      ctx.fillStyle='rgba(0,0,0,.28)';ctx.beginPath();ctx.ellipse(bx+6,by,34,9,0,0,Math.PI*2);ctx.fill();
+      /* legs and pads */
+      ctx.fillStyle='#f4f6fb';rr(bx-17,by-64,15,62,6);ctx.fill();rr(bx+3,by-64,15,62,6);ctx.fill();
+      ctx.fillStyle='#d9deec';ctx.fillRect(bx-15,by-40,11,3);ctx.fillRect(bx+5,by-40,11,3);
+      /* torso */
+      ctx.fillStyle='#1f3fbf';rr(bx-22,by-128,44,68,12);ctx.fill();
+      ctx.fillStyle='#ffd166';ctx.fillRect(bx-22,by-100,44,5);
+      /* head with helmet */
+      circ(bx,by-146,14,'#e8b78c');
+      ctx.fillStyle='#12206b';ctx.beginPath();ctx.arc(bx,by-149,15.5,Math.PI*1.02,Math.PI*1.98);ctx.fill();
+      ctx.strokeStyle='#0c1650';ctx.lineWidth=2.5;ctx.beginPath();ctx.moveTo(bx+2,by-146);ctx.lineTo(bx+16,by-142);ctx.moveTo(bx+2,by-139);ctx.lineTo(bx+15,by-137);ctx.stroke();
+      /* bat */
+      let th=1.38;
+      if(del&&del.swung){const u=clamp(del.swingT/.22,0,1);th=u<1?lerp(-2.3,.35,ease(u)):lerp(.35,-.4,clamp((del.swingT-.22)/.3,0,1))}
+      else if(st==='ball'||st==='runup'){th=1.38+Math.sin(clock*5)*.03}
+      const hx=bx+24,hy=by-88;
+      ctx.save();ctx.translate(hx,hy);ctx.rotate(th);
+      ctx.fillStyle='#caa16a';rr(0,-6,84,12,5);ctx.fill();
+      ctx.fillStyle='#b88a52';rr(-18,-4,22,8,3);ctx.fill();
+      ctx.fillStyle='#1b1b1b';ctx.fillRect(-18,-4,14,8);
+      ctx.restore();
+      circ(hx,hy,6,'#e8b78c');
+    }
+    G.reset=function(){
+      if(!built){buildBG();built=true}
+      runs=0;wk=0;balls=MAXB;target=Math.round(rnd(30,42));st='ready';del=null;shot=null;pop=null;rt=0;flash=0;clock=0;win=false;first=true;fx.length=0;fielderHot=-1;
+    };
+    function newDelivery(){
+      const kinds=[.82,1.05,1.05,1.4];
+      const T=kinds[Math.floor(Math.random()*kinds.length)];
+      del={T:T,pb:rnd(.56,.7),L0:rnd(-30,30),turn:rnd(-30,30)*(T>1.3?1.3:.6),t:0,p:0,swung:false,swingT:0,decided:false,miss:false,bowled:false,msg:'',tx:CX,ty:300};
+      st='runup';rt=0;shot=null;
+    }
+    function finishBall(msg,col,add,wicket,big){
+      runs+=add;wk+=wicket;balls--;pop={s:msg,c:col,t:0,big:!!big};st='result';rt=0;
+      if(big){flash=1}
+      if(runs>=target){win=true}
+    }
+    function decide(forceP){
+      del.decided=true;
+      const p=forceP||del.p,et=(p-.92)*del.T,ae=Math.abs(et);
+      const q=ae<.06?3:ae<.11?2:ae<.17?1:0;
+      if(q===0){del.msg=et<0?'Too early':'Too late';del.miss=true;return}
+      const C=bpos(Math.min(p,1)),tx=clamp(del.tx,24,456),ty=clamp(del.ty,166,545);
+      const f=clamp((C.y-ty)/(C.y-166),.05,1);
+      const mq=[0,.5,.84,1.06][q]*(1+rnd(-.04,.04));
+      const L={x:C.x+(tx-C.x)*mq,y:C.y+(ty-C.y)*mq};
+      const lofted=(q===3&&ty<315)||(q===1&&f>.4);
+      let boundary=0,out=false,add=0,msg='',col='#fff',fielded=-1;
+      if(L.y<=ROPE+4){boundary=lofted?6:4}
+      if(!boundary){
+        const dist=C.y-L.y;add=dist<50?0:dist<120?1:dist<200?2:3;if(q===1)add=Math.min(add,2);
+        FIELD.forEach((fd,i)=>{const d=Math.hypot(fd[0]-L.x,fd[1]-L.y);if(lofted&&d<36)out=true;if(!lofted&&d<28){fielded=i}});
+        if(lofted&&q===1&&!out&&Math.random()<.3)out=true;
+        if(fielded>=0&&!out){add=Math.min(add,1)}
+      }
+      if(boundary===6){L.y=Math.min(L.y,150);msg='SIX!';col='#ffd166';add=6}
+      else if(boundary===4){L.y=ROPE+8;msg='FOUR!';col='#4cc9f0';add=4}
+      else if(out){msg='CAUGHT!';col='#ff5a5f';add=0}
+      else msg=add>0?add+(add>1?' runs':' run'):(fielded>=0?'Fielded':'No run');
+      shot={C:C,L:L,lofted:lofted||boundary===6,boundary:boundary,out:out,t:0,dur:boundary===6?1.15:(lofted?1.05:.85),msg:msg,col:col,add:add,fielded:fielded,q:q};
+      st='hit';
+      if(q===3&&!out)first=false;
+    }
+    G.update=function(dt){
+      clock+=dt;flash=Math.max(0,flash-dt*1.6);updFx(dt);
+      if(pop)pop.t+=dt;
+      if(st==='runup'){rt+=dt;if(rt>=.85){st='ball';rt=0}}
+      else if(st==='ball'){
+        del.t+=dt;del.p=del.t/del.T;
+        if(del.swung)del.swingT+=dt;
+        if(del.swung&&!del.decided&&del.swingT>=.07)decide();
+        if(st==='ball'&&del.p>=1){
+          if(del.swung&&!del.decided)decide(1);
+          if(st==='ball'){
+            del.bowled=Math.abs(bpos(1).x-CX)<22;   /* not hit: does it carry on to the stumps? */
+            st='pass';
+          }
+        }
+      }
+      else if(st==='pass'){
+        del.t+=dt;del.p=del.t/del.T;if(del.swung)del.swingT+=dt;
+        if(del.p>=1.22){
+          if(del.bowled){finishBall('BOWLED!','#ff5a5f',0,1,false);del.fall=0}
+          else finishBall(del.msg||'Left alone','#dfe4ff',0,0,false);
+        }
+      }
+      else if(st==='hit'){
+        if(del.swung)del.swingT+=dt;
+        shot.t+=dt;
+        if(shot.t>=shot.dur){
+          const e=shot;
+          if(e.boundary){const col=e.boundary===6?['#ffd166','#ff5a5f','#4cc9f0','#fff']:['#4cc9f0','#fff','#06d6a0'];burst(clamp(e.L.x,40,440),Math.max(e.L.y,170),e.boundary===6?70:40,col,260,380)}
+          finishBall(e.msg,e.col,e.add,e.out?1:0,!!e.boundary);
+          if(e.out)fielderHot=-1;
+        }
+      }
+      else if(st==='result'){
+        if(del&&del.bowled)del.fall=Math.min(1,(del.fall||0)+dt*2.2);
+        if(del&&del.swung)del.swingT+=dt;
+        rt+=dt;
+        if(rt>1.3){
+          if(win||balls<=0||wk>=MAXW){
+            st='end';
+            const b=getBest('cricket');if(runs>b)setBest('cricket',runs);
+          }else newDelivery();
+        }
+      }
+    };
+    G.tap=function(x,y){
+      if(st==='ready'||st==='end'){G.reset();newDelivery();return}
+      if(st==='ball'&&del&&!del.swung){del.swung=true;del.swingT=0;del.tx=x;del.ty=y}
+    };
+    G.key=function(k){if(k===' '||k==='Enter'){G.tap(CX,first?200:230);return true}return false};
+    G.score=function(){return runs};
+    G.status=function(){return {st:st,del:del}};
+    G.draw=function(){
+      ctx.drawImage(bgc,0,0,W,H);
+      /* crowd flash */
+      if(flash>0){ctx.fillStyle='rgba(255,255,255,'+(flash*.22)+')';ctx.fillRect(0,122,W,108)}
+      /* fielders */
+      FIELD.forEach((fd,i)=>{const sc=.42+.5*((fd[1]-FAR)/(NEAR-FAR));let dy=0;if(st==='hit'&&shot&&shot.fielded===i&&shot.t>shot.dur*.5)dy=-Math.abs(Math.sin(shot.t*12))*4;person(fd[0],fd[1]+dy,sc,'#f4f6fb',{cap:'#1f3fbf'})});
+      /* far stumps + bowler */
+      stumps(CX,FAR+4,.2,0);
+      let by=FAR-2,arm=null;
+      if(st==='runup'){by=FAR-12+rt/.85*14;arm=-1.2+Math.sin(rt*14)*.5}
+      else if(st==='ball'&&del&&del.p<.12){by=FAR+4;arm=lerp(-1.6,1.4,clamp(del.p/.08,0,1))}
+      else if(st==='ready'||st==='end'){by=FAR-2}
+      else by=FAR+4;
+      person(CX+6,by+16,.5,'#d62828',{arm:arm,cap:'#d62828'});
+      /* near stumps */
+      stumps(CX,NEAR+2,1.1,del&&del.bowled&&del.fall>0?del.fall:0);
+      /* ball shadow + ball */
+      let bp=null;
+      if(st==='ball'||st==='pass'){bp=bpos(del.p)}
+      if(bp&&del.p>.02){
+        const r=2.2+8*clamp(bp.s,0,1.1);
+        ctx.fillStyle='rgba(0,0,0,.3)';ctx.beginPath();ctx.ellipse(bp.x,bp.gy,r*1.1,r*.4,0,0,Math.PI*2);ctx.fill();
+        circ(bp.x,bp.y,r,'#c8102e');ctx.strokeStyle='rgba(255,255,255,.85)';ctx.lineWidth=Math.max(.6,r*.18);ctx.beginPath();ctx.arc(bp.x,bp.y,r*.78,-.9,.9);ctx.stroke();
+      }
+      if(st==='hit'&&shot){
+        const u=clamp(shot.t/shot.dur,0,1),e=shot.lofted?u:ease(u);
+        const gx=lerp(shot.C.x,shot.L.x,e),gy=lerp(shot.C.y,shot.L.y,e);
+        const arc=shot.lofted?Math.sin(Math.PI*u)*(50+(shot.C.y-shot.L.y)*.42):Math.abs(Math.sin(u*Math.PI*3))*9*(1-u);
+        const s=clamp((gy-FAR)/(NEAR-FAR),0,1),r=2.4+7.5*s+(shot.lofted?Math.sin(Math.PI*u)*2:0);
+        ctx.globalAlpha=shot.boundary===6&&u>.8?clamp((1-u)/.2,0,1):1;
+        ctx.fillStyle='rgba(0,0,0,.28)';ctx.beginPath();ctx.ellipse(gx,gy,r*1.1,r*.4,0,0,Math.PI*2);ctx.fill();
+        for(let k=1;k<=4;k++){const uu=Math.max(0,u-k*.035),ee=shot.lofted?uu:ease(uu);const tx=lerp(shot.C.x,shot.L.x,ee),ty=lerp(shot.C.y,shot.L.y,ee)-(shot.lofted?Math.sin(Math.PI*uu)*(50+(shot.C.y-shot.L.y)*.42):0);ctx.globalAlpha=(shot.boundary===6&&u>.8?clamp((1-u)/.2,0,1):1)*(.22-k*.04);circ(tx,ty,r*(1-k*.12),'#fff')}
+        ctx.globalAlpha=shot.boundary===6&&u>.8?clamp((1-u)/.2,0,1):1;
+        circ(gx,gy-arc,r,'#c8102e');ctx.strokeStyle='rgba(255,255,255,.85)';ctx.lineWidth=Math.max(.6,r*.18);ctx.beginPath();ctx.arc(gx,gy-arc,r*.78,-.9,.9);ctx.stroke();
+        ctx.globalAlpha=1;
+      }
+      batsman();
+      drawFx();
+      /* scoreboard */
+      ctx.fillStyle='rgba(8,12,48,.72)';rr(10,10,W-20,58,16);ctx.fill();
+      txt(runs+'/'+wk,76,39,30,'#fff','center');
+      txt('RUNS',76,16,10,'#9fb0ff','center','700');
+      txt('Target '+target,W/2,29,18,'#ffd166','center');
+      const need=Math.max(0,target-runs);
+      txt(need>0?'Need '+need+' off '+balls+' ball'+(balls===1?'':'s'):'Target reached',W/2,50,13,'#cfd6ff','center','600');
+      for(let i=0;i<MAXW;i++)circ(W-66+i*20,24,6,i<wk?'rgba(255,90,95,.35)':'#06d6a0');
+      txt('WICKETS LEFT',W-56,46,9,'#9fb0ff','center','700');
+      /* ball dots */
+      for(let i=0;i<MAXB;i++){const x=24+i*((W-48)/(MAXB-1));circ(x,82,4,i<MAXB-balls?'rgba(255,255,255,.25)':'#ffd166')}
+      /* pop text */
+      if(pop&&pop.t<1.25){
+        const k=pop.t,sc=pop.big?(1+Math.max(0,.5-k)*1.4):1;
+        ctx.save();ctx.globalAlpha=clamp(1.25-k,0,1);ctx.translate(W/2,320-k*28);ctx.scale(sc,sc);
+        txt(pop.s,0,0,pop.big?72:44,pop.c,'center','900');ctx.restore();
+      }
+      if(st==='runup'&&first&&balls===MAXB)txt('Get ready...',W/2,300,26,'rgba(255,255,255,.85)','center','800');
+      if(st==='ball'&&first&&del.p<.7){txt('Tap where you want to hit',W/2,300,20,'rgba(255,255,255,.9)','center','800');txt('as the ball reaches the bat',W/2,326,16,'rgba(255,255,255,.8)','center','700')}
+      if(st==='ready')overlay('Cricket','Tap to start','Reach '+target+' in '+MAXB+' balls. Time your shot.');
+      if(st==='end'){
+        overlay(win?'You won!':'Innings over',runs+' runs'+(win?' - target reached':' - target was '+target),'Tap to play again');
+      }
+    };
+    return G;
+  })();
+
+  /* ======================================================================
+     SNAKE
+     ====================================================================== */
+  const snake=(function(){
+    const G={name:'snake',title:'Snake',help:'Swipe, or use the arrow keys, to steer. Eat the apples. Do not hit the walls or yourself.'};
+    const C=20,R=26,S=24,OY=8;
+    let sn,old,dir,nd,ap,acc,stepT,score,st,sx,sy,clock;
+    function place(){do{ap={x:Math.floor(Math.random()*C),y:Math.floor(Math.random()*R)}}while(sn.some(s=>s.x===ap.x&&s.y===ap.y))}
+    G.reset=function(){sn=[{x:10,y:13},{x:9,y:13},{x:8,y:13}];old=sn.map(s=>({x:s.x,y:s.y}));dir={x:1,y:0};nd=[];score=0;stepT=.14;acc=0;st='ready';sx=null;clock=0;fx.length=0;place()};
+    function turn(dx,dy){const l=nd.length?nd[nd.length-1]:dir;if((dx===-l.x&&dy===-l.y)||(dx===l.x&&dy===l.y))return;if(nd.length<3)nd.push({x:dx,y:dy})}
+    G.update=function(dt){
+      clock+=dt;updFx(dt);
+      if(st!=='play')return;
+      acc+=dt;
+      while(acc>=stepT){
+        acc-=stepT;
+        if(nd.length)dir=nd.shift();
+        const h={x:sn[0].x+dir.x,y:sn[0].y+dir.y};
+        const tail=sn[sn.length-1];
+        if(h.x<0||h.y<0||h.x>=C||h.y>=R||sn.some((s,i)=>s.x===h.x&&s.y===h.y&&!(s===tail))){
+          st='over';burst(h.x*S+S/2,h.y*S+OY+S/2,40,['#06d6a0','#4cc9f0','#fff'],240);
+          const b=getBest('snake');if(score>b)setBest('snake',score);return;
+        }
+        old=sn.map(s=>({x:s.x,y:s.y}));
+        sn.unshift(h);
+        if(h.x===ap.x&&h.y===ap.y){score++;stepT=Math.max(.062,stepT*.972);burst(ap.x*S+S/2,ap.y*S+OY+S/2,16,['#ff5a5f','#ffd166','#fff'],170);place()}
+        else sn.pop();
+      }
+    };
+    G.tap=function(x,y){if(st==='ready'||st==='over'){G.reset();st='play'}};
+    G.down=function(x,y){sx=x;sy=y;G.tap(x,y)};
+    G.move=function(x,y,pressed){
+      if(!pressed||sx==null||st!=='play')return;
+      const dx=x-sx,dy=y-sy;
+      if(Math.hypot(dx,dy)<22)return;
+      if(Math.abs(dx)>Math.abs(dy))turn(dx>0?1:-1,0);else turn(0,dy>0?1:-1);
+      sx=x;sy=y;
+    };
+    G.up=function(){sx=null};
+    G.key=function(k){
+      const m={ArrowUp:[0,-1],ArrowDown:[0,1],ArrowLeft:[-1,0],ArrowRight:[1,0],w:[0,-1],s:[0,1],a:[-1,0],d:[1,0],W:[0,-1],S:[0,1],A:[-1,0],D:[1,0]};
+      if(m[k]){if(st==='ready'||st==='over'){G.reset();st='play'}turn(m[k][0],m[k][1]);return true}
+      if(k===' '||k==='Enter'){G.tap();return true}return false;
+    };
+    G.score=function(){return score};
+    G.draw=function(){
+      let g=ctx.createLinearGradient(0,0,0,H);g.addColorStop(0,'#0b1d3a');g.addColorStop(1,'#071126');ctx.fillStyle=g;ctx.fillRect(0,0,W,H);
+      for(let y=0;y<R;y++)for(let x=0;x<C;x++){if((x+y)%2===0){ctx.fillStyle='rgba(255,255,255,.035)';ctx.fillRect(x*S,y*S+OY,S,S)}}
+      ctx.strokeStyle='rgba(76,201,240,.35)';ctx.lineWidth=2;ctx.strokeRect(1,OY+1,W-2,R*S-2);
+      /* apple */
+      const pul=1+Math.sin(clock*6)*.08,ax=ap.x*S+S/2,ay=ap.y*S+OY+S/2;
+      ctx.fillStyle='rgba(255,90,95,.25)';ctx.beginPath();ctx.arc(ax,ay,S*.8*pul,0,Math.PI*2);ctx.fill();
+      circ(ax,ay+1,S*.38*pul,'#e63946');circ(ax-3,ay-2,3,'rgba(255,255,255,.55)');
+      ctx.fillStyle='#06d6a0';ctx.beginPath();ctx.ellipse(ax+4,ay-S*.38,5,2.6,-.6,0,Math.PI*2);ctx.fill();
+      /* snake */
+      const t=st==='play'?clamp(acc/stepT,0,1):1;
+      const pts=sn.map((s,i)=>{const o=(st==='play'&&old[i])?old[i]:s;return {x:lerp(o.x,s.x,t)*S+S/2,y:lerp(o.y,s.y,t)*S+OY+S/2}});
+      for(let i=pts.length-1;i>=0;i--){
+        const k=i/Math.max(1,pts.length-1),r=S*.46*(1-k*.25);
+        ctx.fillStyle='hsl('+(160-k*40)+',80%,'+(52-k*14)+'%)';
+        if(i<pts.length-1){ctx.strokeStyle=ctx.fillStyle;ctx.lineWidth=r*1.7;ctx.lineCap='round';ctx.beginPath();ctx.moveTo(pts[i].x,pts[i].y);ctx.lineTo(pts[i+1].x,pts[i+1].y);ctx.stroke()}
+        circ(pts[i].x,pts[i].y,r,ctx.fillStyle);
+      }
+      const hd=pts[0],dx=dir.x,dy=dir.y,px=-dy,py=dx;
+      circ(hd.x+dx*4+px*5,hd.y+dy*4+py*5,4.2,'#fff');circ(hd.x+dx*4-px*5,hd.y+dy*4-py*5,4.2,'#fff');
+      circ(hd.x+dx*5.5+px*5,hd.y+dy*5.5+py*5,2,'#0b1d3a');circ(hd.x+dx*5.5-px*5,hd.y+dy*5.5-py*5,2,'#0b1d3a');
+      drawFx();
+      ctx.fillStyle='rgba(6,12,32,.55)';rr(W-86,14,72,34,17);ctx.fill();txt(String(score),W-50,31,22,'#fff','center','900');
+      if(st==='ready')overlay('Snake','Swipe or use arrow keys','Tap to start');
+      if(st==='over')overlay('Game over','Score '+score,'Tap to play again');
+    };
+    return G;
+  })();
+
+  /* ======================================================================
+     FLAP
+     ====================================================================== */
+  const flap=(function(){
+    const G={name:'flap',title:'Flap',help:'Tap, click or press space to flap. Fly through the gaps without touching a pipe or the ground.'};
+    const GY=560,BX=130,BR=15,GAP=168;
+    let y,vy,pipes,score,st,spawn,dist,clock,deadT,clouds;
+    G.reset=function(){y=300;vy=0;pipes=[];score=0;st='ready';spawn=.9;dist=0;clock=0;deadT=0;fx.length=0;clouds=[];for(let i=0;i<5;i++)clouds.push({x:rnd(0,W),y:rnd(60,300),s:rnd(.6,1.3)})};
+    function go(){if(st==='ready'){st='play';vy=-380}else if(st==='play'){vy=-380}else if(st==='over'&&deadT>.55){G.reset()}}
+    G.tap=go;G.down=go;
+    G.key=function(k){if(k===' '||k==='ArrowUp'||k==='Enter'){go();return true}return false};
+    G.update=function(dt){
+      clock+=dt;updFx(dt);
+      clouds.forEach(c=>{c.x-=(st==='over'?0:12)*c.s*dt;if(c.x<-80)c.x=W+60});
+      if(st==='ready'){y=300+Math.sin(clock*4)*8;return}
+      if(st==='over'){deadT+=dt;if(y<GY-BR){vy+=1500*dt;y+=vy*dt;if(y>GY-BR)y=GY-BR}return}
+      vy+=1250*dt;y+=vy*dt;dist+=170*dt;
+      spawn-=dt;if(spawn<=0){spawn=1.45;pipes.push({x:W+40,gy:rnd(170,GY-GAP/2-60),ok:false})}
+      pipes.forEach(p=>p.x-=170*dt);
+      while(pipes.length&&pipes[0].x<-80)pipes.shift();
+      pipes.forEach(p=>{if(!p.ok&&p.x+30<BX){p.ok=true;score++;burst(BX,y,8,['#ffd166','#fff'],120,200)}});
+      let hit=y+BR>=GY||y-BR<=0;
+      pipes.forEach(p=>{if(BX+BR>p.x-30&&BX-BR<p.x+30){if(y-BR*.8<p.gy-GAP/2||y+BR*.8>p.gy+GAP/2)hit=true}});
+      if(hit){st='over';deadT=0;vy=-200;burst(BX,y,30,['#ffd166','#ff9f1c','#fff'],240);const b=getBest('flap');if(score>b)setBest('flap',score)}
+    };
+    G.score=function(){return score};
+    function pipe(x,top,bottom){
+      const g=ctx.createLinearGradient(x-30,0,x+30,0);g.addColorStop(0,'#2a9d4a');g.addColorStop(.5,'#67d97f');g.addColorStop(1,'#1f7a3a');ctx.fillStyle=g;
+      ctx.fillRect(x-26,0,52,top-18);rr(x-32,top-26,64,26,6);ctx.fill();
+      ctx.fillRect(x-26,bottom+18,52,GY-bottom-18);rr(x-32,bottom,64,26,6);ctx.fill();
+    }
+    G.draw=function(){
+      let g=ctx.createLinearGradient(0,0,0,GY);g.addColorStop(0,'#4cc9f0');g.addColorStop(1,'#bdeeff');ctx.fillStyle=g;ctx.fillRect(0,0,W,H);
+      clouds.forEach(c=>{ctx.fillStyle='rgba(255,255,255,.85)';[[0,0,26],[24,6,20],[-24,8,18],[44,12,14]].forEach(a=>{ctx.beginPath();ctx.arc(c.x+a[0]*c.s,c.y+a[1]*c.s,a[2]*c.s,0,Math.PI*2);ctx.fill()})});
+      pipes.forEach(p=>pipe(p.x,p.gy-GAP/2,p.gy+GAP/2));
+      ctx.fillStyle='#d9b15c';ctx.fillRect(0,GY,W,H-GY);ctx.fillStyle='#7bd24e';ctx.fillRect(0,GY,W,14);
+      ctx.fillStyle='rgba(0,0,0,.08)';const off=(dist%40);for(let x=-40;x<W+40;x+=40){ctx.beginPath();ctx.moveTo(x-off,GY+14);ctx.lineTo(x-off+20,GY+14);ctx.lineTo(x-off+6,GY+30);ctx.lineTo(x-off-14,GY+30);ctx.fill()}
+      /* bird */
+      const rot=clamp(vy/600,-.5,1.1);
+      ctx.save();ctx.translate(BX,y);ctx.rotate(st==='over'?1.2:rot);
+      circ(0,0,BR,'#ffd23f');ctx.fillStyle='#ff9f1c';ctx.beginPath();ctx.ellipse(-3,5,9,6,0,0,Math.PI*2);ctx.fill();
+      const wing=Math.sin(clock*(st==='play'?22:10))*7;
+      ctx.fillStyle='#f4a300';ctx.beginPath();ctx.ellipse(-4,3+wing*.4,10,5+Math.abs(wing)*.3,-.4,0,Math.PI*2);ctx.fill();
+      circ(6,-5,6,'#fff');circ(8,-5,3,'#1b1b1b');
+      ctx.fillStyle='#ff6b35';ctx.beginPath();ctx.moveTo(13,0);ctx.lineTo(24,3);ctx.lineTo(13,7);ctx.closePath();ctx.fill();
+      ctx.restore();
+      drawFx();
+      txt(String(score),W/2,70,64,'#fff','center','900');
+      if(st==='ready')overlay('Flap','Tap to flap','Fly through the gaps');
+      if(st==='over'&&deadT>.4)overlay('Game over','Score '+score,'Tap to try again');
+    };
+    return G;
+  })();
+
+  /* ======================================================================
+     BREAKOUT
+     ====================================================================== */
+  const brick=(function(){
+    const G={name:'breakout',title:'Breakout',help:'Move your finger or mouse to slide the paddle. Bounce the ball to break every brick. You have 3 lives.'};
+    const PY=596,PW0=96,BR=8,COLS=8,ROWS=6,BW=54,BH=22;
+    let px,pw,ball,bricks,lives,score,st,lvl,clock,spd;
+    function build(){bricks=[];const cs=['#ff5a5f','#ff9f1c','#ffd166','#06d6a0','#4cc9f0','#7c5cff'];for(let r=0;r<ROWS;r++)for(let c=0;c<COLS;c++)bricks.push({x:12+c*(BW+3.5),y:88+r*(BH+5),c:cs[r],alive:true})}
+    function serve(){ball={x:px,y:PY-BR-2,vx:0,vy:0,stuck:true}}
+    G.reset=function(){px=W/2;pw=PW0;lives=3;score=0;st='ready';lvl=1;spd=340;clock=0;fx.length=0;build();serve()};
+    function launch(){if(ball.stuck){ball.stuck=false;const a=rnd(-.4,.4);ball.vx=Math.sin(a)*spd;ball.vy=-Math.cos(a)*spd}}
+    G.tap=function(){if(st==='ready'){st='play';launch()}else if(st==='play'){launch()}else if(st==='over'||st==='won'){if(st==='won'){lvl++;spd=Math.min(560,spd+40);build();serve();st='play'}else G.reset()}};
+    G.down=G.tap;
+    G.move=function(x){px=clamp(x,pw/2+4,W-pw/2-4);if(ball&&ball.stuck)ball.x=px};
+    G.key=function(k){if(k==='ArrowLeft'||k==='a'){G.move(px-40);return true}if(k==='ArrowRight'||k==='d'){G.move(px+40);return true}if(k===' '||k==='Enter'){G.tap();return true}return false};
+    G.update=function(dt){
+      clock+=dt;updFx(dt);
+      if(st!=='play')return;
+      if(ball.stuck){ball.x=px;return}
+      const steps=3;
+      for(let s=0;s<steps;s++){
+        ball.x+=ball.vx*dt/steps;ball.y+=ball.vy*dt/steps;
+        if(ball.x<BR){ball.x=BR;ball.vx=Math.abs(ball.vx)}
+        if(ball.x>W-BR){ball.x=W-BR;ball.vx=-Math.abs(ball.vx)}
+        if(ball.y<BR+4){ball.y=BR+4;ball.vy=Math.abs(ball.vy)}
+        if(ball.vy>0&&ball.y+BR>=PY&&ball.y+BR<=PY+16&&ball.x>=px-pw/2-BR&&ball.x<=px+pw/2+BR){
+          const k=clamp((ball.x-px)/(pw/2),-1,1),a=k*1.05,v=Math.min(620,Math.hypot(ball.vx,ball.vy)*1.01+1);
+          ball.vx=Math.sin(a)*v;ball.vy=-Math.cos(a)*v;ball.y=PY-BR;
+        }
+        for(const b of bricks){
+          if(!b.alive)continue;
+          if(ball.x+BR>b.x&&ball.x-BR<b.x+BW&&ball.y+BR>b.y&&ball.y-BR<b.y+BH){
+            b.alive=false;score+=10*lvl;burst(b.x+BW/2,b.y+BH/2,10,[b.c,'#fff'],150,300);
+            const ox=Math.min(ball.x+BR-b.x,b.x+BW-(ball.x-BR)),oy=Math.min(ball.y+BR-b.y,b.y+BH-(ball.y-BR));
+            if(ox<oy)ball.vx=-ball.vx;else ball.vy=-ball.vy;
+            break;
+          }
+        }
+      }
+      if(ball.y>H+20){
+        lives--;
+        if(lives<=0){st='over';const b=getBest('breakout');if(score>b)setBest('breakout',score)}
+        else{serve()}
+      }
+      if(!bricks.some(b=>b.alive)){st='won';burst(W/2,200,60,['#ffd166','#4cc9f0','#ff5a5f','#06d6a0'],300)}
+    };
+    G.score=function(){return score};
+    G.draw=function(){
+      let g=ctx.createLinearGradient(0,0,0,H);g.addColorStop(0,'#160f3a');g.addColorStop(1,'#0a0a24');ctx.fillStyle=g;ctx.fillRect(0,0,W,H);
+      for(let i=0;i<30;i++){const x=(i*97)%W,y=(i*53+clock*10*(1+i%3))%H;ctx.fillStyle='rgba(255,255,255,'+(.15+(i%4)*.06)+')';ctx.fillRect(x,y,2,2)}
+      bricks.forEach(b=>{if(!b.alive)return;ctx.fillStyle=b.c;rr(b.x,b.y,BW,BH,6);ctx.fill();ctx.fillStyle='rgba(255,255,255,.28)';rr(b.x+3,b.y+3,BW-6,6,3);ctx.fill()});
+      /* paddle */
+      g=ctx.createLinearGradient(0,PY,0,PY+14);g.addColorStop(0,'#9fb0ff');g.addColorStop(1,'#4c5fd1');ctx.fillStyle=g;rr(px-pw/2,PY,pw,14,7);ctx.fill();
+      /* ball */
+      ctx.fillStyle='rgba(255,255,255,.18)';ctx.beginPath();ctx.arc(ball.x,ball.y,BR*1.9,0,Math.PI*2);ctx.fill();circ(ball.x,ball.y,BR,'#fff');
+      drawFx();
+      txt('Score '+score,14,30,20,'#fff','left','800');
+      for(let i=0;i<3;i++)circ(W-24-i*22,30,7,i<lives?'#ff5a5f':'rgba(255,255,255,.2)');
+      txt('Level '+lvl,W/2,30,16,'#a9b4ee','center','700');
+      if(st==='ready')overlay('Breakout','Slide to move the paddle','Tap to launch the ball');
+      if(st==='over')overlay('Game over','Score '+score,'Tap to play again');
+      if(st==='won')overlay('Level cleared!','Score '+score,'Tap for the next level');
+      if(st==='play'&&ball.stuck)txt('Tap to launch',W/2,PY-44,18,'rgba(255,255,255,.85)','center','800');
+    };
+    return G;
+  })();
+
+  /* ======================================================================
+     runner: picker, input, loop
+     ====================================================================== */
+  const games={cricket:cricket,snake:snake,flap:flap,breakout:brick};
+  window.__oqgames=games;
+  let cur=null,last=0;
+  const elHelp=document.getElementById('ghelp'),elScore=document.getElementById('gscore'),elBest=document.getElementById('gbest');
+  function select(n){
+    if(!games[n])n='cricket';
+    cur=games[n];cur.reset();
+    root.querySelectorAll('[data-g]').forEach(b=>{const on=b.dataset.g===n;b.classList.toggle('on',on);b.setAttribute('aria-pressed',on)});
+    elHelp.textContent=cur.help;
+    try{localStorage.setItem('oqgame',n)}catch(e){}
+  }
+  root.querySelectorAll('[data-g]').forEach(b=>b.onclick=()=>select(b.dataset.g));
+  document.getElementById('grestart').onclick=()=>{cur.reset()};
+  function pt(e){const r=cv.getBoundingClientRect();return [(e.clientX-r.left)/r.width*W,(e.clientY-r.top)/r.height*H]}
+  let pressed=false;
+  cv.addEventListener('pointerdown',e=>{e.preventDefault();pressed=true;try{cv.setPointerCapture(e.pointerId)}catch(_){}const p=pt(e);if(cur.down)cur.down(p[0],p[1]);else cur.tap(p[0],p[1])});
+  cv.addEventListener('pointermove',e=>{const p=pt(e);if(cur.move)cur.move(p[0],p[1],pressed)});
+  const rel=e=>{pressed=false;if(cur.up)cur.up()};
+  cv.addEventListener('pointerup',rel);cv.addEventListener('pointercancel',rel);
+  cv.addEventListener('contextmenu',e=>e.preventDefault());
+  document.addEventListener('keydown',e=>{
+    if(document.body.dataset.view!=='games')return;
+    if(e.target&&/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName))return;
+    if(cur.key&&cur.key(e.key)){e.preventDefault()}
+  });
+  function frame(t){
+    requestAnimationFrame(frame);
+    const dt=Math.min(.05,(t-last)/1000||0);last=t;
+    if(document.body.dataset.view!=='games'||document.hidden)return;
+    ctx.setTransform(DPR,0,0,DPR,0,0);
+    cur.update(dt);cur.draw();
+    const sc=cur.score(),b=Math.max(getBest(cur.name),sc);
+    elScore.textContent='Score '+sc;elBest.textContent='Best '+b;
+  }
+  let first='cricket';try{first=localStorage.getItem('oqgame')||'cricket'}catch(e){}
+  select(first);
+  requestAnimationFrame(frame);
 })();
 
 /* ================= saved chats ================= */
@@ -5651,7 +6263,7 @@ $('#drawer').setAttribute('aria-hidden','true');
 stats();box.focus();
 
 /* ================= tabs ================= */
-const VIEWS=['chat','code','photo','video','lab','news','music','3d'];
+const VIEWS=['chat','code','photo','video','lab','news','music','3d','games'];
 function showView(v){
   if(!VIEWS.includes(v))v='chat';
   document.body.dataset.view=v;
