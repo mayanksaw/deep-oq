@@ -3223,7 +3223,7 @@ def _start_login(name, remember):
 def require_login():
     _tl.max = False
     p = request.path
-    if p in ("/login", "/logout", "/favicon.ico", "/health", "/vr", "/terms", "/privacy", "/about") or p.startswith(("/api/login", "/api/register", "/api/google")):
+    if p in ("/login", "/logout", "/favicon.ico", "/health", "/vr", "/terms", "/privacy", "/about", "/about/photo") or p.startswith(("/api/login", "/api/register", "/api/google")):
         return None
     if login_session.get("user"):
         return None
@@ -3879,6 +3879,8 @@ main{overflow-y:auto;scroll-behavior:smooth}
 .body ul,.body ol{margin:0 0 .9em;padding-left:1.35em}
 .body li{margin:.25em 0}
 .body h3{font-family:var(--ui);font-size:19px;letter-spacing:-.015em;margin:1.2em 0 .4em}
+.body a,.body a:visited{display:inline-block;margin:2px 0;padding:8px 18px;border-radius:999px;background:linear-gradient(135deg,#2A3192,#7C5CFF);color:#fff !important;font-family:var(--ui);font-weight:600;font-size:15px;text-decoration:none}
+.body a:hover{filter:brightness(1.15)}
 .body code{font-family:var(--mono);font-size:.86em;padding:1px 6px;border-radius:6px;background:rgba(127,130,170,.2)}
 .code{margin:0 0 1em;border-radius:14px;overflow:hidden;background:var(--code-bg);color:var(--code-ink)}
 .code-bar{display:flex;justify-content:space-between;align-items:center;padding:6px 8px 6px 14px;
@@ -9390,6 +9392,7 @@ body{margin:0;color:var(--ink);font-family:"Source Serif 4",Georgia,serif;line-h
  background:linear-gradient(160deg,rgba(255,255,255,.07),rgba(255,255,255,.02));backdrop-filter:blur(8px);box-shadow:0 30px 80px rgba(0,0,0,.35)}
 .avatar{width:132px;height:132px;border-radius:50%;display:grid;place-items:center;font-family:"Bricolage Grotesque",sans-serif;font-weight:800;font-size:46px;letter-spacing:-.04em;color:#04122b;
  background:conic-gradient(from 210deg,var(--teal),var(--blue),var(--violet),var(--amber),var(--teal));position:relative}
+.avatar img{width:118px;height:118px;border-radius:50%;object-fit:cover;display:block;background:#0e1340}
 .avatar span{width:118px;height:118px;border-radius:50%;display:grid;place-items:center;background:linear-gradient(145deg,#1d2565,#0e1340);color:var(--ink)}
 h1{font-size:clamp(32px,6vw,54px);line-height:1.04;letter-spacing:-.035em;margin:0 0 12px;font-weight:800;background:linear-gradient(90deg,#fff,#b9c2ff);-webkit-background-clip:text;background-clip:text;color:transparent}
 .pill{display:inline-block;padding:6px 14px;border-radius:999px;font-size:13.5px;font-weight:600;color:var(--amber);border:1px solid rgba(242,160,46,.45);background:rgba(242,160,46,.1);margin-bottom:14px}
@@ -9423,12 +9426,30 @@ ol.goals li::before{content:counter(g);flex:none;width:30px;height:30px;border-r
 .fade{animation:rise .7s both}.card:nth-child(2){animation-delay:.08s}.card:nth-child(3){animation-delay:.16s}.card:nth-child(4){animation-delay:.24s}
 @keyframes rise{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}
 @media (prefers-reduced-motion:reduce){.fade{animation:none}*{transition:none!important}}
-@media (max-width:640px){.hero{grid-template-columns:1fr;text-align:center;justify-items:center;padding:26px 20px}.avatar{width:112px;height:112px}.avatar span{width:100px;height:100px}}
+@media (max-width:640px){.hero{grid-template-columns:1fr;text-align:center;justify-items:center;padding:26px 20px}.avatar{width:112px;height:112px}.avatar span,.avatar img{width:100px;height:100px}}
 """
 
 
 def _chips(text, cls=""):
     return "".join("<span class='chip %s'>%s</span>" % (cls, _html.escape(x.strip())) for x in str(text).split(",") if x.strip())
+
+
+def _creator_photo_path():
+    f = str((CREATOR or {}).get("photo") or "").strip()
+    if not f or "/" in f or "\\" in f or f.startswith("."):
+        return None
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), f)
+    return path if os.path.isfile(path) else None
+
+
+@app.get("/about/photo")
+def about_photo():
+    path = _creator_photo_path()
+    if not path:
+        return "", 404
+    resp = send_file(path)
+    resp.headers["Cache-Control"] = "public, max-age=3600"
+    return resp
 
 
 @app.get("/about")
@@ -9464,6 +9485,7 @@ def about_page():
           for l in c.get("links") or [] if str(l.get("url", "")).startswith(("http://", "https://"))]
     if ln:
         cards.append("<section class='card wide fade'><h2>Find him online</h2><div class='links'>%s</div></section>" % "".join(ln))
+    avatar = ("<img src='/about/photo' alt='%s'>" % e(name, quote=True)) if _creator_photo_path() else "<span>%s</span>" % e(initials)
     logo = ("<svg width='30' height='30' viewBox='0 0 48 48' aria-hidden='true'><circle cx='24' cy='24' r='15' fill='none' stroke='#EEF0FF' stroke-width='5'/>"
             "<circle cx='37' cy='34' r='4.5' fill='#F2A02E'/></svg>")
     page = ("<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
@@ -9472,10 +9494,10 @@ def about_page():
             "<link href='https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&family=Source+Serif+4:opsz,wght@8..60,400..700&display=swap' rel='stylesheet'>"
             "<style>%s</style></head><body><div class='wrap'>"
             "<div class='top'><a class='brand' href='/'>%sDeep OQ</a><a class='btn pri' href='/'>Open Deep OQ</a></div>"
-            "<header class='hero fade'><div class='avatar'><span>%s</span></div><div><div class='pill'>%s</div><h1>%s</h1><p class='lead'>%s</p></div></header>"
+            "<header class='hero fade'><div class='avatar'>%s</div><div><div class='pill'>%s</div><h1>%s</h1><p class='lead'>%s</p></div></header>"
             "<main class='grid'>%s</main>"
             "<div class='foot'>Deep OQ &middot; made by %s</div></div></body></html>") % (
-        e(name), _ABOUT_CSS, logo, e(initials), e(c.get("role", "Creator of Deep OQ")), e(name), e(c.get("about", "")), "".join(cards), e(name))
+        e(name), _ABOUT_CSS, logo, avatar, e(c.get("role", "Creator of Deep OQ")), e(name), e(c.get("about", "")), "".join(cards), e(name))
     return page, 200, {"Content-Type": "text/html; charset=utf-8"}
 
 
