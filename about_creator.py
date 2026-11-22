@@ -13,6 +13,9 @@ PROFILE = {
     "name": "Mayank Kumar Saw",
     "role": "Founder and developer of Deep OQ",
 
+    # Your photo for the About page: a file in the same folder as deep_oq.py (png or jpg). Empty = show initials.
+    "photo": "mayank.png",
+
     "about": (
         "Mayank builds AI tools in Python. He started by training a small chat AI of his own, "
         "Deep io, and has been growing it into a family of AI products that write code, talk, "
