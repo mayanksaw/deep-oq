@@ -93,6 +93,31 @@ def hide_ai(text):
     return re.sub(r"(?:the AI service[ /,\-]*){2,}", "the AI service ", text).strip()
 
 
+def _owner(user_msg, admin_msg):
+    """Setup details (service names, settings) are shown only to the admin; everyone else gets a plain message."""
+    try:
+        return admin_msg if is_admin() else user_msg
+    except Exception:
+        return user_msg
+
+
+_REPLICATE_HELP = {
+    402: "Replicate error 402 (payment required): your Replicate account has no credit. Add a payment method or credit at replicate.com (Account, Billing), then try again.",
+    401: "Replicate error 401: the token was refused. Check REPLICATE_API_TOKEN on Render.",
+    403: "Replicate error 403: this token cannot use that model. Check REPLICATE_API_TOKEN and the model name on Render.",
+    404: "Replicate error 404: the model name was not found. Check the model setting on Render.",
+    422: "Replicate error 422: the model rejected the input. Check the model name and the image field setting on Render.",
+    429: "Replicate error 429: too many requests or too little credit. Wait a minute, or add credit.",
+}
+
+
+def _svc_http_error(code, what):
+    """Clear message for the admin, plain message for users (no service names)."""
+    user = ("%s is busy right now. Please try again in a minute." if code == 429
+            else "%s is not available right now. Please try again later.") % what
+    return _owner(user, _REPLICATE_HELP.get(code, "Replicate error %d. Check the token, billing and model name on Render." % code))
+
+
 # ==========================================================================
 # DATABASE: a SQLite file by default, PostgreSQL when the DATABASE_URL setting exists
 # ==========================================================================
@@ -3666,7 +3691,8 @@ def api_transcribe():
         return jsonify(text="")
     lang = str(request.form.get("lang", "")).lower()[:2]
     last = None
-    for model in WHISPER_MODELS:
+    models = sorted(WHISPER_MODELS, key=lambda m: 0 if "turbo" in m else 1) if request.form.get("fast") == "1" else WHISPER_MODELS
+    for model in models:
         kw = dict(file=(f.filename or "voice.webm", raw), model=model, temperature=0)
         if lang in ("en", "hi"):
             kw["language"] = lang
@@ -4838,6 +4864,9 @@ function speakText(raw,btn){
   let ov=null,active=false,stream=null,ac=null,an=null,buf=null,rec=null,chunks=[],tick=null,state='',keepRs=false,cancelSpeak=null,recycling=false;
   let noise=0.01,silenceMs=0,recStart=0,voiced=false,loud=0,mt='',barged=false,bargeMs=0,echoPeak=0,speakAt=0;
   const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+  let voiceFeed=null;
+  const paint0=window.paint;
+  if(typeof paint0==='function')window.paint=function(bot,text){paint0.apply(this,arguments);if(voiceFeed){try{voiceFeed(text)}catch(e){}}};
   const qs=s=>ov&&ov.querySelector(s);
   const setTxt=(s,t)=>{const e=qs(s);if(e)e.textContent=t};
   const hi=()=>(localStorage.vl||'en-IN')==='hi-IN';
@@ -4859,7 +4888,7 @@ function speakText(raw,btn){
   async function transcribe(blob){
     const type=blob.type||'audio/webm',fd=new FormData();
     fd.append('audio',blob,'voice.'+(type.includes('mp4')?'mp4':type.includes('ogg')?'ogg':'webm'));
-    fd.append('lang',(localStorage.vl||'en-IN').slice(0,2));
+    fd.append('lang',(localStorage.vl||'en-IN').slice(0,2));fd.append('fast','1');
     const r=await fetch('/api/transcribe',{method:'POST',headers:{'X-Access-Key':localStorage.ak||''},body:fd});
     const j=await r.json().catch(()=>({}));
     if(!r.ok||j.error)throw new Error(j.error||'Could not understand the recording.');
@@ -4880,47 +4909,70 @@ function speakText(raw,btn){
     setTxt('.vcyou',text);setTxt('.vctext','');
     await converse(text);
   }
+  /* speaks the answer while it is still being written: every finished sentence is read out at once */
+  function makeSpeaker(){
+    const ss=window.speechSynthesis,queue=[];
+    let sent=0,speaking=false,finished=false,over=false,wd=null,started=false,res;
+    const done=new Promise(r=>res=r);
+    const clean=t=>t.replace(/```[\s\S]*?```/g,' ').replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g,'$1').replace(/https?:\/\/\S+/g,'')
+      .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu,'').replace(/[*#`_>|~]/g,'').replace(/\s+/g,' ').trim();
+    const stop=()=>{if(over)return;over=true;clearTimeout(wd);cancelSpeak=null;res()};
+    function add(txt){
+      const c=clean(txt);if(!c)return;
+      (c.match(/[^.!?।\n]+[.!?।]*\s*/g)||[c]).map(x=>x.trim()).filter(x=>/[\p{L}\p{N}]/u.test(x)).forEach(x=>queue.push(x));
+    }
+    function cancel(){queue.length=0;finished=true;try{ss.cancel()}catch(e){}stop()}
+    function pump(){
+      if(over||speaking)return;
+      const s=queue.shift();
+      if(!s){if(finished)stop();return}
+      if(!ss){stop();return}
+      speaking=true;
+      if(!started){started=true;setState('speak');echoPeak=0;bargeMs=0;speakAt=Date.now();cancelSpeak=cancel}
+      setTxt('.vctext',s.slice(0,400));
+      const lang=/[ऀ-ॿ]/.test(s)?'hi-IN':(localStorage.vl||'en-IN');
+      const u=new SpeechSynthesisUtterance(s);u.lang=lang;
+      const vs=ss.getVoices(),v=vs.find(x=>x.lang===lang)||vs.find(x=>x.lang.slice(0,2)===lang.slice(0,2));if(v)u.voice=v;
+      let moved=false;const go=()=>{if(moved)return;moved=true;clearTimeout(wd);speaking=false;pump()};
+      u.onend=go;u.onerror=go;
+      wd=setTimeout(go,4000+s.length*110);   /* safety: some browsers never fire onend */
+      ss.speak(u);
+    }
+    return {
+      done,cancel,
+      feed(full){   /* full = the answer written so far */
+        if(over||typeof full!=='string')return;
+        if((full.match(/```/g)||[]).length%2)full=full.slice(0,full.lastIndexOf('```'));
+        if(full.length<sent)sent=full.length;
+        const rest=full.slice(sent),re=/[.!?।](?=\s)/g;let end=-1,m;
+        while((m=re.exec(rest)))end=m.index+1;
+        if(end>0){add(rest.slice(0,end));sent+=end;pump()}
+      },
+      finish(full){
+        if(over)return;
+        full=typeof full==='string'?full:'';
+        if(full.length<sent)sent=full.length;
+        add(full.slice(sent));sent=full.length;finished=true;pump();
+      }
+    };
+  }
   async function converse(text){
-    while(busy&&active)await sleep(200);
+    while(busy&&active)await sleep(150);
     if(!active)return;
     window.voiceOn=true;
-    try{await ask(text)}catch(e){}
-    try{box.blur()}catch(e){}
-    if(!active)return;
-    const last=log.lastElementChild,ans=(last&&last.raw)||'',bad=!last||last.classList.contains('err')||!ans;
-    const say=bad?(hi()?'माफ़ कीजिए, मैं जवाब नहीं दे पाया। कृपया फिर से बोलिए।':'Sorry, I could not answer that. Please try again.'):ans;
-    setTxt('.vctext',say.replace(/\[([^\]]+)\]\([^)]+\)/g,'$1').replace(/[*#`_>|]/g,'').slice(0,400));
-    await speak(say);
-    if(!active)return;
-    if(!barged)await sleep(350);
-    listen();
-  }
-  function speak(raw){
-    return new Promise(res=>{
-      const ss=window.speechSynthesis;
-      if(!ss){res();return}
-      setState('speak');echoPeak=0;bargeMs=0;speakAt=Date.now();
-      const t=raw.replace(/```[\s\S]*?```/g,' ').replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g,'$1').replace(/https?:\/\/\S+/g,'')
-        .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu,'').replace(/[*#`_>|~]/g,'').replace(/\s+/g,' ').trim().slice(0,10000);
-      const parts=(t.match(/[^.!?।\n]+[.!?।]*\s*/g)||[t]).map(s=>s.trim()).filter(s=>/[\p{L}\p{N}]/u.test(s));
-      if(!parts.length){res();return}
-      const lang=/[ऀ-ॿ]/.test(t)?'hi-IN':(localStorage.vl||'en-IN');
-      const vs=ss.getVoices(),v=vs.find(x=>x.lang===lang)||vs.find(x=>x.lang.slice(0,2)===lang.slice(0,2));
-      let i=0,done=false,wd=null;
-      const fin=()=>{if(done)return;done=true;clearTimeout(wd);cancelSpeak=null;res()};
-      const next=()=>{
-        clearTimeout(wd);
-        if(done||!active||i>=parts.length){fin();return}
-        const s=parts[i++],u=new SpeechSynthesisUtterance(s);u.lang=lang;if(v)u.voice=v;
-        let moved=false;const go=()=>{if(moved)return;moved=true;next()};
-        u.onend=go;u.onerror=go;
-        wd=setTimeout(go,4000+s.length*110);   /* safety: some browsers never fire onend */
-        ss.speak(u);
-      };
-      cancelSpeak=()=>{i=1e9;try{ss.cancel()}catch(e){}fin()};
-      try{ss.cancel()}catch(e){}
-      next();
+    const sp=makeSpeaker();
+    voiceFeed=t=>sp.feed(t);
+    const SORRY=hi()?'माफ़ कीजिए, मैं जवाब नहीं दे पाया। कृपया फिर से बोलिए।':'Sorry, I could not answer that. Please try again.';
+    ask(text).then(()=>{
+      try{box.blur()}catch(e){}
+      const last=log.lastElementChild,ans=(last&&last.raw)||'',bad=!last||last.classList.contains('err')||!ans;
+      sp.finish(bad?SORRY:ans);
     });
+    await sp.done;
+    voiceFeed=null;
+    if(!active)return;
+    if(!barged)await sleep(300);
+    listen();
   }
 
   function loop(){
@@ -4940,8 +4992,12 @@ function speakText(raw,btn){
     if(rms>thr){loud+=50;silenceMs=0;if(loud>=150)voiced=true}
     else{if(!voiced){loud=0;noise=noise*0.95+rms*0.05}else silenceMs+=50}
     const len=Date.now()-recStart;
-    if(voiced&&(silenceMs>=1200||len>120000))endUtterance();
-    else if(!voiced&&len>12000&&!recycling){recycling=true;finishRec(false).then(()=>{recycling=false;if(active&&state==='listen')newRec()})}
+    if(voiced&&(silenceMs>=850||len>120000))endUtterance();
+    else if(!voiced&&len>2500&&!recycling){   /* keep the silence before you speak short: start a fresh recording, then drop the old one */
+      recycling=true;const old=rec,keep=loud;newRec();loud=keep;
+      if(old&&old.state!=='inactive'){old.onstop=()=>{};try{old.stop()}catch(e){}}
+      recycling=false;
+    }
   }
 
   function build(){
@@ -9061,7 +9117,7 @@ def makevideo_route():
     caps = "no caption" not in low
     motion = bool(re.search(r"(ai|real) motion", low))
     if motion and not os.environ.get("REPLICATE_API_TOKEN", "").strip():
-        return jsonify(error="AI motion needs a REPLICATE_API_TOKEN setting on Render."), 400
+        return jsonify(error=_owner("AI motion is not available right now.", "AI motion needs a REPLICATE_API_TOKEN setting on Render.")), 400
     try:
         n = max(2, min(int(d.get("scenes") or 8), MAX_SCENES))
         secs = max(1, min(int(d.get("secs") or 4), 60))
@@ -9192,7 +9248,7 @@ def editphoto_route():
         return jsonify(error="locked"), 401
     token = os.environ.get("REPLICATE_API_TOKEN", "").strip()
     if not token:
-        return jsonify(error="REPLICATE_API_TOKEN is not set on Render."), 400
+        return jsonify(error=_owner("Photo editing is not available right now.", "REPLICATE_API_TOKEN is not set on Render.")), 400
     d = request.get_json(silent=True) or {}
     prompt = str(d.get("text", "")).strip()[:1000]
     image = str(d.get("image", ""))[:6_000_000]
@@ -9225,7 +9281,7 @@ def editphoto_route():
         return jsonify(image="data:" + ctype + ";base64," + base64.b64encode(data).decode())
     except urllib.error.HTTPError as e:
         print("editphoto failed:", e.code, e.read()[:300])
-        return jsonify(error="Replicate said error %d (check token, billing and model name)." % e.code), 502
+        return jsonify(error=_svc_http_error(e.code, "Photo editing")), 502
     except Exception as e:
         print("editphoto failed:", e)
         return jsonify(error="Could not edit the photo right now."), 500
@@ -9300,7 +9356,7 @@ def thumbnail_route():
             print("thumbnail edit failed:", e)
             note = "Photo editing failed, so the background is a new picture."
     elif image.startswith("data:image/"):
-        note = "REPLICATE_API_TOKEN is not set, so your photo was not used."
+        note = _owner("Your photo was not used.", "REPLICATE_API_TOKEN is not set, so your photo was not used.")
     work = tempfile.mkdtemp(prefix="oq_")
     try:
         if raw is None:
@@ -9388,7 +9444,7 @@ def make3d_route():
     token = os.environ.get("REPLICATE_API_TOKEN", "").strip()
     model = os.environ.get("REPLICATE_3D_MODEL", "").strip()
     if not token or not model:
-        return jsonify(error="AI mesh needs REPLICATE_API_TOKEN and REPLICATE_3D_MODEL (an image-to-3D model that outputs GLB) set on Render."), 400
+        return jsonify(error=_owner("AI mesh is not available right now.", "AI mesh needs REPLICATE_API_TOKEN and REPLICATE_3D_MODEL (an image-to-3D model that outputs GLB) set on Render.")), 400
     work = tempfile.mkdtemp(prefix="oq_")
     try:
         if not image.startswith("data:image/"):
@@ -9403,13 +9459,13 @@ def make3d_route():
         out = _rep_run(model, {key: val}, token)
         url = _find_glb(out)
         if not url:
-            return jsonify(error="That Replicate model did not return a GLB file. Choose a model that outputs GLB."), 502
+            return jsonify(error=_owner("The AI mesh could not make a model from that. Try another picture.", "That Replicate model did not return a GLB file. Choose a model that outputs GLB.")), 502
         with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "DeepOQ/1.0"}), timeout=120) as r:
             data = r.read(30_000_000)
         return jsonify(glb=base64.b64encode(data).decode())
     except urllib.error.HTTPError as e:
         print("make3d failed:", e.code, e.read()[:300])
-        return jsonify(error="Replicate said error %d (check the token, billing, model name and image field name)." % e.code), 502
+        return jsonify(error=_svc_http_error(e.code, "AI mesh")), 502
     except Exception as e:
         print("make3d failed:", e)
         return jsonify(error="Could not make the 3D model right now."), 500
