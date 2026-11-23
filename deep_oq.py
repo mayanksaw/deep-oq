@@ -1945,7 +1945,19 @@ def deep_oq(session, question, force_exam=False, emit=None):
     return plain_math(collapse_repeats(_deep_oq_raw(session, question, force_exam, emit)))
 
 
-HARD_HINTS = ("prove", "proof", "derive", "debug", "bug", "algorithm", "optimi", "architecture", "equation",
+QM_RE = re.compile(r"quantum|schr[oö]dinger|wave ?function|hamiltonian|eigen(?:value|state|function)|hydrogen atom|particle in a (?:box|well)|"
+                   r"uncertainty principle|de ?broglie|photoelectric|\bqubit|bra-?ket|commutator|tunnell?ing|harmonic oscillator|"
+                   r"expectation value|pauli|spin[- ]?(?:1/2|half)|angular momentum operator|bohr (?:model|radius)|planck|dirac|hilbert space|entangle", re.I)
+QM_NOTE = (" QUANTUM MECHANICS MODE. Answer like a physics professor. For a numerical problem: (1) list the given data in SI units, "
+           "(2) write the formula and name it, (3) substitute the numbers with units, (4) compute carefully and check the units and the "
+           "order of magnitude, (5) give the final answer with units in J and eV where it helps. Use these exact constants: "
+           "h = 6.62607015e-34 J s, hbar = 1.054571817e-34 J s, c = 2.99792458e8 m/s, e = 1.602176634e-19 C, electron mass = 9.1093837015e-31 kg, "
+           "proton mass = 1.67262192369e-27 kg, neutron mass = 1.67492749804e-27 kg, Rydberg energy = 13.605693 eV, Bohr radius = 0.0529177 nm, "
+           "hc = 1239.84198 eV nm, k_B = 1.380649e-23 J/K. For a conceptual question give the intuition first, then the mathematics "
+           "(wavefunctions, operators, commutators, eigenvalues, normalisation, expectation values, spin, perturbation theory) and one worked example. "
+           "Say clearly when a result is an approximation (for example non-relativistic or a thick-barrier estimate). Never invent results.")
+HARD_HINTS = ("schrodinger", "schrödinger", "hamiltonian", "eigenvalue", "expectation value", "commutator", "wavefunction", "wave function",
+              "particle in a box", "perturbation theory", "prove", "proof", "derive", "debug", "bug", "algorithm", "optimi", "architecture", "equation",
               "how many", "calculate", "step by step", "step-by-step", "essay")   # only truly hard questions take the slow, checked path
 
 
@@ -1971,7 +1983,7 @@ def _call_kw(model, messages, temperature, max_tokens, effort=None):
     if model.startswith("openai/gpt-oss"):
         # reasoning models spend tokens on thinking, so allow a bigger budget
         kw["max_completion_tokens"] = _cap(model, max(max_tokens, OQ_OUT if effort == "high" else 2048))
-        kw["reasoning_effort"] = effort or "low"
+        kw["reasoning_effort"] = effort or getattr(_tl, "effort", None) or "low"   # "medium" for real questions: smarter, a little slower
     else:
         # thinking models (for example Qwen) spend tokens reasoning first, so give hard questions room
         kw["max_tokens"] = _cap(model, max(max_tokens, OQ_OUT) if effort == "high" else max_tokens)
@@ -3172,6 +3184,8 @@ def _deep_oq_raw(session, question, force_exam=False, emit=None):
         return debug_solve(dbg[0], dbg[1], dbg[2], emit)
     # VOICE CHAT = FAST LANE: one quick streamed answer, no planning, checking or extra tool calls
     voice = bool(getattr(_tl, "voice", False)) and not force and not force_exam
+    # thinking depth: tiny chat stays fast, real questions get more reasoning
+    _tl.effort = "low" if (voice or len(question.strip()) < 40) else "medium"
     history = kb_load_history(session, 6 if voice else 12)
     know = knowledge_block(question)
     me = mem_block(_session_user(session))
@@ -3184,7 +3198,7 @@ def _deep_oq_raw(session, question, force_exam=False, emit=None):
         emit("status", "Solving step by step")
     today = datetime.date.today().strftime("%A, %d %B %Y")
     rigorous = force or exam or (is_hard(question) and not voice)
-    sysmsg = (SYSTEM + (VOICE_NOTE + (PEOPLE_NOTE if getattr(_tl, "people", False) else "") if getattr(_tl, "voice", False) else "") + (EXAM_SYSTEM if exam else "") + (REASON_RULES if rigorous else "") + f" Today's date is {today}. TOOL RESULTS (calculator, counter, "
+    sysmsg = (SYSTEM + (VOICE_NOTE + (PEOPLE_NOTE if getattr(_tl, "people", False) else "") if getattr(_tl, "voice", False) else "") + (EXAM_SYSTEM if exam else "") + (QM_NOTE if QM_RE.search(question) else "") + (REASON_RULES if rigorous else "") + f" Today's date is {today}. TOOL RESULTS (calculator, counter, "
               "web search) are exact or current: trust them over your own arithmetic "
               "and memory, and do not mention the tools. When a result says 'Current holder (incumbent)', that is "
               "the answer; never prefer your older memory over it." + (" " + me if me else ""))
@@ -3259,9 +3273,30 @@ def _deep_oq_raw(session, question, force_exam=False, emit=None):
         return chat_stream(base + [{"role": "user", "content": user}], 0.3, (900 if voice else OQ_OUT), lambda t: emit("text", t))
     emit("status", "Thinking carefully")
 
-    draft = chat(base + [{"role": "user", "content":
-        f"{user}\n\nGive the full, correct answer. Do arithmetic and logic one step at a time and check it."}], 0.2, smart=True)
+    # COUNCIL: two different AIs answer at the same time, then a checker compares them and fixes any disagreement
+    from concurrent.futures import ThreadPoolExecutor
+    ask_msgs = base + [{"role": "user", "content":
+        f"{user}\n\nGive the full, correct answer. Do arithmetic and logic one step at a time and check it."}]
 
+    def _second():
+        if not EXTRA_PROVIDERS:
+            return ""
+        try:
+            return (_extra_chat(ask_msgs, 0.2, 4096) or "").strip()
+        except Exception as e:
+            print("second opinion failed:", str(e)[:120])
+            return ""
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        f2 = ex.submit(_second)
+        draft = chat(ask_msgs, 0.2, smart=True)
+        try:
+            second = f2.result(timeout=90)
+        except Exception:
+            second = ""
+    if second and len(second) > 40:
+        emit("status", "Comparing two expert answers")
+        user = (user + "\n\nSECOND OPINION from another expert AI (it may be wrong). Compare it with the DRAFT. Where they "
+                "disagree, work the key steps yourself to decide which is right, and give one correct final answer:\n" + second[:6000])
     return verify_answer(sysmsg, user, draft, emit)
 
 
@@ -3938,6 +3973,25 @@ button,textarea{font:inherit;color:inherit}
 .top{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px clamp(16px,3vw,28px)}
 .brand{display:flex;align-items:center;gap:10px;font-family:var(--ui);font-weight:700;font-size:21px;letter-spacing:-.025em}
 .tools{display:flex;gap:8px}
+
+.qbox{display:flex;flex-direction:column;gap:14px;margin-top:14px;color:#EEF0FF}
+.qctl{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end}
+.qctl label,.qpf label{display:flex;flex-direction:column;gap:4px;font-size:13px;color:#C9CDEE}
+.qbox select,.qbox input{font:inherit;font-size:15px;padding:9px 12px;border-radius:12px;border:1px solid rgba(255,255,255,.22);background:rgba(255,255,255,.07);color:#fff;min-width:90px}
+.qbox select option{color:#111;background:#fff}
+.qb{font:inherit;font-size:14px;font-weight:600;padding:10px 16px;border-radius:999px;border:1px solid rgba(255,255,255,.22);background:rgba(255,255,255,.08);color:#fff;cursor:pointer}
+.qb.pri{background:linear-gradient(135deg,#2F8CFF,#7C5CFF);border:0}
+.qh{font-size:13px;color:#A3A9D1}
+.qcirc{margin:0;padding:14px;border-radius:14px;background:rgba(0,0,0,.35);color:#7CFFD0;font:15px/1.5 ui-monospace,Menlo,Consolas,monospace;overflow:auto}
+.qtab{width:100%;border-collapse:collapse;font-size:14px}.qtab th,.qtab td{text-align:left;padding:7px 10px;border-bottom:1px solid rgba(255,255,255,.1)}
+.qbar{display:inline-block;vertical-align:middle;width:120px;max-width:40vw;height:10px;border-radius:6px;background:rgba(255,255,255,.12);margin-right:8px;overflow:hidden}.qbar i{display:block;height:100%;background:linear-gradient(90deg,#7CFFD0,#2F8CFF)}
+.qrow{display:flex;gap:10px;align-items:center;font-size:14px;margin:4px 0}
+.qbl{display:flex;flex-wrap:wrap;gap:14px}
+.qblo{display:flex;flex-direction:column;align-items:center;gap:4px;padding:10px 14px;border-radius:14px;background:rgba(255,255,255,.06);font-size:12px;text-align:center}.qblo em{color:#F2A02E;font-style:normal;font-weight:700}
+.qmsg,.qerr{color:#FF8A8A;font-size:14px;min-height:0;margin:0}
+.qnote{font-size:12px;color:#A3A9D1;margin:0}
+.qpf{display:flex;flex-wrap:wrap;gap:12px}
+.qout{display:flex;flex-direction:column;gap:6px;padding:14px;border-radius:14px;background:rgba(255,255,255,.06);font-size:15px}.qout:empty{display:none}.qout p{margin:0}.qout .qf{color:#7CFFD0;font-weight:600}
 .btn{font-family:var(--ui);font-weight:500;font-size:14px;padding:8px 14px;border-radius:999px;
   border:1px solid var(--line);background:transparent;cursor:pointer;display:inline-flex;align-items:center;gap:8px;
   transition:background .15s,border-color .15s}
@@ -4301,6 +4355,7 @@ body:not(.chatting) #v-chat.on{padding-top:12vh;padding-bottom:0}
     <button class="tab" type="button" data-view="music">Music</button>
     <button class="tab" type="button" data-view="3d">3D</button>
     <button class="tab" type="button" data-view="games">Games</button>
+    <button class="tab" type="button" data-view="quantum">Quantum</button>
     <a class="tab" href="/vr" style="text-decoration:none;display:inline-flex;align-items:center;background:linear-gradient(135deg,#00c9a7,#2f8cff);color:#04122b;font-weight:700">VR</a>
   </nav>
   <div class="tools" id="chatTools">
@@ -4586,6 +4641,47 @@ body:not(.chatting) #v-chat.on{padding-top:12vh;padding-bottom:0}
       <div class="panel">
         <iframe class="preview" id="t3frame" sandbox="allow-scripts" title="3D preview" style="height:460px;background:#0e1233"></iframe>
       </div>
+    </div>
+  </div>
+</section>
+<section class="view studio" id="v-quantum">
+  <div class="wrap">
+    <h2 class="st-title">Quantum</h2>
+    <p class="st-sub">Build quantum circuits and see the state, or solve quantum mechanics problems with exact physics constants. Everything runs on your device. For explanations and step-by-step solutions, ask in Chat.</p>
+    <div class="gpick" role="group" aria-label="Quantum tools">
+      <button type="button" data-qtab="sim" aria-pressed="true">Circuit simulator</button>
+      <button type="button" data-qtab="cal" aria-pressed="false">Problem calculator</button>
+    </div>
+    <div id="qsim" class="qbox">
+      <div class="qctl">
+        <label>Qubits <select id="qn"><option>1</option><option selected>2</option><option>3</option></select></label>
+        <label>Gate <select id="qg"><option>H</option><option>X</option><option>Y</option><option>Z</option><option>S</option><option>T</option><option>CNOT</option><option>CZ</option><option>SWAP</option></select></label>
+        <label>Target <select id="qt"></select></label>
+        <label id="qcw" style="display:none">Control <select id="qc"></select></label>
+        <button type="button" class="qb pri" id="qadd">Add gate</button>
+        <button type="button" class="qb" id="qundo">Undo</button>
+        <button type="button" class="qb" id="qclr">Clear</button>
+      </div>
+      <div class="qctl"><span class="qh">Examples:</span>
+        <button type="button" class="qb" data-qex="sup">Superposition</button>
+        <button type="button" class="qb" data-qex="plus">Spin +i state</button>
+        <button type="button" class="qb" data-qex="bell">Bell pair</button>
+        <button type="button" class="qb" data-qex="ghz">GHZ (3 qubits)</button>
+      </div>
+      <div class="qmsg" id="qmsg"></div>
+      <pre id="qcirc" class="qcirc"></pre>
+      <div id="qstate"></div>
+      <div id="qbloch" class="qbl"></div>
+      <div class="qctl"><button type="button" class="qb pri" id="qrun">Measure 1024 times</button></div>
+      <div id="qshots"></div>
+      <p class="qnote">All qubits start in |0&#x27E9;. Qubit q0 is the right-most digit. A qubit marked "entangled" cannot be described alone: it is linked to another qubit.</p>
+    </div>
+    <div id="qcal" class="qbox" style="display:none">
+      <div class="qctl"><label>Problem <select id="qp"></select></label></div>
+      <div id="qpf" class="qpf"></div>
+      <div class="qctl"><button type="button" class="qb pri" id="qcalc">Calculate</button></div>
+      <div id="qout" class="qout"></div>
+      <p class="qnote">Uses CODATA constants (h, ħ, c, e, electron, proton and neutron masses). Non-relativistic formulas.</p>
     </div>
   </div>
 </section>
@@ -6209,6 +6305,145 @@ function speakText(raw,btn){
   upd();
 })();
 
+/* ================= quantum: circuit simulator + exact calculator ================= */
+(function(){
+  const root=document.getElementById('v-quantum');if(!root)return;
+  const q=s=>root.querySelector(s);
+  const C={h:6.62607015e-34,hb:1.054571817e-34,c:299792458,e:1.602176634e-19,me:9.1093837015e-31,mp:1.67262192369e-27,mn:1.67492749804e-27,Ry:13.605693122994};
+  const fmt=x=>{if(!isFinite(x))return String(x);if(x===0)return '0';const a=Math.abs(x);return (a>=1e5||a<1e-3)?x.toExponential(4):String(+x.toPrecision(6))};
+  /* ---------- circuit simulator ---------- */
+  const S2=Math.SQRT1_2;
+  const G={H:[[[S2,0],[S2,0]],[[S2,0],[-S2,0]]],X:[[[0,0],[1,0]],[[1,0],[0,0]]],Y:[[[0,0],[0,-1]],[[0,1],[0,0]]],Z:[[[1,0],[0,0]],[[0,0],[-1,0]]],S:[[[1,0],[0,0]],[[0,0],[0,1]]],T:[[[1,0],[0,0]],[[0,0],[S2,S2]]]};
+  const mul=(a,b)=>[a[0]*b[0]-a[1]*b[1],a[0]*b[1]+a[1]*b[0]];
+  let nq=2,ops=[];
+  function run(){
+    const N=1<<nq,s=[];for(let i=0;i<N;i++)s.push([i===0?1:0,0]);
+    for(const o of ops){
+      if(o.g==='CNOT'){for(let i=0;i<N;i++)if((i>>o.c&1)&&!(i>>o.t&1)){const j=i|(1<<o.t);const x=s[i];s[i]=s[j];s[j]=x}}
+      else if(o.g==='CZ'){for(let i=0;i<N;i++)if((i>>o.c&1)&&(i>>o.t&1))s[i]=[-s[i][0],-s[i][1]]}
+      else if(o.g==='SWAP'){for(let i=0;i<N;i++)if((i>>o.c&1)&&!(i>>o.t&1)||(!(i>>o.c&1)&&(i>>o.t&1))){const j=i^(1<<o.c)^(1<<o.t);if(i<j){const x=s[i];s[i]=s[j];s[j]=x}}}
+      else{const U=G[o.g];for(let i=0;i<N;i++)if(!(i>>o.t&1)){const j=i|(1<<o.t),a=s[i],b=s[j];
+        const a2=mul(U[0][0],a),a3=mul(U[0][1],b),b2=mul(U[1][0],a),b3=mul(U[1][1],b);
+        s[i]=[a2[0]+a3[0],a2[1]+a3[1]];s[j]=[b2[0]+b3[0],b2[1]+b3[1]]}}
+    }
+    return s;
+  }
+  function bloch(s,t){
+    let r00=0,r11=0,rr=0,ri=0;
+    for(let i=0;i<s.length;i++)if(!(i>>t&1)){const j=i|(1<<t),a=s[i],b=s[j];
+      r00+=a[0]*a[0]+a[1]*a[1];r11+=b[0]*b[0]+b[1]*b[1];
+      rr+=a[0]*b[0]+a[1]*b[1];ri+=a[1]*b[0]-a[0]*b[1];}
+    return {x:2*rr,y:-2*ri,z:r00-r11};
+  }
+  const bits=(i)=>i.toString(2).padStart(nq,'0');
+  function circuitText(){
+    const rows=[];for(let k=0;k<nq;k++)rows.push('q'+k+' ');
+    for(const o of ops){
+      for(let k=0;k<nq;k++){
+        let cell='─────';
+        if(o.g==='CNOT'||o.g==='CZ'||o.g==='SWAP'){
+          if(k===o.c)cell='──●──';
+          else if(k===o.t)cell=o.g==='CNOT'?'──⊕──':o.g==='CZ'?'──●──':'──✕──';
+          else if(k>Math.min(o.c,o.t)&&k<Math.max(o.c,o.t))cell='──│──';
+          if(o.g==='SWAP'&&k===o.c)cell='──✕──';
+        }else if(k===o.t)cell='─['+o.g+']─';
+        rows[k]+=cell;
+      }
+    }
+    return rows.join('\n')+'\n';
+  }
+  function draw(){
+    const s=run(),N=s.length;
+    q('#qcirc').textContent=circuitText()+(ops.length?'':'\n(empty: choose a gate and press Add gate, or pick an example)');
+    let h='<table class="qtab"><tr><th>State</th><th>Amplitude</th><th>Probability</th></tr>';
+    for(let i=0;i<N;i++){const p=s[i][0]**2+s[i][1]**2;if(p<1e-9)continue;
+      const re=Math.abs(s[i][0])<1e-9?0:s[i][0],im=Math.abs(s[i][1])<1e-9?0:s[i][1];
+      h+='<tr><td>|'+bits(i)+'&#x27E9;</td><td>'+fmt(re)+(im?(im<0?' - ':' + ')+fmt(Math.abs(im))+'i':'')+'</td><td><div class="qbar"><i style="width:'+(p*100).toFixed(1)+'%"></i></div>'+(p*100).toFixed(1)+'%</td></tr>';}
+    q('#qstate').innerHTML=h+'</table>';
+    let b='';
+    for(let t=0;t<nq;t++){
+      const v=bloch(s,t),len=Math.hypot(v.x,v.y,v.z),cx=40+v.x*30,cy=40-v.z*30;
+      b+='<div class="qblo"><svg viewBox="0 0 80 80" width="80" height="80"><circle cx="40" cy="40" r="30" fill="none" stroke="#6C78C8" stroke-width="1.5"/><line x1="10" y1="40" x2="70" y2="40" stroke="#3A4380"/><line x1="40" y1="10" x2="40" y2="70" stroke="#3A4380"/><line x1="40" y1="40" x2="'+cx+'" y2="'+cy+'" stroke="#7CFFD0" stroke-width="3" stroke-linecap="round"/><circle cx="'+cx+'" cy="'+cy+'" r="4.5" fill="#F2A02E"/></svg><b>q'+t+'</b><small>x '+fmt(+v.x.toFixed(3))+'<br>y '+fmt(+v.y.toFixed(3))+'<br>z '+fmt(+v.z.toFixed(3))+'</small>'+(len<0.999?'<em>entangled</em>':'')+'</div>';
+    }
+    q('#qbloch').innerHTML=b;
+    q('#qshots').innerHTML='';
+  }
+  function measure(){
+    const s=run(),N=s.length,p=s.map(a=>a[0]*a[0]+a[1]*a[1]),shots=1024,cnt=new Array(N).fill(0);
+    for(let k=0;k<shots;k++){let r=Math.random(),i=0;for(;i<N-1;i++){r-=p[i];if(r<=0)break}cnt[i]++}
+    let h='<div class="qh">Measured 1024 times:</div>';
+    for(let i=0;i<N;i++)if(cnt[i])h+='<div class="qrow"><span>|'+bits(i)+'&#x27E9;</span><div class="qbar"><i style="width:'+(cnt[i]/shots*100).toFixed(1)+'%"></i></div><span>'+cnt[i]+'</span></div>';
+    q('#qshots').innerHTML=h;
+  }
+  const gsel=q('#qg'),tsel=q('#qt'),csel=q('#qc');
+  function fillSel(){
+    [tsel,csel].forEach(sel=>{const keep=sel.value;sel.innerHTML='';for(let k=0;k<nq;k++){const o=document.createElement('option');o.value=k;o.textContent='q'+k;sel.append(o)}if(keep&&keep<nq)sel.value=keep});
+    if(csel.options.length>1&&csel.value===tsel.value)csel.value=(+tsel.value+1)%nq;
+    const two=['CNOT','CZ','SWAP'].includes(gsel.value);q('#qcw').style.display=two?'':'none';
+  }
+  gsel.onchange=fillSel;
+  q('#qn').onchange=e=>{nq=+e.target.value;ops=ops.filter(o=>o.t<nq&&(o.c===undefined||o.c<nq));fillSel();draw()};
+  q('#qadd').onclick=()=>{
+    const g=gsel.value,t=+tsel.value,two=['CNOT','CZ','SWAP'].includes(g);
+    if(two){const c=+csel.value;if(c===t){q('#qmsg').textContent='Control and target must be different qubits.';return}ops.push({g,c,t})}else ops.push({g,t});
+    q('#qmsg').textContent='';draw();
+  };
+  q('#qundo').onclick=()=>{ops.pop();draw()};
+  q('#qclr').onclick=()=>{ops=[];draw()};
+  q('#qrun').onclick=measure;
+  const EX={bell:[2,[{g:'H',t:0},{g:'CNOT',c:0,t:1}]],ghz:[3,[{g:'H',t:0},{g:'CNOT',c:0,t:1},{g:'CNOT',c:1,t:2}]],sup:[1,[{g:'H',t:0}]],plus:[1,[{g:'H',t:0},{g:'S',t:0}]]};
+  root.querySelectorAll('[data-qex]').forEach(b=>b.onclick=()=>{const e=EX[b.dataset.qex];nq=e[0];q('#qn').value=nq;ops=e[1].map(o=>Object.assign({},o));fillSel();draw()});
+  /* ---------- exact calculator ---------- */
+  const PART={electron:C.me,proton:C.mp,neutron:C.mn};
+  const pField={k:'p',label:'Particle',sel:['electron','proton','neutron']};
+  const PROB={
+    box:{name:'Particle in a 1D box',f:[pField,{k:'L',label:'Box length L (nm)',d:1},{k:'n',label:'Level n',d:1}],
+      go:v=>{const m=PART[v.p],L=v.L*1e-9,n=v.n,E=n*n*C.h*C.h/(8*m*L*L),E2=(n+1)**2*C.h*C.h/(8*m*L*L),dE=E2-E;
+        return ['Formula: E_n = n² h² / (8 m L²)','E_'+n+' = '+fmt(E)+' J = '+fmt(E/C.e)+' eV','E_'+(n+1)+' = '+fmt(E2/C.e)+' eV','Gap E_'+(n+1)+' - E_'+n+' = '+fmt(dE/C.e)+' eV','Photon wavelength for that jump = '+fmt(C.h*C.c/dE*1e9)+' nm','Ground state E_1 = '+fmt(C.h*C.h/(8*m*L*L)/C.e)+' eV']}},
+    hyd:{name:'Hydrogen-like atom (Bohr)',f:[{k:'Z',label:'Nuclear charge Z',d:1},{k:'ni',label:'Initial level n',d:3},{k:'nf',label:'Final level n',d:2}],
+      go:v=>{const En=n=>-C.Ry*v.Z*v.Z/(n*n),Ei=En(v.ni),Ef=En(v.nf),dE=Ei-Ef,out=['Formula: E_n = -13.6057 Z² / n² eV','E_'+v.ni+' = '+fmt(Ei)+' eV','E_'+v.nf+' = '+fmt(Ef)+' eV'];
+        if(dE===0)out.push('No change in level.');else{const lam=C.h*C.c/(Math.abs(dE)*C.e)*1e9;out.push((dE>0?'Photon emitted':'Photon absorbed')+': energy '+fmt(Math.abs(dE))+' eV','Wavelength = '+fmt(lam)+' nm, frequency = '+fmt(Math.abs(dE)*C.e/C.h)+' Hz');
+          const ser={1:'Lyman (ultraviolet)',2:'Balmer (visible)',3:'Paschen (infrared)',4:'Brackett (infrared)',5:'Pfund (infrared)'}[Math.min(v.ni,v.nf)];if(ser)out.push('Series: '+ser)}
+        out.push('Bohr radius of level '+v.ni+' = '+fmt(0.0529177210903*v.ni*v.ni/v.Z)+' nm');return out}},
+    sho:{name:'Quantum harmonic oscillator',f:[{k:'f',label:'Frequency f (Hz)',d:1e13},{k:'n',label:'Level n',d:0}],
+      go:v=>{const w=2*Math.PI*v.f,E=(v.n+0.5)*C.hb*w;return ['Formula: E_n = (n + 1/2) ħ ω, with ω = 2πf','ω = '+fmt(w)+' rad/s','E_'+v.n+' = '+fmt(E)+' J = '+fmt(E/C.e)+' eV','Zero-point energy = '+fmt(0.5*C.hb*w/C.e)+' eV','Level spacing ħω = '+fmt(C.hb*w/C.e)+' eV']}},
+    db:{name:'de Broglie wavelength',f:[pField,{k:'V',label:'Accelerating voltage (V), or 0 to use speed',d:100},{k:'v',label:'Speed (m/s), used if voltage is 0',d:1e6}],
+      go:v=>{const m=PART[v.p];let p,KE;if(v.V>0){KE=C.e*v.V;p=Math.sqrt(2*m*KE)}else{p=m*v.v;KE=p*p/(2*m)}
+        return ['Formula: λ = h / p','Momentum p = '+fmt(p)+' kg m/s','Kinetic energy = '+fmt(KE/C.e)+' eV','λ = '+fmt(C.h/p*1e9)+' nm = '+fmt(C.h/p)+' m','(non-relativistic: valid when speed is far below 3e8 m/s)']}},
+    pe:{name:'Photoelectric effect',f:[{k:'lam',label:'Light wavelength (nm)',d:300},{k:'phi',label:'Work function φ (eV)',d:2.3}],
+      go:v=>{const E=C.h*C.c/(v.lam*1e-9)/C.e,out=['Formula: K_max = h f - φ','Photon energy = '+fmt(E)+' eV','Threshold wavelength = '+fmt(C.h*C.c/(v.phi*C.e)*1e9)+' nm'];
+        if(E>v.phi){const K=E-v.phi;out.push('K_max = '+fmt(K)+' eV','Stopping potential = '+fmt(K)+' V','Max speed = '+fmt(Math.sqrt(2*K*C.e/C.me))+' m/s')}else out.push('No electrons are emitted: the photon energy is below the work function.');return out}},
+    unc:{name:'Heisenberg uncertainty',f:[pField,{k:'dx',label:'Position uncertainty Δx (nm)',d:0.1}],
+      go:v=>{const m=PART[v.p],dp=C.hb/(2*v.dx*1e-9);return ['Formula: Δx Δp ≥ ħ / 2','Minimum Δp = '+fmt(dp)+' kg m/s','Minimum Δv = '+fmt(dp/m)+' m/s','Minimum kinetic energy scale Δp²/2m = '+fmt(dp*dp/(2*m)/C.e)+' eV']}},
+    tun:{name:'Tunnelling through a barrier',f:[pField,{k:'E',label:'Particle energy E (eV)',d:1},{k:'V',label:'Barrier height V₀ (eV)',d:2},{k:'a',label:'Barrier width a (nm)',d:0.5}],
+      go:v=>{const m=PART[v.p],E=v.E*C.e,V=v.V*C.e,a=v.a*1e-9;
+        if(E>=V)return ['Energy is above the barrier (E ≥ V₀): classically it passes. Quantum reflection still happens, but this tool only handles E < V₀.'];
+        const k=Math.sqrt(2*m*(V-E))/C.hb,sh=Math.sinh(k*a),T=1/(1+V*V*sh*sh/(4*E*(V-E)));
+        return ['Formulas: κ = √(2m(V₀ - E)) / ħ ; T = [1 + V₀² sinh²(κa) / (4E(V₀ - E))]⁻¹','κ = '+fmt(k)+' 1/m','Transmission T = '+fmt(T)+' ('+fmt(T*100)+' %)','Thick-barrier estimate e^(-2κa) = '+fmt(Math.exp(-2*k*a))]}}
+  };
+  const psel=q('#qp'),pform=q('#qpf');
+  Object.keys(PROB).forEach(k=>{const o=document.createElement('option');o.value=k;o.textContent=PROB[k].name;psel.append(o)});
+  function form(){
+    const P=PROB[psel.value];pform.innerHTML='';
+    P.f.forEach(f=>{const l=document.createElement('label');l.textContent=f.label;let i;
+      if(f.sel){i=document.createElement('select');f.sel.forEach(x=>{const o=document.createElement('option');o.value=x;o.textContent=x;i.append(o)})}
+      else{i=document.createElement('input');i.type='number';i.step='any';i.value=f.d}
+      i.dataset.k=f.k;l.append(i);pform.append(l)});
+    q('#qout').innerHTML='';
+  }
+  psel.onchange=form;form();
+  q('#qcalc').onclick=()=>{
+    const P=PROB[psel.value],v={};let bad='';
+    pform.querySelectorAll('[data-k]').forEach(i=>{if(i.tagName==='SELECT')v[i.dataset.k]=i.value;else{const x=parseFloat(i.value);if(!isFinite(x)){bad='Fill in every number.'}v[i.dataset.k]=x}});
+    if(!bad){if(v.L<=0||v.a<=0||v.dx<=0||v.lam<=0||v.f<=0||v.Z<=0||v.ni<1||v.nf<1||v.n<1&&psel.value==='box')bad='Use positive numbers (levels start at 1).'}
+    if(!bad&&psel.value==='sho'&&v.n<0)bad='Level n cannot be negative.';
+    if(bad){q('#qout').innerHTML='<p class="qerr">'+bad+'</p>';return}
+    q('#qout').innerHTML=P.go(v).map((l,i)=>'<p'+(i===0?' class="qf"':'')+'>'+l.replace(/&/g,'&amp;').replace(/</g,'&lt;')+'</p>').join('');
+  };
+  root.querySelectorAll('[data-qtab]').forEach(b=>b.onclick=()=>{root.querySelectorAll('[data-qtab]').forEach(x=>x.setAttribute('aria-pressed',x===b));q('#qsim').style.display=b.dataset.qtab==='sim'?'':'none';q('#qcal').style.display=b.dataset.qtab==='cal'?'':'none'});
+  fillSel();draw();
+})();
+
 /* ================= saved chats ================= */
 const hist=$('#hist'),hl=$('#histList'),rc=$('#recents');
 let rcData=[];
@@ -6797,7 +7032,7 @@ $('#drawer').setAttribute('aria-hidden','true');
 stats();box.focus();
 
 /* ================= tabs ================= */
-const VIEWS=['chat','code','photo','video','lab','news','music','3d','games'];
+const VIEWS=['chat','code','photo','video','lab','news','music','3d','games','quantum'];
 function showView(v){
   if(!VIEWS.includes(v))v='chat';
   document.body.dataset.view=v;
