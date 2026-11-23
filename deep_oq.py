@@ -149,7 +149,7 @@ PG_SCHEMA = [
 
 def _pg_open():
     from psycopg_pool import ConnectionPool  # pip install "psycopg[binary,pool]"
-    opts = dict(min_size=1, max_size=5, kwargs={"autocommit": True}, open=False)
+    opts = dict(min_size=2, max_size=8, timeout=15, max_idle=300, kwargs={"autocommit": True}, open=False)
     try:
         pool = ConnectionPool(DATABASE_URL, check=ConnectionPool.check_connection, **opts)
     except TypeError:  # older psycopg_pool without the check option
