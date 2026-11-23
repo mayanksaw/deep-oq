@@ -1518,13 +1518,12 @@ def _video():
 # ==========================================================================
 
 # Two-tier models: FAST for simple chat, SMART (120B reasoning model) for hard questions.
-FAST_MODEL = os.environ.get("DEEP_OQ_MODEL", "openai/gpt-oss-120b")
-SMART_MODEL = os.environ.get("DEEP_OQ_SMART_MODEL", "openai/gpt-oss-120b")
+FAST_MODEL = "openai/gpt-oss-120b"   # always the first model that answers (backups only when it is busy)
+SMART_MODEL = "openai/gpt-oss-120b"
 # Hard questions try these in order (an unavailable model just moves on to the next one).
 SMART_CANDIDATES = []
 # your own list first (DEEP_OQ_SMART_MODELS=model1,model2), then the largest models Groq offers, biggest first
-for _m in ([x.strip() for x in os.environ.get("DEEP_OQ_SMART_MODELS", "").replace(";", ",").split(",") if x.strip()]
-           + [SMART_MODEL, "openai/gpt-oss-120b", "minimaxai/minimax-m2.7", "meta-models/muse-spark-open",
+for _m in ([SMART_MODEL, "openai/gpt-oss-120b", "minimaxai/minimax-m2.7", "meta-models/muse-spark-open",
               "llama-3.3-70b-versatile", "qwen/qwen3.8-27b", "qwen/qwen3.6-27b"]):
     if _m not in SMART_CANDIDATES:
         SMART_CANDIDATES.append(_m)
@@ -1946,10 +1945,8 @@ def deep_oq(session, question, force_exam=False, emit=None):
     return plain_math(collapse_repeats(_deep_oq_raw(session, question, force_exam, emit)))
 
 
-HARD_HINTS = ("code", "function", "bug", "prove", "calculate", "solve", "why",
-              "how many", "algorithm", "logic", "step", "compare", "design", "analy",
-              "explain", "difference", "strategy", "optimi", "error", "essay", "derive",
-              "equation", "proof", "debug", "architecture", "plan", "should i")
+HARD_HINTS = ("prove", "proof", "derive", "debug", "bug", "algorithm", "optimi", "architecture", "equation",
+              "how many", "calculate", "step by step", "step-by-step", "essay")   # only truly hard questions take the slow, checked path
 
 
 FAST_CANDIDATES = []
@@ -2005,20 +2002,19 @@ def _call(model, messages, temperature, max_tokens, effort=None):
 
 def chat_stream(messages, temperature, max_tokens, on_text):
     """Like chat(), but calls on_text(answer_so_far) while the model is still writing."""
-    if CLAUDE_ON:
+    if CLAUDE_ON and _usable("claude"):
         try:
             return _claude_chat(messages, temperature, max_tokens, False, on_text=on_text)
         except Exception as e:
+            _mark_dead("claude", e)
             print("claude stream failed:", str(e)[:160])
-    if OPENAI_KEY:
+    if OPENAI_KEY and _usable("openai"):
         try:
             return _openai_chat(messages, max_tokens, False, on_text)
         except Exception as e:
+            _mark_dead("openai", e)
             print("openai stream failed:", str(e)[:160])
     order = FAST_CANDIDATES[:]
-    if _working["model"] in order:
-        order.remove(_working["model"])
-        order.insert(0, _working["model"])
     for m in order:
         got = ""
         try:
@@ -2079,11 +2075,19 @@ def _gemini_parts(parts, temperature=0.2, max_tokens=4096, system=None):
                    "generationConfig": {"temperature": temperature, "maxOutputTokens": max(max_tokens, 2048)}}
         if system:
             payload["systemInstruction"] = {"parts": [{"text": system}]}
-        req = _ur.Request("https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent",
-                          json.dumps(payload).encode(), {"Content-Type": "application/json", "x-goog-api-key": key})
-        with _ur.urlopen(req, timeout=120) as r:
-            data = json.loads(r.read().decode())
-        return "".join(x.get("text", "") for x in data["candidates"][0]["content"]["parts"]).strip()
+        err = None
+        for mdl in dict.fromkeys([model, "gemini-flash-latest", "gemini-2.5-flash", "gemini-2.0-flash"]):   # a retired name gives 404: try the next
+            req = _ur.Request("https://generativelanguage.googleapis.com/v1beta/models/" + mdl + ":generateContent",
+                              json.dumps(payload).encode(), {"Content-Type": "application/json", "x-goog-api-key": key})
+            try:
+                with _ur.urlopen(req, timeout=120) as r:
+                    data = json.loads(r.read().decode())
+                return "".join(x.get("text", "") for x in data["candidates"][0]["content"]["parts"]).strip()
+            except Exception as e:
+                err = e
+                if "404" not in str(e):
+                    raise
+        raise err
     raise RuntimeError("Gemini is not set up")
 
 
@@ -2751,17 +2755,19 @@ def _premium_chat(messages, temperature, max_tokens, smart, prefer, force=False)
     """Claude, then OpenAI. Returns None when neither is set up or both fail (the caller then uses Groq)."""
     if _is_diverse(prefer) and not force:
         return None
-    if CLAUDE_ON:
+    if CLAUDE_ON and _usable("claude"):
         try:
             t = _claude_chat(messages, temperature, max_tokens, smart)
             if t:
                 return t
         except Exception as e:
+            _mark_dead("claude", e)
             print("Claude failed:", str(e)[:200])
-    if OPENAI_KEY and (smart or max_tokens > 600):
+    if OPENAI_KEY and (smart or max_tokens > 600) and _usable("openai"):
         try:
             return _openai_chat(messages, max_tokens, smart)
         except Exception as e:
+            _mark_dead("openai", e)
             print("OpenAI backup failed:", str(e)[:200])
     return None
 
@@ -2834,9 +2840,6 @@ def chat(messages, temperature=0.3, max_tokens=4096, smart=False, prefer=None):
             return _r
     if smart:
         order = SMART_CANDIDATES[:]
-        if _smart["model"] in order:  # start with the model that worked last time
-            order.remove(_smart["model"])
-            order.insert(0, _smart["model"])
         if prefer:  # exam questions: try the strongest reasoning model first
             order = [prefer] + [m for m in order if m != prefer]
         for m in order:
@@ -2849,9 +2852,6 @@ def chat(messages, temperature=0.3, max_tokens=4096, smart=False, prefer=None):
                 print(f"smart model {m} failed:", e)
         print("all smart models failed, using fast models")
     order = FAST_CANDIDATES[:]
-    if _working["model"] in order:
-        order.remove(_working["model"])
-        order.insert(0, _working["model"])
     last = None
     for m in order:  # e.g. a 404 "model not found" moves on to the next model
         try:
@@ -2876,7 +2876,7 @@ def chat(messages, temperature=0.3, max_tokens=4096, smart=False, prefer=None):
 
 def is_hard(text):
     t = text.lower()
-    return len(t) > 160 or any(h in t for h in HARD_HINTS)
+    return len(t) > 500 or any(h in t for h in HARD_HINTS)
 
 
 EXAM_MODEL = os.environ.get("DEEP_OQ_EXAM_MODEL", "openai/gpt-oss-120b")  # strongest reasoning model on the account
@@ -3205,16 +3205,11 @@ def _deep_oq_raw(session, question, force_exam=False, emit=None):
         return _split_final(ref)[1]
 
     if voice or not (force or is_hard(question) or "calc" in used or "count" in used):
-        return chat_stream(base + [{"role": "user", "content": user}], 0.5, (900 if voice else OQ_OUT), lambda t: emit("text", t))
+        return chat_stream(base + [{"role": "user", "content": user}], 0.3, (900 if voice else OQ_OUT), lambda t: emit("text", t))
     emit("status", "Thinking carefully")
 
-    plan = chat(base + [{"role": "user", "content":
-        f"{user}\n\nWrite a short numbered plan to answer this correctly. "
-        "Do not answer yet."}], 0.2, 600, smart=True)
-
     draft = chat(base + [{"role": "user", "content":
-        f"{user}\n\nPLAN:\n{plan}\n\nFollow the plan and give the full answer. "
-        "Do arithmetic and logic one step at a time."}], 0.2, smart=True)
+        f"{user}\n\nGive the full, correct answer. Do arithmetic and logic one step at a time and check it."}], 0.2, smart=True)
 
     return verify_answer(sysmsg, user, draft, emit)
 
@@ -7389,8 +7384,24 @@ import random
 import urllib.parse
 import urllib.request
 
-VISION_MODELS = [m for m in (os.environ.get("DEEP_OQ_VISION_MODEL"), "qwen/qwen3.8-27b", "qwen/qwen3.6-27b",
-                             "meta-llama/llama-4-scout-17b-16e-instruct", "meta-llama/llama-4-maverick-17b-128e-instruct") if m]
+VISION_MODELS = list(dict.fromkeys(m for m in (
+    os.environ.get("DEEP_OQ_VISION_MODEL"), "qwen/qwen3.8-27b", "meta-models/muse-spark-open", "qwen/qwen3.6-27b",
+    "meta-llama/llama-4-maverick-17b-128e-instruct", "meta-llama/llama-4-scout-17b-16e-instruct") if m))   # Groq's own picture models first
+_dead = {}   # paid providers with no credit are skipped for an hour instead of failing on every request
+
+
+def _billing_problem(e):
+    t = str(e).lower()
+    return any(w in t for w in ("credit balance", "no credits", "payment required", "billing", "insufficient", "quota", "402"))
+
+
+def _usable(name):
+    return _dead.get(name, 0) < time.time()
+
+
+def _mark_dead(name, e):
+    if _billing_problem(e):
+        _dead[name] = time.time() + 3600
 LAB_SYS = ("You are Deep OQ, an AI created by Mayank Kumar Saw. Be accurate, practical and concise. "
            "Use short paragraphs and bullet lists. Never use tables, horizontal lines (---) or HTML tags.")
 KC = {"rice": 1.2, "wheat": 1.15, "maize": 1.2, "corn": 1.2, "cotton": 1.15, "tomato": 1.15,
@@ -7451,14 +7462,15 @@ def _vision(prompt, image, temperature=0.3):
         {"type": "text", "text": prompt},
         {"type": "image_url", "image_url": {"url": image}}]}]
     why = []
-    if CLAUDE_ON:
+    if CLAUDE_ON and _usable("claude"):
         try:
             return _claude_vision(prompt, image)
         except Exception as e:
+            _mark_dead("claude", e)
             print("claude vision failed:", str(e)[:160])
             why.append("Claude: " + str(e)[:140])
     last = None
-    if _has_gemini():  # Gemini reads handwriting, tables and diagrams best, so it goes first
+    if _has_gemini() and _usable("gemini"):  # Gemini reads handwriting, tables and diagrams best, so it goes first
         try:
             head, b64 = image.split(",", 1)
             mime = head[5:].split(";")[0] or "image/jpeg"
@@ -7468,20 +7480,22 @@ def _vision(prompt, image, temperature=0.3):
                 return t
         except Exception as e:
             last = e
+            _mark_dead("gemini", e)
             print("gemini vision failed:", str(e)[:160])
             why.append("Gemini: " + str(e)[:100])
-    if OPENAI_KEY:
+    if OPENAI_KEY and _usable("openai"):
         try:
             t = _openai_vision(prompt, image)
             if t:
                 return t
         except Exception as e:
             last = e
+            _mark_dead("openai", e)
             print("openai vision failed:", str(e)[:160])
             why.append("OpenAI: " + str(e)[:100])
     for mdl in VISION_MODELS:  # try the newest model first, then the backups
         try:
-            r = client.chat.completions.create(model=mdl, max_tokens=4096, temperature=temperature, messages=msgs)
+            r = client.chat.completions.create(model=mdl, max_tokens=8000, temperature=temperature, messages=msgs)
         except Exception as e:
             last = e
             print("vision model failed:", mdl, str(e)[:160])
@@ -7490,8 +7504,28 @@ def _vision(prompt, image, temperature=0.3):
         text = re.sub(r"<think>.*?</think>", "", r.choices[0].message.content or "", flags=re.S).strip()
         if text:
             return text
+    for name, url, key, model in EXTRA_PROVIDERS:   # free OpenRouter vision models (a free key from openrouter.ai)
+        if name != "openrouter" or not _usable("openrouter"):
+            continue
+        for mdl in dict.fromkeys([os.environ.get("OPENROUTER_VISION_MODEL", "").strip(), "openrouter/free",
+                                  "google/gemma-3-27b-it:free", "qwen/qwen2.5-vl-72b-instruct:free"]):
+            if not mdl:
+                continue
+            try:
+                body = json.dumps({"model": mdl, "max_tokens": 4096, "temperature": temperature, "messages": msgs}).encode()
+                req = urllib.request.Request(url, body, {"Authorization": "Bearer " + key, "Content-Type": "application/json"})
+                with urllib.request.urlopen(req, timeout=120) as ur:
+                    t = (json.loads(ur.read().decode())["choices"][0]["message"]["content"] or "").strip()
+                t = re.sub(r"<think>.*?</think>", "", t, flags=re.S).strip()
+                if t:
+                    return t
+            except Exception as e:
+                last = e
+                _mark_dead("openrouter", e)
+                print("openrouter vision failed:", mdl, str(e)[:160])
+                why.append("OpenRouter " + mdl + ": " + str(e)[:80])
     hf = os.environ.get("HF_TOKEN", "").strip()
-    if hf:   # free fallback: a vision model on Hugging Face (same HF_TOKEN as the free pictures)
+    if hf and _usable("hf"):   # free fallback: a vision model on Hugging Face (same HF_TOKEN as the free pictures)
         for mdl in dict.fromkeys([os.environ.get("HF_VISION_MODEL", "").strip(), "Qwen/Qwen2.5-VL-72B-Instruct",
                                   "Qwen/Qwen2.5-VL-7B-Instruct"]):
             if not mdl:
@@ -7506,13 +7540,14 @@ def _vision(prompt, image, temperature=0.3):
                     return t
             except Exception as e:
                 last = e
+                _mark_dead("hf", e)
                 print("hf vision failed:", mdl, str(e)[:160])
                 why.append("HF " + mdl + ": " + str(e)[:80])
     if last is not None and any(w in str(last).lower() for w in ("rate", "429", "limit")):
         raise ValueError("Deep OQ is busy reading photos right now. Wait a minute and try again.")
     raise ValueError(_owner("Photo understanding is not available right now. Please try again later.",
                             "Photo reading failed on every service. " + (" | ".join(why) or "No vision service is set up.")
-                            + " (Set ANTHROPIC_API_KEY or GEMINI_API_KEY on Render for photo reading.)"))
+                            + " (Set GEMINI_API_KEY or OPENROUTER_API_KEY, both free, on Render for photo reading.)"))
 
 
 POLLINATIONS_KEY = os.environ.get("POLLINATIONS_KEY", "").strip()
