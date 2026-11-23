@@ -8342,7 +8342,31 @@ def pimg_route():
         return got[0], 200, {"Content-Type": got[1], "Cache-Control": "private, max-age=3600"}
     why = " | ".join(getattr(_img_tl, "why", [])) or "No picture service is set up (CLOUDFLARE_ACCOUNT_ID + CLOUDFLARE_API_TOKEN, HF_TOKEN, TOGETHER_API_KEY, GEMINI_API_KEY or OPENAI_API_KEY)."
     return jsonify(error=_owner("The picture service did not answer. Try again in a moment.", "Picture failed: " + why)), 502
+from deep3d import start_job, job_status, convert
 
+@app.route("/api/3d/start", methods=["POST"])
+def start_3d():
+    prompt = request.form.get("prompt", "")
+    mode = "ai" if request.form.get("mode") == "ai" else "quick"
+    path = None
+    photo = request.files.get("photo")
+    if photo:
+        path = f"/tmp/{uuid.uuid4().hex}.png"
+        photo.save(path)
+    return {"job": start_job(prompt, mode, path,
+                             ask_llm=my_ask_llm,          # your Groq/Claude function
+                             text_to_image=None)}         # your Photo function, optional
+
+@app.route("/api/3d/status/<job>")
+def status_3d(job):
+    return job_status(job)
+
+@app.route("/api/3d/download/<job>.<fmt>")
+def download_3d(job, fmt):
+    s = job_status(job)
+    if s["status"] != "done" or fmt not in ("glb", "stl", "obj"):
+        return {"error": "not ready"}, 404
+    return Response(convert(s["path"], fmt), mimetype="application/octet-stream")
 @app.get("/dlimg")
 def dlimg_route():
     """Fetches a generated picture for download when the image host blocks direct browser downloads."""
