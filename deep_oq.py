@@ -2727,7 +2727,7 @@ def _openai_chat(messages, max_tokens=4096):
         raise RuntimeError("Missing dependency for the OpenAI backup: pip install openai") from exc
     system, msgs = _to_claude_msgs(messages)
    SYSTEM += (
-    " The conversation above is the chat so far.
+    " The conversation above is the chat so far.)
     system += ("\n\nBACKUP MODE: you have no tools in this reply. Do calculations carefully by hand, double-check "
                "them, and never claim you ran code or a tool.")
     client = OpenAI(api_key=OPENAI_KEY, max_retries=3, timeout=600.0)
