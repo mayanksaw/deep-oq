@@ -58,13 +58,13 @@ import tempfile
 import threading
 import uuid
 import math_tools
-
+import trimesh
 from flask import Flask, Response, jsonify, redirect, request, send_file, stream_with_context, session as login_session
 import queue
 import base64
 from werkzeug.security import check_password_hash, generate_password_hash
 from groq import Groq
-
+from deep3d import start_job, job_status, convert
 # Creator profile: edit about_creator.py (same folder) to change the About page and what Deep OQ knows about its creator.
 try:
     from about_creator import PROFILE as CREATOR
@@ -8342,7 +8342,6 @@ def pimg_route():
         return got[0], 200, {"Content-Type": got[1], "Cache-Control": "private, max-age=3600"}
     why = " | ".join(getattr(_img_tl, "why", [])) or "No picture service is set up (CLOUDFLARE_ACCOUNT_ID + CLOUDFLARE_API_TOKEN, HF_TOKEN, TOGETHER_API_KEY, GEMINI_API_KEY or OPENAI_API_KEY)."
     return jsonify(error=_owner("The picture service did not answer. Try again in a moment.", "Picture failed: " + why)), 502
-from deep3d import start_job, job_status, convert
 
 @app.route("/api/3d/start", methods=["POST"])
 def start_3d():
