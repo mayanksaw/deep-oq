@@ -2830,7 +2830,7 @@ self.addEventListener('activate', e => {
   e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k.startsWith('oq-') && k !== V).map(k => caches.delete(k)))).then(() => self.clients.claim()));
 });
 const CDN = /^https:\/\/(esm\.run|cdn\.jsdelivr\.net|fonts\.googleapis\.com|fonts\.gstatic\.com)\//;
-const SKIP = /^\/(api\/|ask|login|logout|health)/;
+const SKIP = /^\/(api\/|ask|login|logout|health|makevideo|lab|stats)/;
 self.addEventListener('fetch', e => {
   const r = e.request;
   if (r.method !== 'GET') return;
@@ -6585,6 +6585,27 @@ async function askExtra(q,a,mode){
   }catch(e){botFail(bot,e)}
   busy=false;send.disabled=!canSend();toEnd();box.focus();loadRecents();
 }
+async function runVideo(body,bot){
+  /* starts the video job, then checks every 3 seconds until it is ready (no long wait that a proxy can cut) */
+  const w=()=>bot.querySelector('.wait');
+  let r=await api('/makevideo',body),j=await r.json().catch(()=>null);
+  if(!r.ok||!j||!j.job)throw new Error((j&&j.error)||'The server did not answer. It may be waking up: wait a minute and try again.');
+  const id=j.job;let miss=0;
+  for(;;){
+    await new Promise(ok=>setTimeout(ok,3000));
+    let s=null;
+    try{const rs=await fetch('/makevideo/'+id,{headers:{'X-Access-Key':localStorage.ak||''}});s=await rs.json().catch(()=>null);if(rs.status===404)throw new Error((s&&s.error)||'The video was lost because the server restarted. Please try again.')}
+    catch(e){if(/lost|not found/i.test(e.message))throw e;miss++;if(miss>20)throw new Error('Lost connection to the server. Please try again.');continue}
+    miss=0;
+    if(!s)continue;
+    if(s.state==='error')throw new Error(s.error||'Could not make the video right now.');
+    const el=w();if(el&&s.state==='working')el.textContent='Making your video... '+Math.floor((s.seconds||0)/60)+':'+String((s.seconds||0)%60).padStart(2,'0')+' (you can wait here)';
+    if(s.state==='done')break;
+  }
+  const f=await fetch('/makevideo/'+id+'/file',{headers:{'X-Access-Key':localStorage.ak||''}});
+  if(!f.ok)throw new Error('The video was made but could not be downloaded. Please try again.');
+  return URL.createObjectURL(await f.blob());
+}
 async function makeVideoChat(q){
   if(busy)return;busy=true;send.disabled=true;document.body.classList.add('chatting');
   box.value='';box.style.height='auto';addUserRich(q,null);
@@ -6592,9 +6613,7 @@ async function makeVideoChat(q){
   try{
     const w=bot.querySelector('.wait');if(w)w.textContent='Making your video (this can take a few minutes)';
     const ms=q.match(/(\d+)\s*scenes?/i),mt=q.match(/(\d+)\s*(?:seconds?|secs?|s)\s*(?:each|per scene)/i);
-    const r=await api('/makevideo',{text:q,scenes:ms?+ms[1]:8,secs:mt?+mt[1]:4});
-    if(!r.ok){const j=await r.json().catch(()=>({}));throw new Error(j.error||'The server did not answer.')}
-    const url=URL.createObjectURL(await r.blob());
+    const url=await runVideo({text:q,scenes:ms?+ms[1]:8,secs:mt?+mt[1]:4},bot);
     bot.classList.remove('thinking');
     bot.lastChild.innerHTML='<div class="body"><video controls playsinline style="max-width:100%;border-radius:14px" src="'+url+'"></video></div><div class="acts"><a class="mini" download="deep-oq-video.mp4" href="'+url+'" style="text-decoration:none">Download</a></div>';
   }catch(e){botFail(bot,e)}
@@ -6714,9 +6733,7 @@ function submit(){
   const bot=addBot();toEnd();
   try{
     const w=bot.querySelector('.wait');if(w)w.textContent='Making your video (1 to 3 minutes)';
-    const r=await api('/makevideo',{text:q});
-    if(!r.ok){const j=await r.json().catch(()=>({}));throw new Error(j.error||'The server did not answer.')}
-    const url=URL.createObjectURL(await r.blob());
+    const url=await runVideo({text:q},bot);
     bot.classList.remove('thinking');
     bot.lastChild.innerHTML='<div class="body"><video controls playsinline style="max-width:100%;border-radius:14px" src="'+url+'"></video></div><div class="acts"><a class="mini" download="deep-oq-video.mp4" href="'+url+'" style="text-decoration:none">Download</a></div>';
   }catch(e){botFail(bot,e)}
@@ -10563,14 +10580,11 @@ def _ai_motion(prompt, path):
     return True
 
 
-@app.post("/makevideo")
-def makevideo_route():
-    if denied():
-        return jsonify(error="locked"), 401
+def _makevideo_impl(d):
+    """Makes the video. Returns the MP4 bytes, or (jsonify(error=...), status)."""
     exe = ffmpeg_path()
     if not exe:
         return jsonify(error="Video tools are not installed on this server."), 503
-    d = request.get_json(silent=True) or {}
     idea = str(d.get("text", "")).strip()[:4000]
     if not idea:
         return jsonify(error="Describe the video first."), 400
@@ -10706,7 +10720,77 @@ def makevideo_route():
     finally:
         shutil.rmtree(work, ignore_errors=True)
         _video_slot.release()
-    return send_file(io.BytesIO(data), mimetype="video/mp4", download_name="deep-oq-video.mp4")
+    return data
+
+
+# Videos take minutes, longer than a web proxy waits. So the server starts the work, answers at once with a job
+# number, and the page asks "is it ready?" every few seconds. This stops "The server did not answer".
+_vjobs = {}
+_vjobs_lock = threading.Lock()
+
+
+def _vjob_run(jid, d):
+    job = _vjobs[jid]
+    try:
+        with app.app_context():
+            r = _makevideo_impl(d)
+        if isinstance(r, (bytes, bytearray)):
+            path = os.path.join(tempfile.gettempdir(), "oqvid_%s.mp4" % jid)
+            with open(path, "wb") as fh:
+                fh.write(r)
+            job.update(state="done", path=path)
+        else:
+            try:
+                msg = r[0].get_json().get("error")
+            except Exception:
+                msg = None
+            job.update(state="error", error=msg or "Could not make the video right now.")
+    except Exception as e:
+        print("video job failed:", e)
+        job.update(state="error", error="Could not make the video right now.")
+    job["done_at"] = time.time()
+
+
+@app.post("/makevideo")
+def makevideo_route():
+    if denied():
+        return jsonify(error="locked"), 401
+    if not ffmpeg_path():
+        return jsonify(error="Video tools are not installed on this server."), 503
+    d = request.get_json(silent=True) or {}
+    if not str(d.get("text", "")).strip():
+        return jsonify(error="Describe the video first."), 400
+    now = time.time()
+    with _vjobs_lock:
+        for k in [k for k, v in _vjobs.items() if now - v.get("t", now) > 3600]:
+            old = _vjobs.pop(k, {})
+            try:
+                if old.get("path"):
+                    os.remove(old["path"])
+            except OSError:
+                pass
+        jid = uuid.uuid4().hex[:16]
+        _vjobs[jid] = {"state": "working", "t": now, "user": login_session.get("user") or ""}
+    threading.Thread(target=_vjob_run, args=(jid, d), daemon=True).start()
+    return jsonify(job=jid)
+
+
+@app.get("/makevideo/<jid>")
+def makevideo_status(jid):
+    j = _vjobs.get(jid)
+    if denied() or not j or j.get("user") != (login_session.get("user") or ""):
+        return jsonify(error="Video not found. Please try again."), 404
+    return jsonify(state=j["state"], error=j.get("error"), seconds=int(time.time() - j["t"]))
+
+
+@app.get("/makevideo/<jid>/file")
+def makevideo_file(jid):
+    j = _vjobs.get(jid)
+    if denied() or not j or j.get("user") != (login_session.get("user") or "") or j.get("state") != "done":
+        return jsonify(error="Video not ready."), 404
+    return send_file(j["path"], mimetype="video/mp4", download_name="deep-oq-video.mp4")
+
+
 @app.post("/editphoto")
 def editphoto_route():
     if denied():
