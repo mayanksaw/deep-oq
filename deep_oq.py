@@ -2814,6 +2814,57 @@ def health_route():
     return jsonify(ok=True)
 
 
+# ---------- installable app + offline: manifest, icon and service worker ----------
+_ICON_SVG = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="112" fill="#0A0E2A"/>'
+             '<circle cx="256" cy="256" r="150" fill="none" stroke="#EEF0FF" stroke-width="46"/>'
+             '<circle cx="364" cy="364" r="46" fill="#F2A02E"/></svg>')
+_MANIFEST = {"name": "Deep OQ", "short_name": "Deep OQ", "description": "Deep OQ AI assistant", "start_url": "/",
+             "scope": "/", "display": "standalone", "background_color": "#0A0E2A", "theme_color": "#0A0E2A",
+             "icons": [{"src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable"}]}
+_SW_JS = r"""
+const V = 'oq-v1';
+self.addEventListener('install', e => {
+  e.waitUntil(caches.open(V).then(c => c.addAll(['/icon.svg', '/manifest.webmanifest']).catch(() => {})).then(() => self.skipWaiting()));
+});
+self.addEventListener('activate', e => {
+  e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k.startsWith('oq-') && k !== V).map(k => caches.delete(k)))).then(() => self.clients.claim()));
+});
+const CDN = /^https:\/\/(esm\.run|cdn\.jsdelivr\.net|fonts\.googleapis\.com|fonts\.gstatic\.com)\//;
+const SKIP = /^\/(api\/|ask|login|logout|health)/;
+self.addEventListener('fetch', e => {
+  const r = e.request;
+  if (r.method !== 'GET') return;
+  const u = new URL(r.url);
+  if (u.origin === location.origin) {
+    if (SKIP.test(u.pathname)) return;
+    e.respondWith(fetch(r).then(res => {
+      if (res.ok && res.type === 'basic' && !res.redirected) { const cp = res.clone(); caches.open(V).then(c => c.put(r, cp)); }
+      return res;
+    }).catch(() => caches.match(r).then(m => m || (r.mode === 'navigate' ? caches.match('/') : undefined) || new Response('You are offline.', {status: 503}))));
+    return;
+  }
+  if (CDN.test(r.url)) {
+    e.respondWith(caches.match(r).then(m => m || fetch(r).then(res => { const cp = res.clone(); caches.open(V).then(c => c.put(r, cp)); return res; })));
+  }
+});
+""".replace("\\\\", "\\")
+
+
+@app.get("/manifest.webmanifest")
+def manifest_route():
+    return Response(json.dumps(_MANIFEST), mimetype="application/manifest+json")
+
+
+@app.get("/icon.svg")
+def icon_route():
+    return Response(_ICON_SVG, mimetype="image/svg+xml", headers={"Cache-Control": "public, max-age=86400"})
+
+
+@app.get("/sw.js")
+def sw_route():
+    return Response(_SW_JS, mimetype="text/javascript", headers={"Service-Worker-Allowed": "/", "Cache-Control": "no-cache"})
+
+
 def _selftest_v2():
     """python deep_oq.py selftest   (no API key or network needed)"""
     assert detect_loop("Problem: Let $f: " * 12), "loop detector missed a repetition"
@@ -3263,7 +3314,7 @@ def _start_login(name, remember):
 def require_login():
     _tl.max = False
     p = request.path
-    if p in ("/login", "/logout", "/favicon.ico", "/health", "/vr", "/terms", "/privacy", "/about", "/about/photo") or p.startswith(("/api/login", "/api/register", "/api/google")):
+    if p in ("/login", "/logout", "/favicon.ico", "/health", "/vr", "/terms", "/privacy", "/about", "/about/photo", "/manifest.webmanifest", "/sw.js", "/icon.svg") or p.startswith(("/api/login", "/api/register", "/api/google")):
         return None
     if login_session.get("user"):
         return None
@@ -3854,6 +3905,7 @@ PAGE = r"""<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Deep OQ</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Ccircle cx='24' cy='24' r='15' fill='none' stroke='%23161B4A' stroke-width='4.5'/%3E%3Ccircle cx='34.6' cy='34.6' r='4.6' fill='%23F2A02E'/%3E%3C/svg%3E">
+<link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="#0A0E2A"><link rel="apple-touch-icon" href="/icon.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&family=Source+Serif+4:opsz,wght@8..60,400..700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -4255,6 +4307,7 @@ body:not(.chatting) #v-chat.on{padding-top:12vh;padding-bottom:0}
     <button class="btn" id="kbBtn" type="button" aria-haspopup="dialog">Knowledge <span class="badge" id="count">0</span></button>
     <button class="btn" id="histBtn" type="button" aria-haspopup="dialog">History</button>
     <button class="btn" id="memBtn" type="button" aria-haspopup="dialog">Memory</button>
+    <button class="btn" id="offBtn" type="button" aria-haspopup="dialog" title="Use Deep OQ with no internet">Offline AI</button>
     <button class="btn" id="newBtn" type="button"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>New chat</button>
   </div>
 </header>
@@ -6026,6 +6079,112 @@ function speakText(raw,btn){
   let first='chess';try{first=localStorage.getItem('oqgame')||'chess'}catch(e){}
   select(first);
   requestAnimationFrame(frame);
+})();
+
+/* ================= offline: Deep OQ opens and answers with no internet ================= */
+(function(){
+  if('serviceWorker' in navigator&&(location.protocol==='https:'||location.hostname==='localhost'||location.hostname==='127.0.0.1'))
+    navigator.serviceWorker.register('/sw.js').catch(()=>{});
+  const LIB='https://esm.run/@mlc-ai/web-llm';
+  const SIZES=[['small','Small (about 0.4 GB, fastest)',/Qwen2\.5-0\.5B-Instruct-q4f16_1/],['standard','Standard (about 1 GB, recommended)',/Qwen2\.5-1\.5B-Instruct-q4f16_1/],['better','Better (about 2 GB, needs a strong device)',/Qwen2\.5-3B-Instruct-q4f16_1/]];
+  const SYS='You are Deep OQ, an AI assistant created by Mayank Kumar Saw. You are running offline on this device. Answer clearly and honestly in the language the user writes in. If you are not sure, say so. Do not reveal how you are built.';
+  const st=document.createElement('style');
+  st.textContent=`
+.oqoff{position:fixed;left:50%;top:10px;transform:translateX(-50%);z-index:99998;background:#F2A02E;color:#1a1200;font:600 13px var(--ui);padding:6px 14px;border-radius:999px;box-shadow:0 4px 18px rgba(0,0,0,.3);display:none}
+.oqoff.on{display:block}
+.oqm{position:fixed;inset:0;z-index:99997;background:rgba(5,8,30,.72);display:flex;align-items:center;justify-content:center;padding:16px}
+.oqm .card{width:min(460px,100%);max-height:92vh;overflow:auto;background:#12184a;color:#EEF0FF;border:1px solid rgba(255,255,255,.16);border-radius:20px;padding:20px;font-family:var(--ui);display:flex;flex-direction:column;gap:12px}
+.oqm h3{margin:0;font-size:20px}.oqm p{margin:0;font-size:14px;line-height:1.5;color:#C9CDEE}
+.oqm select,.oqm button{font:inherit;font-size:14px;border-radius:12px;padding:10px 14px;border:1px solid rgba(255,255,255,.22);background:rgba(255,255,255,.08);color:#fff;cursor:pointer}
+.oqm select option{color:#111;background:#fff}
+.oqm button.pri{background:linear-gradient(135deg,#2F8CFF,#7C5CFF);border:0;font-weight:700}
+.oqm .row{display:flex;gap:8px;flex-wrap:wrap}
+.oqm .bar{height:10px;border-radius:6px;background:rgba(255,255,255,.12);overflow:hidden;display:none}.oqm .bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,#7CFFD0,#2F8CFF);transition:width .2s}
+.oqm .stt{font-size:13px;color:#7CFFD0;min-height:18px}`;
+  document.head.append(st);
+  const pill=document.createElement('div');pill.className='oqoff';document.body.append(pill);
+  const upd=()=>{pill.textContent=ready()?'Offline mode: answering on this device':'Offline: connect to the internet or download the offline AI';pill.classList.toggle('on',!navigator.onLine)};
+  addEventListener('online',upd);addEventListener('offline',upd);
+  const ls={get:k=>{try{return localStorage.getItem(k)}catch(e){return null}},set:(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}},del:k=>{try{localStorage.removeItem(k)}catch(e){}}};
+  const ready=()=>!!ls.get('oqOffModel');
+  let engine=null,loading=null,lib=null,hist=[];
+  async function getLib(){return lib||(lib=window.__oqWebllm||await import(LIB))}
+  function pickId(lib,size){
+    const list=((lib.prebuiltAppConfig||{}).model_list||[]).map(m=>m.model_id);
+    const re=(SIZES.find(x=>x[0]===size)||SIZES[1])[2];
+    return list.find(id=>re.test(id))||list.find(id=>/Qwen.*(1\.5B|2B|3B).*q4f16_1/.test(id))||list[0];
+  }
+  async function load(id,onProg){
+    if(engine&&engine.__id===id)return engine;
+    if(loading)return loading;
+    loading=(async()=>{
+      const L=await getLib();
+      const e=await L.CreateMLCEngine(id,{initProgressCallback:p=>{try{onProg&&onProg(p)}catch(_){}}});
+      e.__id=id;engine=e;return e;
+    })();
+    try{return await loading}finally{loading=null}
+  }
+  async function local(q,bot){
+    const id=ls.get('oqOffModel');
+    if(!id)throw new Error('You are offline. While you have internet, open "Offline AI" in the menu and download the small AI once. After that Deep OQ answers with no internet.');
+    const w=bot&&bot.querySelector('.wait');if(w)w.textContent='Loading the offline AI...';
+    const e=await load(id,p=>{if(w)w.textContent='Loading the offline AI... '+Math.round((p.progress||0)*100)+'%'});
+    if(w)w.textContent='Thinking on this device...';
+    hist.push({role:'user',content:q});if(hist.length>12)hist=hist.slice(-12);
+    const msgs=[{role:'system',content:SYS}].concat(hist);
+    let out='';
+    const it=await e.chat.completions.create({messages:msgs,stream:true,temperature:0.5,max_tokens:1500});
+    for await(const ch of it){
+      const d=ch.choices&&ch.choices[0]&&ch.choices[0].delta&&ch.choices[0].delta.content||'';
+      if(d){out+=d;paint(bot,out)}
+    }
+    out=out.replace(/<think>[\s\S]*?(<\/think>|$)/g,'').trim()||'Sorry, I could not answer that offline.';
+    hist.push({role:'assistant',content:out});
+    return out;
+  }
+  const orig=askStream;
+  askStream=async function(q,bot){
+    if(!navigator.onLine)return local(q,bot);
+    try{return await orig(q,bot)}
+    catch(e){
+      if((e instanceof TypeError||/failed to fetch|networkerror|load failed|network request/i.test(e.message||''))&&ready())return local(q,bot);
+      throw e;
+    }
+  };
+  window.offlineAI={ready,local};
+  /* the menu page */
+  function open(){
+    const m=document.createElement('div');m.className='oqm';
+    m.innerHTML='<div class="card" role="dialog" aria-label="Offline AI"><h3>Offline AI</h3>'
+      +'<p>Download a small AI onto this device once. After that Deep OQ can answer with no internet. It is smaller than the online Deep OQ, so answers are shorter and less exact. Photos, web search, voice and other tools still need internet.</p>'
+      +'<div class="stt" id="oqS"></div><select id="oqSz"></select>'
+      +'<div class="bar" id="oqB"><i></i></div>'
+      +'<div class="row"><button class="pri" id="oqGo" type="button">Download</button><button id="oqDel" type="button">Remove</button><button id="oqX" type="button">Close</button></div>'
+      +'<p style="font-size:12px;color:#A3A9D1">Needs a recent Chrome or Edge with WebGPU, on a phone or computer with enough memory. Keep this page open while it downloads (use Wi-Fi). The download is saved on this device.</p></div>';
+    document.body.append(m);
+    const $=s=>m.querySelector(s),sel=$('#oqSz'),S=$('#oqS'),B=$('#oqB'),go=$('#oqGo');
+    SIZES.forEach(x=>{const o=document.createElement('option');o.value=x[0];o.textContent=x[1];sel.append(o)});sel.value=ls.get('oqOffSize')||'standard';
+    const show=()=>{S.textContent=ready()?'Ready: the offline AI is on this device ('+ls.get('oqOffModel')+').':(navigator.gpu?'Not downloaded yet.':'This browser has no WebGPU, so the offline AI cannot run here. Try Chrome or Edge on a newer device.')};show();
+    $('#oqX').onclick=()=>m.remove();m.addEventListener('click',e=>{if(e.target===m)m.remove()});
+    go.onclick=async()=>{
+      if(!navigator.onLine){S.textContent='Connect to the internet to download.';return}
+      if(!navigator.gpu){show();return}
+      go.disabled=true;B.style.display='block';S.textContent='Starting...';
+      try{
+        const L=await getLib(),id=pickId(L,sel.value);
+        try{if(navigator.storage&&navigator.storage.persist)navigator.storage.persist()}catch(e){}
+        await load(id,p=>{B.firstChild.style.width=Math.round((p.progress||0)*100)+'%';S.textContent=(p.text||'Downloading...').slice(0,120)});
+        ls.set('oqOffModel',id);ls.set('oqOffSize',sel.value);S.textContent='Done. Deep OQ can now answer with no internet.';upd();
+      }catch(e){S.textContent='Could not download: '+((e&&e.message)||'try again on Wi-Fi').slice(0,140)}
+      go.disabled=false;
+    };
+    $('#oqDel').onclick=async()=>{
+      try{const L=await getLib(),id=ls.get('oqOffModel');if(id&&L.deleteModelAllInfoInCache)await L.deleteModelAllInfoInCache(id)}catch(e){}
+      engine=null;ls.del('oqOffModel');show();upd();
+    };
+  }
+  const b=document.getElementById('offBtn');if(b)b.onclick=open;
+  upd();
 })();
 
 /* ================= saved chats ================= */
