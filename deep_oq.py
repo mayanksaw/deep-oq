@@ -1799,7 +1799,7 @@ def _apply_cmds(s):
             b = _grab(s, a[1]) if a else None
             if a and b:
                 x, y = _tex_plain(a[0], True).strip(), _tex_plain(b[0], True).strip()
-                out.append("C(" + x + ", " + y + ")" if "binom" in name else _pm_wrap(x) + " ÷ " + _pm_wrap(y))
+                out.append("C(" + x + ", " + y + ")" if "binom" in name else _pm_wrap(x) + "/" + _pm_wrap(y))
                 i = b[1]
                 continue
         elif name == "sqrt":
@@ -1950,8 +1950,8 @@ HARD_HINTS = ("prove", "proof", "derive", "debug", "bug", "algorithm", "optimi",
 
 
 FAST_CANDIDATES = []
-for _m in (FAST_MODEL, "openai/gpt-oss-120b", "llama-3.3-70b-versatile",
-           "openai/gpt-oss-20b", "llama-3.1-8b-instant"):
+for _m in (FAST_MODEL, "openai/gpt-oss-120b",
+           "openai/gpt-oss-20b", "qwen/qwen3.8-27b"):
     if _m not in FAST_CANDIDATES:
         FAST_CANDIDATES.append(_m)
 _working = {"model": None}  # remembers the first model that works on this account
@@ -2726,6 +2726,12 @@ def _openai_chat(messages, max_tokens=4096):
     except ImportError as exc:
         raise RuntimeError("Missing dependency for the OpenAI backup: pip install openai") from exc
     system, msgs = _to_claude_msgs(messages)
+    SYSTEM += (
+    " Write a fraction as (top)/(bottom) with brackets, for example (x+y+z)/z, and never chain ÷ signs. "
+    "Never write spacing codes like [4pt] or [2mm]. Never mention the user's own instructions, such as "
+    "'solve all three', in a heading or sentence. State only what you have proven: do not add optional "
+    "extra claims, and test every inequality you claim with one number before you write it."
+)
     system += ("\n\nBACKUP MODE: you have no tools in this reply. Do calculations carefully by hand, double-check "
                "them, and never claim you ran code or a tool.")
     client = OpenAI(api_key=OPENAI_KEY, max_retries=3, timeout=600.0)
@@ -3071,6 +3077,7 @@ CRITIC = ("You are a strict independent reviewer. Do NOT trust the draft. Go thr
           "4. Code: read it line by line, then trace it by hand on one normal input and two edge inputs. Check names, imports, "
           "return values, loops and indexes.\n"
           "5. Proofs: every step must follow from earlier ones with a stated reason. No gaps, no circular steps.\n"
+          "6. Delete any extra or optional claim that was not asked for. Test every claimed inequality with a number and remove it if it fails.\n"
           "If the draft is fully correct and complete, reply with exactly: OK\n"
           "Otherwise output ONLY the full corrected final answer for the user, with no mention of this review, "
           "keeping everything that was right.")
