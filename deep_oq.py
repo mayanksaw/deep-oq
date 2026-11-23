@@ -58,7 +58,6 @@ import tempfile
 import threading
 import uuid
 import math_tools
-import trimesh
 from flask import Flask, Response, jsonify, redirect, request, send_file, stream_with_context, session as login_session
 import queue
 import base64
