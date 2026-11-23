@@ -2060,7 +2060,7 @@ EXTRA_PROVIDERS = []
 for _name, _keyvar, _url, _modvar, _mod in (
         ("cerebras", "CEREBRAS_API_KEY", "https://api.cerebras.ai/v1/chat/completions", "CEREBRAS_MODEL", "gpt-oss-120b"),
         ("gemini", "GEMINI_API_KEY", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-         "GEMINI_MODEL", "gemini-2.5-flash"),
+         "GEMINI_MODEL", "gemini-flash-latest"),
         ("openrouter", "OPENROUTER_API_KEY", "https://openrouter.ai/api/v1/chat/completions",
          "OPENROUTER_MODEL", "openrouter/free")):
     _k = os.environ.get(_keyvar, "").strip()
