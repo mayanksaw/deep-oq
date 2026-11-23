@@ -63,7 +63,11 @@ import queue
 import base64
 from werkzeug.security import check_password_hash, generate_password_hash
 from groq import Groq
-from deep3d import start_job, job_status, convert
+try:
+    from deep3d import start_job, job_status, convert
+except Exception as e:
+    print("3D module not loaded:", e)
+    start_job = job_status = convert = None
 # Creator profile: edit about_creator.py (same folder) to change the About page and what Deep OQ knows about its creator.
 try:
     from about_creator import PROFILE as CREATOR
@@ -8341,9 +8345,16 @@ def pimg_route():
         return got[0], 200, {"Content-Type": got[1], "Cache-Control": "private, max-age=3600"}
     why = " | ".join(getattr(_img_tl, "why", [])) or "No picture service is set up (CLOUDFLARE_ACCOUNT_ID + CLOUDFLARE_API_TOKEN, HF_TOKEN, TOGETHER_API_KEY, GEMINI_API_KEY or OPENAI_API_KEY)."
     return jsonify(error=_owner("The picture service did not answer. Try again in a moment.", "Picture failed: " + why)), 502
-
+def my_ask_llm(prompt, system=""):
+    msgs = []
+    if system:
+        msgs.append({"role": "system", "content": system})
+    msgs.append({"role": "user", "content": prompt})
+    return chat(msgs, 0.3, 4096, smart=True)
 @app.route("/api/3d/start", methods=["POST"])
 def start_3d():
+    if start_job is None:
+        return {"error": "3D is not available right now."}, 503
     prompt = request.form.get("prompt", "")
     mode = "ai" if request.form.get("mode") == "ai" else "quick"
     path = None
@@ -8352,15 +8363,19 @@ def start_3d():
         path = f"/tmp/{uuid.uuid4().hex}.png"
         photo.save(path)
     return {"job": start_job(prompt, mode, path,
-                             ask_llm=my_ask_llm,          # your Groq/Claude function
-                             text_to_image=None)}         # your Photo function, optional
+                             ask_llm=my_ask_llm,
+                             text_to_image=None)}
 
 @app.route("/api/3d/status/<job>")
 def status_3d(job):
+    if job_status is None:
+        return {"error": "3D is not available right now."}, 503
     return job_status(job)
 
 @app.route("/api/3d/download/<job>.<fmt>")
 def download_3d(job, fmt):
+    if job_status is None:
+        return {"error": "3D is not available right now."}, 503
     s = job_status(job)
     if s["status"] != "done" or fmt not in ("glb", "stl", "obj"):
         return {"error": "not ready"}, 404
