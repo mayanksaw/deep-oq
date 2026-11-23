@@ -6451,7 +6451,7 @@ function sci(s){
   psel.onchange=form;form();
   q('#qcalc').onclick=()=>{
     const P=PROB[psel.value],v={};let bad='';
-    pform.querySelectorAll('[data-k]').forEach(i=>{if(i.tagName==='SELECT')v[i.dataset.k]=i.value;const x=sci(i.value);if(!isFinite(x)){bad='Fill in every number.'}v[i.dataset.k]=x}});
+    pform.querySelectorAll('[data-k]').forEach(i=>{if(i.tagName==='SELECT'){v[i.dataset.k]=i.value;return}const x=sci(i.value);if(!isFinite(x)){bad='Fill in every number (for example 4x10^14).'}v[i.dataset.k]=x});
     if(!bad){if(v.L<=0||v.a<=0||v.dx<=0||v.lam<=0||v.f<=0||v.Z<=0||v.ni<1||v.nf<1||v.n<1&&psel.value==='box')bad='Use positive numbers (levels start at 1).'}
     if(!bad&&psel.value==='sho'&&v.n<0)bad='Level n cannot be negative.';
     if(bad){q('#qout').innerHTML='<p class="qerr">'+bad+'</p>';return}
