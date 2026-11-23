@@ -149,7 +149,7 @@ PG_SCHEMA = [
 
 def _pg_open():
     from psycopg_pool import ConnectionPool  # pip install "psycopg[binary,pool]"
-    opts = dict(min_size=2, max_size=8, timeout=15, max_idle=300, kwargs={"autocommit": True}, open=False)
+    opts = dict(min_size=1, max_size=5, kwargs={"autocommit": True}, open=False)
     try:
         pool = ConnectionPool(DATABASE_URL, check=ConnectionPool.check_connection, **opts)
     except TypeError:  # older psycopg_pool without the check option
@@ -4298,6 +4298,14 @@ header.top .tabs{display:grid;grid-template-columns:1fr 1fr;gap:2px;margin:4px 0
 header.top .tab{padding:6px 10px;font-size:14px}
 header.top a.tab{margin-top:0}
 header.top #kbBtn{padding:6px 10px;font-size:14px}
+/* ---- tighter menu: three buttons per row ---- */
+header.top .mrow{order:0;display:flex;gap:6px;width:100%;margin:0 0 2px}
+header.top .mrow .btn{flex:1;min-width:0;padding:6px 6px;font-size:13px;border-radius:10px;text-align:center;justify-content:center}
+header.top .tabs{grid-template-columns:repeat(3,1fr);gap:3px;margin:4px 0}
+header.top .tab{padding:6px 2px;font-size:13px;text-align:center;border-radius:9px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+header.top a.tab{justify-content:center;padding:6px 2px}
+header.top #kbBtn{justify-content:center;gap:6px;padding:6px 8px;font-size:13px}
+header.top .tab{padding:5px 2px}header.top #newBtn{padding:7px 10px;font-size:13px}header.top .sbsearch input{padding:6px 10px;font-size:13px}header.top #kbBtn{padding:5px 8px;width:100%}
 .sbhd{margin:8px 8px 2px}
 .recents{min-height:110px;overflow-x:hidden}
 .recents .hi{min-width:0}
@@ -4361,8 +4369,8 @@ body:not(.chatting) #v-chat.on{padding-top:12vh;padding-bottom:0}
   <div class="tools" id="chatTools">
     <button class="btn" id="kbBtn" type="button" aria-haspopup="dialog">Knowledge <span class="badge" id="count">0</span></button>
     <button class="btn" id="histBtn" type="button" aria-haspopup="dialog">History</button>
-    <button class="btn" id="memBtn" type="button" aria-haspopup="dialog">Memory</button>
-    <button class="btn" id="offBtn" type="button" aria-haspopup="dialog" title="Use Deep OQ with no internet">Offline AI</button>
+    <div class="mrow"><button class="btn" id="memBtn" type="button" aria-haspopup="dialog">Memory</button>
+    <button class="btn" id="offBtn" type="button" aria-haspopup="dialog" title="Use Deep OQ with no internet">Offline AI</button></div>
     <button class="btn" id="newBtn" type="button"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>New chat</button>
   </div>
 </header>
