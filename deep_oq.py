@@ -1799,7 +1799,7 @@ def _apply_cmds(s):
             b = _grab(s, a[1]) if a else None
             if a and b:
                 x, y = _tex_plain(a[0], True).strip(), _tex_plain(b[0], True).strip()
-                out.append("C(" + x + ", " + y + ")" if "binom" in name else _pm_wrap(x) + "/" + _pm_wrap(y))
+                out.append("C(" + x + ", " + y + ")" if "binom" in name else _pm_wrap(x) + " ÷ " + _pm_wrap(y))
                 i = b[1]
                 continue
         elif name == "sqrt":
@@ -1950,8 +1950,8 @@ HARD_HINTS = ("prove", "proof", "derive", "debug", "bug", "algorithm", "optimi",
 
 
 FAST_CANDIDATES = []
-for _m in (FAST_MODEL, "openai/gpt-oss-120b",
-           "openai/gpt-oss-20b", "qwen/qwen3.8-27b"):
+for _m in (FAST_MODEL, "openai/gpt-oss-120b", "llama-3.3-70b-versatile",
+           "openai/gpt-oss-20b", "llama-3.1-8b-instant"):
     if _m not in FAST_CANDIDATES:
         FAST_CANDIDATES.append(_m)
 _working = {"model": None}  # remembers the first model that works on this account
@@ -2726,7 +2726,6 @@ def _openai_chat(messages, max_tokens=4096):
     except ImportError as exc:
         raise RuntimeError("Missing dependency for the OpenAI backup: pip install openai") from exc
     system, msgs = _to_claude_msgs(messages)
-    system += " The conversation above is the chat so far."
     system += ("\n\nBACKUP MODE: you have no tools in this reply. Do calculations carefully by hand, double-check "
                "them, and never claim you ran code or a tool.")
     client = OpenAI(api_key=OPENAI_KEY, max_retries=3, timeout=600.0)
@@ -3072,7 +3071,6 @@ CRITIC = ("You are a strict independent reviewer. Do NOT trust the draft. Go thr
           "4. Code: read it line by line, then trace it by hand on one normal input and two edge inputs. Check names, imports, "
           "return values, loops and indexes.\n"
           "5. Proofs: every step must follow from earlier ones with a stated reason. No gaps, no circular steps.\n"
-          "6. Delete any extra or optional claim that was not asked for. Test every claimed inequality with a number and remove it if it fails.\n"
           "If the draft is fully correct and complete, reply with exactly: OK\n"
           "Otherwise output ONLY the full corrected final answer for the user, with no mention of this review, "
           "keeping everything that was right.")
@@ -6628,7 +6626,9 @@ async function runVideo(body,bot){
   }
   const f=await fetch('/makevideo/'+id+'/file',{headers:{'X-Access-Key':localStorage.ak||''}});
   if(!f.ok)throw new Error('The video was made but could not be downloaded. Please try again.');
-  return URL.createObjectURL(await f.blob());
+  const bl=await f.blob();
+  if(!bl.size||!/^video\//.test(bl.type||''))throw new Error('The server sent a broken video file. Please try again.');
+  return URL.createObjectURL(new Blob([bl],{type:'video/mp4'}));
 }
 async function makeVideoChat(q){
   if(busy)return;busy=true;send.disabled=true;document.body.classList.add('chatting');
@@ -6639,7 +6639,7 @@ async function makeVideoChat(q){
     const ms=q.match(/(\d+)\s*scenes?/i),mt=q.match(/(\d+)\s*(?:seconds?|secs?|s)\s*(?:each|per scene)/i);
     const url=await runVideo({text:q,scenes:ms?+ms[1]:8,secs:mt?+mt[1]:4},bot);
     bot.classList.remove('thinking');
-    bot.lastChild.innerHTML='<div class="body"><video controls playsinline style="max-width:100%;border-radius:14px" src="'+url+'"></video></div><div class="acts"><a class="mini" download="deep-oq-video.mp4" href="'+url+'" style="text-decoration:none">Download</a></div>';
+    bot.lastChild.innerHTML='<div class="body"><video controls playsinline preload="auto" style="max-width:100%;border-radius:14px" src="'+url+'" onerror="this.insertAdjacentHTML(\'afterend\',\'<p>This browser could not play the video here. Press Download and open it in your video player.</p>\')"></video></div><div class="acts"><a class="mini" download="deep-oq-video.mp4" href="'+url+'" style="text-decoration:none">Download</a></div>';
   }catch(e){botFail(bot,e)}
   busy=false;send.disabled=!canSend();toEnd();box.focus();
 }
@@ -6759,7 +6759,7 @@ function submit(){
     const w=bot.querySelector('.wait');if(w)w.textContent='Making your video (1 to 3 minutes)';
     const url=await runVideo({text:q},bot);
     bot.classList.remove('thinking');
-    bot.lastChild.innerHTML='<div class="body"><video controls playsinline style="max-width:100%;border-radius:14px" src="'+url+'"></video></div><div class="acts"><a class="mini" download="deep-oq-video.mp4" href="'+url+'" style="text-decoration:none">Download</a></div>';
+    bot.lastChild.innerHTML='<div class="body"><video controls playsinline preload="auto" style="max-width:100%;border-radius:14px" src="'+url+'" onerror="this.insertAdjacentHTML(\'afterend\',\'<p>This browser could not play the video here. Press Download and open it in your video player.</p>\')"></video></div><div class="acts"><a class="mini" download="deep-oq-video.mp4" href="'+url+'" style="text-decoration:none">Download</a></div>';
   }catch(e){botFail(bot,e)}
   busy=false;send.disabled=!canSend();toEnd();box.focus();
 }
@@ -8088,7 +8088,7 @@ def pimg_route():
     got = _gen_image_bytes(prompt, seed)
     if got:
         return got[0], 200, {"Content-Type": got[1], "Cache-Control": "private, max-age=3600"}
-    why = " | ".join(getattr(_img_tl, "why", [])) or "No picture service is set up (OPENAI_API_KEY, GEMINI_API_KEY or POLLINATIONS_KEY)."
+    why = " | ".join(getattr(_img_tl, "why", [])) or "No picture service is set up (CLOUDFLARE_ACCOUNT_ID + CLOUDFLARE_API_TOKEN, HF_TOKEN, TOGETHER_API_KEY, GEMINI_API_KEY or OPENAI_API_KEY)."
     return jsonify(error=_owner("The picture service did not answer. Try again in a moment.", "Picture failed: " + why)), 502
 
 @app.get("/dlimg")
@@ -10349,7 +10349,8 @@ def _openai_image(prompt, quality=None):
             msg = str(e)
             _img_note("openai " + mdl + ": " + msg[:200])
             if "credits" in msg.lower() or "insufficient_quota" in msg or "billing" in msg.lower():
-                break   # out of money: the other OpenAI models would fail the same way
+                _mark_dead("openai_img", msg)   # out of money: skip OpenAI pictures for an hour
+                break   # the other OpenAI models would fail the same way
     return None
 
 
@@ -10425,40 +10426,77 @@ def _horde_image(prompt):
     return None
 
 
-def _gen_image_bytes(prompt, seed, quality=None):
-    """One picture as (bytes, content_type) or None. Tries the picture services one after another so that
-    when one is down or limits you, the next one answers: Pollinations (keyed, no logo), Gemini, OpenAI.
-    The free Pollinations endpoint is NOT used because it stamps its logo on every picture."""
-    prompt = (prompt or "")[:700]
-    _img_tl.why = []
-    if os.environ.get("DEEP_OQ_IMAGE_PROVIDER", "").strip().lower() == "free":   # free services only, no paid calls
-        return _hf_image(prompt) or _horde_image(prompt)
-    if OPENAI_KEY and os.environ.get("DEEP_OQ_IMAGE_PROVIDER", "openai").strip().lower() != "pollinations":
-        got = _openai_image(prompt, quality)   # OpenAI's picture model first (the ChatGPT look); the others are the backup
-        if got:
-            return got
-    tries = []
-    if POLLINATIONS_KEY:
-        tries.append(("pollinations-keyed", _pollinations_gen_url(prompt, seed), {"Authorization": "Bearer " + POLLINATIONS_KEY}))
-    for label, url, hd in tries:
-        for attempt in range(2):
-            try:
-                req = urllib.request.Request(url, headers=dict(hd, **{"User-Agent": "DeepOQ/1.0"}))
-                with urllib.request.urlopen(req, timeout=75) as r:
-                    ct = r.headers.get("Content-Type", "")
-                    if r.status == 200 and ct.startswith("image/"):
-                        return r.read(15_000_000), ct
-                    print("image", label, "gave", r.status, ct)
-                    break
-            except urllib.error.HTTPError as e:
-                _img_note("%s: HTTP %s %s" % (label, e.code, e.read()[:120]))
-                if e.code in (401, 402, 403, 404):
-                    break
-                time.sleep(1.5)
-            except Exception as e:
-                _img_note(label + ": " + str(e)[:120])
-                time.sleep(1.5)
-    for name, url, key, model in EXTRA_PROVIDERS:  # Google Gemini picture model (uses the same GEMINI_API_KEY)
+def _cloudflare_image(prompt):
+    """FREE and fast (2 to 5 seconds): Cloudflare Workers AI FLUX.1-schnell. Free account at cloudflare.com, then set
+    CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN (a token with Workers AI permission) on Render."""
+    acc = os.environ.get("CLOUDFLARE_ACCOUNT_ID", "").strip()
+    tok = os.environ.get("CLOUDFLARE_API_TOKEN", "").strip()
+    if not (acc and tok):
+        return None
+    try:
+        req = urllib.request.Request("https://api.cloudflare.com/client/v4/accounts/" + acc + "/ai/run/@cf/black-forest-labs/flux-1-schnell",
+                                     json.dumps({"prompt": prompt, "steps": 6}).encode(),
+                                     {"Authorization": "Bearer " + tok, "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            img = (json.loads(r.read().decode()).get("result") or {}).get("image")
+        if img:
+            return base64.b64decode(img), "image/jpeg"
+        _img_note("cloudflare gave no picture")
+    except urllib.error.HTTPError as e:
+        _img_note("cloudflare: HTTP %s %s" % (e.code, e.read()[:140]))
+    except Exception as e:
+        _img_note("cloudflare: " + str(e)[:140])
+    return None
+
+
+def _together_image(prompt):
+    """FREE FLUX.1-schnell on Together AI (free key at together.ai, set TOGETHER_API_KEY)."""
+    key = os.environ.get("TOGETHER_API_KEY", "").strip()
+    if not key:
+        return None
+    try:
+        body = {"model": os.environ.get("TOGETHER_IMAGE_MODEL", "black-forest-labs/FLUX.1-schnell-Free").strip(),
+                "prompt": prompt, "width": 1024, "height": 768, "steps": 4, "n": 1, "response_format": "b64_json"}
+        req = urllib.request.Request("https://api.together.xyz/v1/images/generations", json.dumps(body).encode(),
+                                     {"Authorization": "Bearer " + key, "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            d = json.loads(r.read().decode())
+        b64 = ((d.get("data") or [{}])[0]).get("b64_json")
+        if b64:
+            return base64.b64decode(b64), "image/png"
+        _img_note("together gave no picture")
+    except urllib.error.HTTPError as e:
+        _img_note("together: HTTP %s %s" % (e.code, e.read()[:140]))
+    except Exception as e:
+        _img_note("together: " + str(e)[:140])
+    return None
+
+
+def _pollinations_keyed_image(prompt, seed):
+    if not POLLINATIONS_KEY:
+        return None
+    for attempt in range(2):
+        try:
+            req = urllib.request.Request(_pollinations_gen_url(prompt, seed),
+                                         headers={"Authorization": "Bearer " + POLLINATIONS_KEY, "User-Agent": "DeepOQ/1.0"})
+            with urllib.request.urlopen(req, timeout=75) as r:
+                ct = r.headers.get("Content-Type", "")
+                if r.status == 200 and ct.startswith("image/"):
+                    return r.read(15_000_000), ct
+                break
+        except urllib.error.HTTPError as e:
+            _img_note("pollinations-keyed: HTTP %s %s" % (e.code, e.read()[:120]))
+            if e.code in (401, 402, 403, 404):
+                break
+            time.sleep(1.0)
+        except Exception as e:
+            _img_note("pollinations-keyed: " + str(e)[:120])
+            time.sleep(1.0)
+    return None
+
+
+def _gemini_image(prompt):
+    for name, url, key, model in EXTRA_PROVIDERS:   # Google Gemini picture model (uses the same GEMINI_API_KEY)
         if name != "gemini":
             continue
         for gm in dict.fromkeys([os.environ.get("DEEP_OQ_GEMINI_IMAGE_MODEL", "").strip(), "gemini-2.5-flash-image", "gemini-2.0-flash-preview-image-generation"]):
@@ -10470,7 +10508,7 @@ def _gen_image_bytes(prompt, seed, quality=None):
                 req = urllib.request.Request(
                     "https://generativelanguage.googleapis.com/v1beta/models/" + gm + ":generateContent",
                     json.dumps(payload).encode(), {"Content-Type": "application/json", "x-goog-api-key": key})
-                with urllib.request.urlopen(req, timeout=100) as r:
+                with urllib.request.urlopen(req, timeout=60) as r:
                     data = json.loads(r.read().decode())
                 for part in data["candidates"][0]["content"]["parts"]:
                     blob = part.get("inlineData") or part.get("inline_data")
@@ -10479,14 +10517,56 @@ def _gen_image_bytes(prompt, seed, quality=None):
                 _img_note("gemini gave no picture")
             except Exception as e:
                 _img_note("gemini " + gm + ": " + str(e)[:200])
-    if OPENAI_KEY and os.environ.get("DEEP_OQ_IMAGE_PROVIDER", "openai").strip().lower() == "pollinations":
-        got = _openai_image(prompt, quality)
-        if got:
-            return got
-    got = _hf_image(prompt)      # free: Hugging Face FLUX (needs a free HF_TOKEN)
-    if got:
-        return got
-    return _horde_image(prompt)  # free: Stable Horde (no key at all, but it can take a minute)
+                if _billing_problem(e) or "429" in str(e):
+                    break
+    return None
+
+
+def _gen_image_bytes(prompt, seed, quality=None):
+    """One picture as (bytes, content_type) or None. FAST: every picture service you have set up is asked at the
+    same moment and the first picture that comes back is used (before, they were tried one after another).
+    Services: OpenAI, Cloudflare FLUX, Together FLUX, Gemini, Hugging Face FLUX, keyed Pollinations. The slow
+    anonymous Stable Horde starts only if nothing has answered after 12 seconds."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    prompt = (prompt or "")[:700]
+    why = []
+    _img_tl.why = why
+    mode = os.environ.get("DEEP_OQ_IMAGE_PROVIDER", "").strip().lower()
+    won = threading.Event()
+    jobs = []
+    if mode != "free":
+        if OPENAI_KEY and mode != "pollinations" and _usable("openai_img"):
+            jobs.append(lambda: _openai_image(prompt, quality))
+        jobs += [lambda: _pollinations_keyed_image(prompt, seed), lambda: _gemini_image(prompt)]
+    jobs += [lambda: _cloudflare_image(prompt), lambda: _together_image(prompt), lambda: _hf_image(prompt)]
+
+    def slow_horde():
+        for _ in range(24):
+            if won.is_set():
+                return None
+            time.sleep(0.5)
+        return None if won.is_set() else _horde_image(prompt)
+    jobs.append(slow_horde)
+
+    def run(fn):
+        _img_tl.why = why
+        try:
+            return fn()
+        except Exception as e:
+            why.append(str(e)[:120])
+            return None
+    ex = ThreadPoolExecutor(max_workers=len(jobs))
+    try:
+        futs = [ex.submit(run, f) for f in jobs]
+        for f in as_completed(futs):
+            got = f.result()
+            if got:
+                won.set()
+                return got
+        return None
+    finally:
+        won.set()
+        ex.shutdown(wait=False)
 
 
 def _fetch_scene_image(prompt, seed, path):
@@ -10734,6 +10814,22 @@ def _makevideo_impl(d):
             if p.returncode != 0 or not os.path.exists(final):
                 print("music mix failed:", p.stderr[-400:])
                 final = joined
+        # check the finished file really plays; if not, re-encode it once into a plain, widely playable MP4
+        chk = subprocess.run([exe, "-v", "error", "-i", final, "-f", "null", "-"], capture_output=True, text=True, timeout=MAX_SECONDS)
+        if chk.returncode != 0 or chk.stderr.strip():
+            print("video check failed, re-encoding:", chk.stderr[-300:])
+            fixed = os.path.join(work, "fixed.mp4")
+            p = subprocess.run([exe, "-y", "-hide_banner", "-loglevel", "error", "-nostdin", "-i", final,
+                                "-c:v", "libx264", "-preset", "veryfast", "-profile:v", "main", "-pix_fmt", "yuv420p",
+                                "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-ar", "44100", "-movflags", "+faststart", fixed],
+                               capture_output=True, text=True, timeout=MAX_SECONDS)
+            if p.returncode == 0 and os.path.exists(fixed) and os.path.getsize(fixed) > 1000:
+                final = fixed
+            else:
+                print("re-encode failed:", p.stderr[-300:])
+                return jsonify(error="The video file came out broken. Try again with fewer scenes, for example 4 scenes."), 500
+        if os.path.getsize(final) < 1000:
+            return jsonify(error="The video came out empty. Try again."), 500
         with open(final, "rb") as fh:
             data = fh.read()
     except ValueError as e:
