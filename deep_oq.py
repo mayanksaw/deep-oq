@@ -6114,10 +6114,22 @@ function speakText(raw,btn){
     const re=(SIZES.find(x=>x[0]===size)||SIZES[1])[2];
     return list.find(id=>re.test(id))||list.find(id=>/Qwen.*(1\.5B|2B|3B).*q4f16_1/.test(id))||list[0];
   }
+  /* no graphics chip (WebGPU)? then the same small AI runs on the processor instead: slower, but it works everywhere */
+  async function gpuOk(){try{return !!(navigator.gpu&&await navigator.gpu.requestAdapter())}catch(e){return false}}
+  const TJS='https://cdn.jsdelivr.net/npm/@huggingface/transformers@3';
+  const WASM={small:'onnx-community/Qwen2.5-0.5B-Instruct',standard:'onnx-community/Qwen2.5-1.5B-Instruct',better:'onnx-community/Qwen2.5-1.5B-Instruct'};
+  let tlib=null;
+  async function loadWasm(id,onProg){
+    const T=tlib||(tlib=window.__oqTransformers||await import(TJS));
+    const size=id.slice(5),mid=WASM[size]||WASM.small;
+    const gen=await T.pipeline('text-generation',mid,{dtype:'q4',device:'wasm',progress_callback:d=>{try{onProg&&onProg({progress:(d.progress||0)/100,text:(d.status==='progress'?'Downloading ':'Preparing ')+((d.file||'').split('/').pop()||'')+' '+Math.round(d.progress||0)+'%'})}catch(_){}}});
+    const e={__id:id,wasm:true,T,gen};engine=e;return e;
+  }
   async function load(id,onProg){
     if(engine&&engine.__id===id)return engine;
     if(loading)return loading;
     loading=(async()=>{
+      if(id.indexOf('wasm:')===0)return loadWasm(id,onProg);
       const L=await getLib();
       const e=await L.CreateMLCEngine(id,{initProgressCallback:p=>{try{onProg&&onProg(p)}catch(_){}}});
       e.__id=id;engine=e;return e;
@@ -6133,10 +6145,15 @@ function speakText(raw,btn){
     hist.push({role:'user',content:q});if(hist.length>12)hist=hist.slice(-12);
     const msgs=[{role:'system',content:SYS}].concat(hist);
     let out='';
-    const it=await e.chat.completions.create({messages:msgs,stream:true,temperature:0.5,max_tokens:1500});
-    for await(const ch of it){
-      const d=ch.choices&&ch.choices[0]&&ch.choices[0].delta&&ch.choices[0].delta.content||'';
-      if(d){out+=d;paint(bot,out)}
+    if(e.wasm){
+      const streamer=new e.T.TextStreamer(e.gen.tokenizer,{skip_prompt:true,skip_special_tokens:true,callback_function:t=>{out+=t;paint(bot,out)}});
+      await e.gen(msgs,{max_new_tokens:700,do_sample:true,temperature:0.5,streamer});
+    }else{
+      const it=await e.chat.completions.create({messages:msgs,stream:true,temperature:0.5,max_tokens:1500});
+      for await(const ch of it){
+        const d=ch.choices&&ch.choices[0]&&ch.choices[0].delta&&ch.choices[0].delta.content||'';
+        if(d){out+=d;paint(bot,out)}
+      }
     }
     out=out.replace(/<think>[\s\S]*?(<\/think>|$)/g,'').trim()||'Sorry, I could not answer that offline.';
     hist.push({role:'assistant',content:out});
@@ -6160,26 +6177,31 @@ function speakText(raw,btn){
       +'<div class="stt" id="oqS"></div><select id="oqSz"></select>'
       +'<div class="bar" id="oqB"><i></i></div>'
       +'<div class="row"><button class="pri" id="oqGo" type="button">Download</button><button id="oqDel" type="button">Remove</button><button id="oqX" type="button">Close</button></div>'
-      +'<p style="font-size:12px;color:#A3A9D1">Needs a recent Chrome or Edge with WebGPU, on a phone or computer with enough memory. Keep this page open while it downloads (use Wi-Fi). The download is saved on this device.</p></div>';
+      +'<p style="font-size:12px;color:#A3A9D1">Works in Chrome or Edge on a phone or computer with enough memory. With a graphics chip it is fast; without one it runs on the processor and is slower. Keep this page open while it downloads (use Wi-Fi). The download is saved on this device.</p></div>';
     document.body.append(m);
     const $=s=>m.querySelector(s),sel=$('#oqSz'),S=$('#oqS'),B=$('#oqB'),go=$('#oqGo');
     SIZES.forEach(x=>{const o=document.createElement('option');o.value=x[0];o.textContent=x[1];sel.append(o)});sel.value=ls.get('oqOffSize')||'standard';
-    const show=()=>{S.textContent=ready()?'Ready: the offline AI is on this device ('+ls.get('oqOffModel')+').':(navigator.gpu?'Not downloaded yet.':'This browser has no WebGPU, so the offline AI cannot run here. Try Chrome or Edge on a newer device.')};show();
+    const show=()=>{S.textContent=ready()?'Ready: the offline AI is on this device ('+ls.get('oqOffModel')+').':'Not downloaded yet.'};show();
     $('#oqX').onclick=()=>m.remove();m.addEventListener('click',e=>{if(e.target===m)m.remove()});
     go.onclick=async()=>{
       if(!navigator.onLine){S.textContent='Connect to the internet to download.';return}
-      if(!navigator.gpu){show();return}
       go.disabled=true;B.style.display='block';S.textContent='Starting...';
-      try{
-        const L=await getLib(),id=pickId(L,sel.value);
-        try{if(navigator.storage&&navigator.storage.persist)navigator.storage.persist()}catch(e){}
-        await load(id,p=>{B.firstChild.style.width=Math.round((p.progress||0)*100)+'%';S.textContent=(p.text||'Downloading...').slice(0,120)});
-        ls.set('oqOffModel',id);ls.set('oqOffSize',sel.value);S.textContent='Done. Deep OQ can now answer with no internet.';upd();
-      }catch(e){S.textContent='Could not download: '+((e&&e.message)||'try again on Wi-Fi').slice(0,140)}
+      const prog=p=>{B.firstChild.style.width=Math.round((p.progress||0)*100)+'%';S.textContent=(p.text||'Downloading...').slice(0,120)};
+      try{if(navigator.storage&&navigator.storage.persist)navigator.storage.persist()}catch(e){}
+      let id=null,err=null;
+      if(await gpuOk()){
+        try{const L=await getLib();id=pickId(L,sel.value);await load(id,prog)}catch(e){err=e;id=null}
+      }
+      if(!id){   /* no graphics chip, or it failed: run on the processor */
+        try{S.textContent='No graphics chip found. Using the processor instead (slower)...';id='wasm:'+sel.value;engine=null;await load(id,prog);err=null}
+        catch(e){err=e;id=null}
+      }
+      if(id){ls.set('oqOffModel',id);ls.set('oqOffSize',sel.value);S.textContent='Done. Deep OQ can now answer with no internet'+(id.indexOf('wasm:')===0?' (it runs on the processor, so replies are slower).':'.');upd()}
+      else S.textContent='Could not download: '+((err&&err.message)||'try again on Wi-Fi').slice(0,140);
       go.disabled=false;
     };
     $('#oqDel').onclick=async()=>{
-      try{const L=await getLib(),id=ls.get('oqOffModel');if(id&&L.deleteModelAllInfoInCache)await L.deleteModelAllInfoInCache(id)}catch(e){}
+      try{const id=ls.get('oqOffModel');if(id&&id.indexOf('wasm:')===0){if(window.caches)await caches.delete('transformers-cache')}else{const L=await getLib();if(id&&L.deleteModelAllInfoInCache)await L.deleteModelAllInfoInCache(id)}}catch(e){}
       engine=null;ls.del('oqOffModel');show();upd();
     };
   }
