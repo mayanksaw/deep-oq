@@ -58,16 +58,13 @@ import tempfile
 import threading
 import uuid
 import math_tools
+
 from flask import Flask, Response, jsonify, redirect, request, send_file, stream_with_context, session as login_session
 import queue
 import base64
 from werkzeug.security import check_password_hash, generate_password_hash
 from groq import Groq
-try:
-    from deep3d import start_job, job_status, convert
-except Exception as e:
-    print("3D module not loaded:", e)
-    start_job = job_status = convert = None
+
 # Creator profile: edit about_creator.py (same folder) to change the About page and what Deep OQ knows about its creator.
 try:
     from about_creator import PROFILE as CREATOR
@@ -444,7 +441,6 @@ def _ev(n):
 
 def safe_calc(expr):
     expr = expr.replace("^", "**").replace("×", "*").replace("÷", "/")
-    expr = re.sub(r"(?<=[\d)])\s*[xX]\s*(?=[\d(])", "*", expr)
     if len(expr) > 300:
         raise ValueError("too long")
     val = _ev(ast.parse(expr, mode="eval").body)
@@ -6315,22 +6311,6 @@ function speakText(raw,btn){
   const q=s=>root.querySelector(s);
   const C={h:6.62607015e-34,hb:1.054571817e-34,c:299792458,e:1.602176634e-19,me:9.1093837015e-31,mp:1.67262192369e-27,mn:1.67492749804e-27,Ry:13.605693122994};
   const fmt=x=>{if(!isFinite(x))return String(x);if(x===0)return '0';const a=Math.abs(x);return (a>=1e5||a<1e-3)?x.toExponential(4):String(+x.toPrecision(6))};
-  const SUPM={'⁰':'0','¹':'1','²':'2','³':'3','⁴':'4','⁵':'5','⁶':'6','⁷':'7','⁸':'8','⁹':'9','⁻':'-','⁺':'+'};
-/* accepts 4x10^14, 4×10^14, 4*10^14, 4e14, 10^4, 10x10^4, 4x10⁻³, "10 to the power 4", plain numbers */
-function sci(s){
-  s=String(s).toLowerCase().trim()
-    .replace(/[⁰¹²³⁴⁵⁶⁷⁸⁹⁻⁺]+/g,m=>'^'+[...m].map(c=>SUPM[c]).join(''))
-    .replace(/to the power(?: of)?/g,'^')
-    .replace(/\*\*/g,'^').replace(/[×·x]/g,'*').replace(/\s+/g,'');
-  if(!s)return NaN;
-  let prod=1;
-  for(const f of s.split('*')){
-    const m=f.match(/^([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)(?:\^\(?([+-]?\d+\.?\d*)\)?)?$/);
-    if(!m)return NaN;
-    prod*=m[2]!==undefined?Math.pow(parseFloat(m[1]),parseFloat(m[2])):parseFloat(m[1]);
-  }
-  return prod;
-}
   /* ---------- circuit simulator ---------- */
   const S2=Math.SQRT1_2;
   const G={H:[[[S2,0],[S2,0]],[[S2,0],[-S2,0]]],X:[[[0,0],[1,0]],[[1,0],[0,0]]],Y:[[[0,0],[0,-1]],[[0,1],[0,0]]],Z:[[[1,0],[0,0]],[[0,0],[-1,0]]],S:[[[1,0],[0,0]],[[0,0],[0,1]]],T:[[[1,0],[0,0]],[[0,0],[S2,S2]]]};
@@ -6447,14 +6427,14 @@ function sci(s){
     const P=PROB[psel.value];pform.innerHTML='';
     P.f.forEach(f=>{const l=document.createElement('label');l.textContent=f.label;let i;
       if(f.sel){i=document.createElement('select');f.sel.forEach(x=>{const o=document.createElement('option');o.value=x;o.textContent=x;i.append(o)})}
-      else{i=document.createElement('input');i.type='text';i.inputMode='text';i.autocomplete='off';i.value=f.d;i.placeholder='e.g. 4x10^14'}
+      else{i=document.createElement('input');i.type='number';i.step='any';i.value=f.d}
       i.dataset.k=f.k;l.append(i);pform.append(l)});
     q('#qout').innerHTML='';
   }
   psel.onchange=form;form();
   q('#qcalc').onclick=()=>{
     const P=PROB[psel.value],v={};let bad='';
-    pform.querySelectorAll('[data-k]').forEach(i=>{if(i.tagName==='SELECT'){v[i.dataset.k]=i.value;return}const x=sci(i.value);if(!isFinite(x)){bad='Fill in every number (for example 4x10^14).'}v[i.dataset.k]=x});
+    pform.querySelectorAll('[data-k]').forEach(i=>{if(i.tagName==='SELECT')v[i.dataset.k]=i.value;else{const x=parseFloat(i.value);if(!isFinite(x)){bad='Fill in every number.'}v[i.dataset.k]=x}});
     if(!bad){if(v.L<=0||v.a<=0||v.dx<=0||v.lam<=0||v.f<=0||v.Z<=0||v.ni<1||v.nf<1||v.n<1&&psel.value==='box')bad='Use positive numbers (levels start at 1).'}
     if(!bad&&psel.value==='sho'&&v.n<0)bad='Level n cannot be negative.';
     if(bad){q('#qout').innerHTML='<p class="qerr">'+bad+'</p>';return}
@@ -8345,41 +8325,7 @@ def pimg_route():
         return got[0], 200, {"Content-Type": got[1], "Cache-Control": "private, max-age=3600"}
     why = " | ".join(getattr(_img_tl, "why", [])) or "No picture service is set up (CLOUDFLARE_ACCOUNT_ID + CLOUDFLARE_API_TOKEN, HF_TOKEN, TOGETHER_API_KEY, GEMINI_API_KEY or OPENAI_API_KEY)."
     return jsonify(error=_owner("The picture service did not answer. Try again in a moment.", "Picture failed: " + why)), 502
-def my_ask_llm(prompt, system=""):
-    msgs = []
-    if system:
-        msgs.append({"role": "system", "content": system})
-    msgs.append({"role": "user", "content": prompt})
-    return chat(msgs, 0.3, 4096, smart=True)
-@app.route("/api/3d/start", methods=["POST"])
-def start_3d():
-    if start_job is None:
-        return {"error": "3D is not available right now."}, 503
-    prompt = request.form.get("prompt", "")
-    mode = "ai" if request.form.get("mode") == "ai" else "quick"
-    path = None
-    photo = request.files.get("photo")
-    if photo:
-        path = f"/tmp/{uuid.uuid4().hex}.png"
-        photo.save(path)
-    return {"job": start_job(prompt, mode, path,
-                             ask_llm=my_ask_llm,
-                             text_to_image=None)}
 
-@app.route("/api/3d/status/<job>")
-def status_3d(job):
-    if job_status is None:
-        return {"error": "3D is not available right now."}, 503
-    return job_status(job)
-
-@app.route("/api/3d/download/<job>.<fmt>")
-def download_3d(job, fmt):
-    if job_status is None:
-        return {"error": "3D is not available right now."}, 503
-    s = job_status(job)
-    if s["status"] != "done" or fmt not in ("glb", "stl", "obj"):
-        return {"error": "not ready"}, 404
-    return Response(convert(s["path"], fmt), mimetype="application/octet-stream")
 @app.get("/dlimg")
 def dlimg_route():
     """Fetches a generated picture for download when the image host blocks direct browser downloads."""
