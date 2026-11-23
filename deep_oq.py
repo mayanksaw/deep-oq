@@ -2726,12 +2726,8 @@ def _openai_chat(messages, max_tokens=4096):
     except ImportError as exc:
         raise RuntimeError("Missing dependency for the OpenAI backup: pip install openai") from exc
     system, msgs = _to_claude_msgs(messages)
-    SYSTEM += (
-    " Write a fraction as (top)/(bottom) with brackets, for example (x+y+z)/z, and never chain ÷ signs. "
-    "Never write spacing codes like [4pt] or [2mm]. Never mention the user's own instructions, such as "
-    "'solve all three', in a heading or sentence. State only what you have proven: do not add optional "
-    "extra claims, and test every inequality you claim with one number before you write it."
-)
+   SYSTEM += (
+    " The conversation above is the chat so far.
     system += ("\n\nBACKUP MODE: you have no tools in this reply. Do calculations carefully by hand, double-check "
                "them, and never claim you ran code or a tool.")
     client = OpenAI(api_key=OPENAI_KEY, max_retries=3, timeout=600.0)
