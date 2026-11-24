@@ -14591,7 +14591,7 @@ _IND = ("Restaurant,Cafe,Bakery,Grocery store,Clothing store,Jewellery shop,Mobi
         "Organic farming,Online store,Dropshipping,Mobile app startup,Software agency,YouTube channel,Podcast,Blog,Cloud kitchen,"
         "Food truck,Catering,Laundry,Courier service,Taxi service,Solar business,Recycling business,Handmade crafts,Printing shop,"
         "Digital marketing agency,Education app,Fitness app,Fintech startup,Gaming studio").split(",")
-for _i in _IND:
+for _ind in _IND:
     for _k, _txt in (("business_plan", "Write a simple business plan for a %s: idea, customers, costs, income, risks and first steps."),
                      ("name_ideas", "Give 20 catchy business name ideas for a %s with a one-line reason each."),
                      ("slogans", "Write 15 short catchy slogans for a %s."),
@@ -14600,7 +14600,7 @@ for _i in _IND:
                      ("ad_copy", "Write 5 short ads for a %s with a clear call to action."),
                      ("customer_reply", "Write polite replies to 5 common customer messages for a %s."),
                      ("swot", "Write a simple SWOT analysis for a %s.")):
-        _ad(_i + "_" + _k, "Business", "%s: %s" % (_i, _k.replace("_", " ")), _txt % _i, "Add details like city, budget or goal")
+        _ad(_ind + "_" + _k, "Business", "%s: %s" % (_ind, _k.replace("_", " ")), _txt % _ind, "Add details like city, budget or goal")
 
 # 8. food and recipes
 _CUIS = ("Indian,North Indian,South Indian,Bengali,Gujarati,Punjabi,Rajasthani,Hyderabadi,Kerala,Chinese,Italian,Mexican,Thai,Japanese,"
@@ -14647,10 +14647,10 @@ _SIT = ("Birthday,Wedding,Anniversary,Engagement,Baby born,Get well soon,Congrat
         "Good night,Promotion,New job,Retirement,Farewell,Graduation,Exam result,Housewarming,Sympathy,Break the ice,Ask for leave,"
         "Ask for salary hike,Ask for a refund,Reject an offer politely,Say no politely,Follow up,Remind a friend,Invite to party,"
         "Complain to a company,Praise a colleague,Welcome a new member,Wish a teacher,Wish a boss,Wish a client").split(",")
-for _s in _SIT:
-    _ad("whatsapp_" + _s, "Messages", "WhatsApp: " + _s, "Write 5 short WhatsApp messages for this situation: %s. Use the details given." % _s, "Names and details")
-    _ad("email_" + _s, "Messages", "Email: " + _s, "Write a clear email for this situation: %s. Use the details given. Include a subject line." % _s, "Names and details")
-    _ad("formal_letter_" + _s, "Messages", "Formal letter: " + _s, "Write a formal letter for this situation: %s. Use the details given." % _s, "Names and details")
+for _sit in _SIT:
+    _ad("whatsapp_" + _sit, "Messages", "WhatsApp: " + _sit, "Write 5 short WhatsApp messages for this situation: %s. Use the details given." % _sit, "Names and details")
+    _ad("email_" + _sit, "Messages", "Email: " + _sit, "Write a clear email for this situation: %s. Use the details given. Include a subject line." % _sit, "Names and details")
+    _ad("formal_letter_" + _sit, "Messages", "Formal letter: " + _sit, "Write a formal letter for this situation: %s. Use the details given." % _sit, "Names and details")
 
 # 13. text utilities
 _UTIL = (("fix_grammar", "Fix grammar and spelling. Keep the meaning and style. Output only the corrected text."),
