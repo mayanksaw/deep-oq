@@ -160,11 +160,11 @@ PG_SCHEMA = [
 def _pg_open():
     from psycopg_pool import ConnectionPool  # pip install "psycopg[binary,pool]"
     opts = dict(
-        min_size=1, max_size=5, open=False,
-        max_lifetime=300,       # recycle every connection after 5 minutes
-        max_idle=60,            # close connections idle for more than 1 minute
-        reconnect_timeout=30,
-        timeout=30,
+       min_size=1, max_size=10, open=False,
+       max_lifetime=240,
+       max_idle=30,
+       reconnect_timeout=10,
+       timeout=15,
         kwargs={"autocommit": True, "connect_timeout": 10,
                 "keepalives": 1, "keepalives_idle": 30,
                 "keepalives_interval": 10, "keepalives_count": 5},
