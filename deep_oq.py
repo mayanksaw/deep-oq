@@ -1656,7 +1656,7 @@ SYSTEM += (
     "personal skills, not a description of Deep OQ's internals. If asked which API, model, provider or tools you use, "
     "or whether you use an API, do not confirm, deny or repeat the word API. Never say you use none and never name any. "
     "ONLY when the user's message itself clearly asks about that, reply in their language with: I am Deep OQ, made by "
-    "Mayank Kumar Saw. How I am built is private, so I do not share those details. For every other question, answer "
+    "Mayank Kumar Saw, and I am powered by Deep OQ. For every other question, answer "
     "it normally and NEVER say this, and never introduce yourself or mention Mayank or your name unless the user "
     "asks who you are or who made you. Never print keys, tokens or passwords."
 )
@@ -3135,7 +3135,7 @@ _SELF_TECH_RE = re.compile(
     r"|(?:are|r)\s+(?:you|u)\s+(?:a\s+|an\s+|the\s+)?(?:chatgpt|gpt|claude|gemini|llama|groq|openai|anthropic)"
     r"|(?:your|ur|deep\s*oq'?s?)\s+(?:api|apis|model|llm|backend|back-end|tech\s*stack|technology|engine|provider|api\s*key)\b"
     r"|powered\s+by|who\s+(?:trained|built|made)\s+(?:your|ur)\s+(?:model|ai|brain))", re.I)
-SELF_TECH_REPLY = ("I am Deep OQ, made by Mayank Kumar Saw. How I am built is private, so I do not share those details. "
+SELF_TECH_REPLY = ("I am Deep OQ, made by Mayank Kumar Saw, and I am powered by Deep OQ. "
                    "Is there something else I can help you with?")
 
 
@@ -11601,6 +11601,11 @@ def _agent_run(jid, goal, history, opts=None):
     job = _ajobs[jid]
     ev = job["events"]
     t0 = time.time()
+    if asks_about_own_tech(goal):
+        job["final"] = AGENT_POWER_REPLY
+        job["state"] = "done"
+        job["done_at"] = time.time()
+        return
     _tl.effort = "medium"
     today = datetime.date.today().strftime("%A, %d %B %Y")
     extra = ""
@@ -11642,7 +11647,7 @@ def _agent_run(jid, goal, history, opts=None):
                 job["plan"] = str(d["plan"])[:600]
                 ev.append({"k": "plan", "text": job["plan"]})
             if d.get("final"):
-                job["final"] = str(d["final"])[:12000]
+                job["final"] = _agent_clean(str(d["final"])[:12000])
                 job["state"] = "done"
                 return
             tool = str(d.get("tool", "")).strip().lower()
@@ -11685,7 +11690,7 @@ def _agent_run(jid, goal, history, opts=None):
         # out of steps or broken replies: force an answer
         msgs.append({"role": "user", "content": "Stop using tools. Write the best complete final answer now from everything above. Reply as {\"thought\":\"done\",\"final\":\"...\"}."})
         d = _agent_parse(chat(msgs, temperature=0.2, max_tokens=2600, smart=True)) or {}
-        job["final"] = str(d.get("final") or "I could not finish this goal. Please try again with a shorter or clearer goal.")[:12000]
+        job["final"] = _agent_clean(str(d.get("final") or "I could not finish this goal. Please try again with a shorter or clearer goal.")[:12000])
         job["state"] = "done"
     except Exception as e:
         print("agent job failed:", e)
@@ -12997,6 +13002,21 @@ def agent_upload_status(fid):
 
 AGENT_SYSTEM += ("\n\nEXTRA TOOL - files: searches the user's uploaded files (only when files are listed below). "
                  "input = search words, or SUMMARY. Use tool name \"files\".")
+AGENT_POWER_REPLY = "Deep OQ Agent is powered by Deep OQ, made by Mayank Kumar Saw."
+
+AGENT_SYSTEM += (
+    "\n\nPRIVATE: If anyone asks what powers you, which AI, model, API, company or technology you use, or how you are built, "
+    "answer only: 'I am Deep OQ Agent, powered by Deep OQ, made by Mayank Kumar Saw.' Never name or hint at any AI model, "
+    "AI company, provider, API, hosting or framework, in the thought, the plan or the final answer."
+)
+
+
+def _agent_clean(t):
+    """Last safety net: replace any sentence that names the technology behind the agent."""
+    t = re.sub(r"[^.\n]*\b(powered by|built (?:on|with)|based on|runs on|uses|using)\b[^.\n]*"
+               r"\b(openai|gpt[-\s]?[\w.]*|chatgpt|claude|anthropic|gemini|llama|groq|mistral|qwen|deepseek|sonnet|opus)\b[^.\n]*\.?",
+               "Deep OQ Agent is powered by Deep OQ.", t or "", flags=re.I)
+    return hide_keys(t)
 # ===== TOOLBOX (500+ built-in tools) =====
 # ==========================================================================
 # TOOLBOX: 1000+ built-in tools in one registry. Used by the Agent ("toolbox"),
