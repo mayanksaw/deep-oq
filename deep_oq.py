@@ -2758,7 +2758,7 @@ def _claude_chat(messages, temperature=0.3, max_tokens=4096, smart=False, on_tex
 
 
 # ---------- OpenAI backup (only used when Claude fails) ----------
-def _openai_chat(messages, max_tokens=4096):
+def _openai_chat(messages, max_tokens=4096, smart=False, on_text=None):
     try:
         from openai import OpenAI
     except ImportError as exc:
