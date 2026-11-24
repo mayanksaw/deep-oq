@@ -4379,6 +4379,11 @@ body:not(.chatting) #v-chat.on{padding-top:12vh;padding-bottom:0}
   border-radius:999px;padding:7px 14px;font:700 13.5px var(--ui);text-decoration:none;display:inline-block;margin:6px 6px 6px 0}
 .agfinal a.agb2:hover,.agapp a.agb2:hover{background:#7C5CFF}
 
+/* Agent: links inside the final answer */
+.agfinal a:not(.agb2),.agfinal a:not(.agb2):visited{display:inline;padding:0;margin:0;background:none;border-radius:0;
+  color:#7CFFD0 !important;font-family:inherit;font-weight:600;font-size:inherit;text-decoration:underline;text-underline-offset:3px;word-break:break-all}
+.agfinal a:not(.agb2):hover{color:#fff !important}
+
 [hidden]{display:none!important}
 
 </style>
