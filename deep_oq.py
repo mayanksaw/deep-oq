@@ -14290,8 +14290,8 @@ AI_TOOLS = {}
 
 
 def _slug(s):
-    return re.sub(r"[^a-z0-9]+", "_", str(s).lower()).strip("_")
-
+    s = str(s).lower().replace("c++", "cpp").replace("c#", "csharp")
+    return re.sub(r"[^a-z0-9]+", "_", s).strip("_")
 
 def _at(name, cat, desc, prompt, ph="Paste your text here"):
     name = _slug(name)
