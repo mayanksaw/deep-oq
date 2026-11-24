@@ -14931,7 +14931,7 @@ pre{white-space:pre-wrap;word-break:break-word;background:#151A45;border:1px sol
 <div class="wrap"><div class="side"><input id="q" placeholder="Search tools (translate, resume, python...)"><div class="cats" id="cats"></div><div id="list"></div></div>
 <div class="main"><h2 id="tt">Pick a tool on the left</h2><p class="muted" id="td"></p>
 <textarea id="in" rows="9" placeholder="Pick a tool first"></textarea>
-<div><button class="btn" id="run">Run</button><button class="btn g" id="imp">Improve prompt</button><button class="btn g" id="cp">Copy result</button></div><pre id="out"></pre></div></div>
+<div><button class="btn" id="run">Run</button><button class="btn g" id="imp">Improve prompt</button><button class="btn g" id="cp">Copy result</button><button class="btn g" id="sp">🔊 Listen</button></div><pre id="out"></pre></div></div>
 <script>
 const $=s=>document.querySelector(s);let T=[],cat='All',cur=null;
 async function api(u,b){const o={headers:{'Content-Type':'application/json','X-Access-Key':localStorage.ak||''}};if(b){o.method='POST';o.body=JSON.stringify(b)}
@@ -14940,13 +14940,29 @@ function cats(c){const box=$('#cats');box.innerHTML='';['All',...Object.keys(c)]
 function draw(){const f=$('#q').value.toLowerCase().trim(),L=$('#list');L.innerHTML='';
   T.filter(t=>(cat==='All'||t.cat===cat)&&(!f||(t.name+' '+t.desc).toLowerCase().includes(f))).forEach(t=>{
     const b=document.createElement('button');b.className='it'+(cur&&cur.name===t.name?' on':'');b.textContent=t.desc;
-    b.onclick=()=>{cur=t;$('#tt').textContent=t.desc;$('#td').textContent='Category: '+t.cat;$('#in').placeholder=t.ph;draw()};L.appendChild(b)})}
+    b.onclick=()=>{cur=t;stopSpeak();$('#tt').textContent=t.desc;$('#td').textContent='Category: '+t.cat;$('#in').placeholder=t.ph;draw()};L.appendChild(b)})}
 $('#q').oninput=draw;
 $('#run').onclick=async()=>{if(!cur){$('#out').textContent='Pick a tool first.';return}
   $('#run').disabled=true;$('#out').textContent='Working...';
   try{const j=await api('/api/aitools/run',{name:cur.name,input:$('#in').value});$('#out').textContent=j.result}catch(e){$('#out').textContent=e.message}
   $('#run').disabled=false;loadMe()};
 $('#cp').onclick=()=>navigator.clipboard.writeText($('#out').textContent);
+const VL={Hindi:'hi-IN',Bengali:'bn-IN',Tamil:'ta-IN',Telugu:'te-IN',Marathi:'mr-IN',Gujarati:'gu-IN',Punjabi:'pa-IN',Urdu:'ur-PK',Kannada:'kn-IN',Malayalam:'ml-IN',Nepali:'ne-NP',Spanish:'es-ES',French:'fr-FR',German:'de-DE',Portuguese:'pt-PT',Italian:'it-IT',Russian:'ru-RU',Arabic:'ar-SA',Turkish:'tr-TR',Indonesian:'id-ID',Malay:'ms-MY',Dutch:'nl-NL',Polish:'pl-PL',Swedish:'sv-SE',Norwegian:'nb-NO',Danish:'da-DK',Finnish:'fi-FI',Greek:'el-GR',Hebrew:'he-IL',Persian:'fa-IR',Thai:'th-TH',Vietnamese:'vi-VN',Japanese:'ja-JP',Korean:'ko-KR','Chinese (Simplified)':'zh-CN','Chinese (Traditional)':'zh-TW',Swahili:'sw-KE',Ukrainian:'uk-UA',Czech:'cs-CZ',Hungarian:'hu-HU',Romanian:'ro-RO',Bulgarian:'bg-BG',Serbian:'sr-RS',Croatian:'hr-HR',Filipino:'fil-PH',Sinhala:'si-LK',Afrikaans:'af-ZA',Catalan:'ca-ES'};
+let speaking=false;
+function stopSpeak(){try{speechSynthesis.cancel()}catch(e){}speaking=false;$('#sp').textContent='🔊 Listen'}
+$('#sp').onclick=()=>{
+  if(!('speechSynthesis' in window)){alert('This browser cannot read text aloud.');return}
+  if(speaking){stopSpeak();return}
+  const t=$('#out').textContent.trim();if(!t)return;
+  const m=cur&&/^Translate to (.+)$/.exec(cur.desc);
+  const lang=m?VL[m[1]]:'en-IN';
+  if(!lang){alert('Voice is not available for this language.');return}
+  const u=new SpeechSynthesisUtterance(t);u.lang=lang;
+  const vs=speechSynthesis.getVoices();
+  const v=vs.find(x=>x.lang.replace('_','-')===lang)||vs.find(x=>x.lang.toLowerCase().startsWith(lang.slice(0,2)));
+  if(v)u.voice=v;
+  u.onend=u.onerror=stopSpeak;
+  speechSynthesis.cancel();speaking=true;$('#sp').textContent='⏹ Stop';speechSynthesis.speak(u)};
 let undoText=null;
 $('#in').addEventListener('input',()=>{undoText=null;$('#imp').textContent='Improve prompt'});
 $('#imp').onclick=async()=>{
