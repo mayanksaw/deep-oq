@@ -4411,7 +4411,7 @@ body:not(.chatting) #v-chat.on{padding-top:12vh;padding-bottom:0}
     <button class="tab" type="button" data-view="quantum">Quantum</button>
     <button class="tab" type="button" data-view="agent">Agent</button>
     <a class="tab" href="/vr" style="text-decoration:none;display:inline-flex;align-items:center;background:linear-gradient(135deg,#00c9a7,#2f8cff);color:#04122b;font-weight:700">VR</a>
-    <a class="tab" href="/tools" style="text-decoration:none;display:inline-flex;align-items:center;background:#fff;color:#111;font-weight:700">AI Tools</a>
+    <a class="tab" href="/tools" style="text-decoration:none;display:inline-flex;align-items:center;color:#fff;font-weight:600">AI Tools</a>
   </nav>
   <div class="tools" id="chatTools">
     <button class="btn" id="kbBtn" type="button" aria-haspopup="dialog">Knowledge <span class="badge" id="count">0</span></button>
@@ -14489,6 +14489,300 @@ for _line in _MISC.splitlines():
     _n, _de, _pr = _line.split("|", 2)
     _at(_n, "General", _de, _pr)
 
+# ---------------------------------------------------------------- 1000+ more AI tools (template packs)
+def _ad(name, cat, desc, prompt, ph="Paste your text here"):
+    if _slug(name) not in AI_TOOLS:
+        _at(name, cat, desc, prompt, ph)
+
+
+# 1. language packs: explain / summarize / proofread in any language
+for _l in _LANGS:
+    _ad("explain_in_" + _l, "Translate", "Explain in " + _l,
+        "Explain the text in simple words in %s. Output only the explanation." % _l)
+    _ad("summarize_in_" + _l, "Translate", "Summarize in " + _l,
+        "Summarize the text in %s in a few short lines. Output only the summary." % _l)
+    _ad("proofread_" + _l, "Translate", "Proofread " + _l,
+        "The text is in %s. Fix spelling, grammar and punctuation. Keep the meaning. Output only the corrected text." % _l)
+    _ad("write_email_in_" + _l, "Translate", "Write an email in " + _l,
+        "Write a clear, polite email in %s about the topic given. Output only the email." % _l)
+
+# 2. more code technologies x 8 actions
+_TECH = ("Ruby,Scala,R,MATLAB,Perl,Lua,Haskell,Elixir,Julia,Objective-C,PowerShell,Assembly,COBOL,Fortran,Solidity,Groovy,Clojure,"
+         "F#,VBA,Flutter,React,Vue,Angular,Node.js,Django,Flask,FastAPI,Spring Boot,Laravel,ASP.NET,Docker,Kubernetes,Terraform,"
+         "Git,Regex,GraphQL,MongoDB,PostgreSQL,MySQL,Redis,Firebase,TensorFlow,PyTorch,Pandas,NumPy,Excel formulas,Google Sheets,"
+         "Tailwind CSS,Bootstrap,jQuery,Next.js,Express.js,Unity C#,Arduino,Raspberry Pi,Android Studio,Selenium,Linux commands,"
+         "AWS,Azure,Google Cloud,Ansible,Nginx,REST API,WebSocket,Streamlit,Power BI,Tableau,Apache Spark,OpenCV,Scikit-learn,"
+         "WordPress,Shopify,Blender Python,Discord bot,Telegram bot").split(",")
+_ACT = (("write", "Write complete, working %s code for the task. Include a short usage example."),
+        ("debug", "Find and fix every bug in this %s code. Give the corrected code and a short list of what was wrong."),
+        ("explain", "Explain this %s code step by step for a beginner."),
+        ("optimize", "Optimize this %s code. Show the improved version and say why it is better."),
+        ("comment", "Add clear comments to this %s code without changing what it does."),
+        ("unit_tests", "Write tests for this %s code, including edge cases."),
+        ("review", "Review this %s code for bugs, security and style. Give fixes."),
+        ("interview_questions", "Give 10 interview questions about %s with short model answers."),
+        ("cheat_sheet", "Make a short cheat sheet for %s covering the most used things, with tiny examples."),
+        ("project_ideas", "Give 10 beginner to advanced project ideas using %s, with one line on what to build in each."))
+for _tc in _TECH:
+    for _k, _txt in _ACT:
+        _ad(_tc + "_" + _k, "Code", "%s: %s" % (_tc, _k.replace("_", " ")), _txt % _tc, "Describe the task or paste the code")
+
+# 3. code conversion between popular languages
+_CV = "Python,JavaScript,TypeScript,Java,C++,C,C#,Go,Rust,PHP,Kotlin,Swift".split(",")
+for _a in _CV:
+    for _b in _CV:
+        if _a != _b:
+            _ad("convert_%s_to_%s" % (_a, _b), "Code", "Convert %s to %s" % (_a, _b),
+                "Convert this %s code to %s. Keep the behaviour the same. Output only the %s code." % (_a, _b, _b),
+                "Paste your %s code" % _a)
+
+# 4. more study subjects x 6 actions
+_SUBJ2 = ("Science,Social Science,Sanskrit,Urdu,Bengali,Tamil,Telugu,Marathi,Gujarati,Punjabi,Kannada,Malayalam,Biotechnology,"
+          "Microbiology,Biochemistry,Anatomy,Physiology,Pharmacology,Pathology,Nursing,Medical Science,Agriculture,Horticulture,"
+          "Civil Engineering,Mechanical Engineering,Electrical Engineering,Electronics,Data Structures,Algorithms,Operating Systems,"
+          "DBMS,Computer Networks,Machine Learning,Artificial Intelligence,Cyber Security,Cloud Computing,Web Development,Linear Algebra,"
+          "Discrete Maths,Probability,Differential Equations,Numerical Methods,Astronomy,Geology,Ecology,Marine Biology,Law,"
+          "Constitution of India,International Relations,Public Administration,Management,Marketing,Finance,Banking,Insurance,"
+          "Taxation,Auditing,Commerce,Journalism,Mass Communication,Fine Arts,Music Theory,Architecture,Fashion Design,Hotel Management,"
+          "Education,Child Development,Sports Science,Yoga,Ayurveda,Mythology,Literature,Creative Writing,Public Speaking,Logic").split(",")
+for _sb in _SUBJ2:
+    for _k, _txt in (("explain", "Explain the topic about %s clearly with a simple example."),
+                     ("quiz", "Make a 10-question quiz on %s for the topic given, with an answer key at the end."),
+                     ("notes", "Make short revision notes on %s for the topic given."),
+                     ("flashcards", "Make 15 question and answer flashcards on %s for the topic given."),
+                     ("important_questions", "List 10 important exam questions on %s for the topic given, with brief answers."),
+                     ("eli5", "Explain the %s topic like I am 10 years old.")):
+        _ad(_sb + "_" + _k, "Study", "%s: %s" % (_sb, _k.replace("_", " ")), _txt % _sb, "Type the topic or paste your notes")
+
+# 5. exam prep
+_EXAMS = ("JEE Main,JEE Advanced,NEET,UPSC,SSC CGL,SSC CHSL,IBPS PO,IBPS Clerk,SBI PO,RBI Grade B,CAT,GATE,CLAT,NDA,CDS,CUET,"
+          "Railway RRB NTPC,Railway Group D,State PSC,UGC NET,CTET,TET,Class 10 Board,Class 12 Board,SAT,GRE,GMAT,IELTS,TOEFL,"
+          "CA Foundation,CS Executive,CMA,NID DAT,NIFT,AIIMS,Defence Exams,Police Exams,Teaching Exams").split(",")
+for _ex in _EXAMS:
+    for _k, _txt in (("study_plan", "Make a realistic day by day study plan for %s from the details given."),
+                     ("practice_questions", "Write 10 practice questions in the style of %s on the topic given, with answers."),
+                     ("strategy", "Give a clear preparation strategy for %s based on the details given."),
+                     ("tips", "Give 10 practical tips to score high in %s."),
+                     ("revision_notes", "Make quick revision notes for %s on the topic given.")):
+        _ad(_ex + "_" + _k, "Exams", "%s: %s" % (_ex, _k.replace("_", " ")), _txt % _ex, "Topic, subject or your situation")
+
+# 6. careers
+_ROLES = ("Teacher,Doctor,Nurse,Pharmacist,Lawyer,Accountant,Chartered Accountant,Bank Clerk,Bank Manager,Civil Engineer,"
+          "Mechanical Engineer,Electrical Engineer,Electronics Engineer,Architect,Interior Designer,Graphic Designer,UI UX Designer,"
+          "Video Editor,Photographer,Content Writer,Copywriter,Journalist,Digital Marketer,SEO Specialist,Social Media Manager,"
+          "Sales Executive,Business Development Manager,HR Manager,Recruiter,Operations Manager,Project Manager,Business Analyst,"
+          "Machine Learning Engineer,AI Engineer,Cyber Security Analyst,Cloud Engineer,Database Administrator,QA Tester,"
+          "Game Developer,Mobile App Developer,Full Stack Developer,Frontend Developer,Backend Developer,Customer Support Executive,"
+          "Receptionist,Hotel Manager,Chef,Pilot,Cabin Crew,Police Officer,Army Officer,Fresher,Intern,Entrepreneur,Freelancer,"
+          "Driver,Electrician,Mechanic,Farmer,Shop Owner,Delivery Partner,Fitness Trainer,Dietitian,Psychologist,Social Worker").split(",")
+for _r in _ROLES:
+    for _k, _txt in (("interview", "Give 10 likely interview questions for a %s role with short strong sample answers."),
+                     ("resume", "Write 8 strong resume bullet points for a %s using the details given."),
+                     ("cover_letter", "Write a short, confident cover letter for a %s role using the details given."),
+                     ("linkedin_bio", "Write a LinkedIn About section for a %s using the details given."),
+                     ("skills_to_learn", "List the top skills a %s should learn this year and how to learn each one."),
+                     ("daily_plan", "Make a productive daily work plan for a %s from the details given.")):
+        _ad(_r + "_" + _k, "Career", "%s: %s" % (_r, _k.replace("_", " ")), _txt % _r, "Your details, experience or the job")
+
+# 7. business ideas and marketing by industry
+_IND = ("Restaurant,Cafe,Bakery,Grocery store,Clothing store,Jewellery shop,Mobile shop,Salon,Gym,Yoga studio,Coaching centre,School,"
+        "Hospital,Clinic,Pharmacy,Real estate,Travel agency,Hotel,Photography studio,Wedding planner,Event management,Car service,"
+        "Tailoring,Furniture shop,Hardware shop,Electronics shop,Bookshop,Stationery shop,Pet shop,Garden nursery,Dairy,Poultry farm,"
+        "Organic farming,Online store,Dropshipping,Mobile app startup,Software agency,YouTube channel,Podcast,Blog,Cloud kitchen,"
+        "Food truck,Catering,Laundry,Courier service,Taxi service,Solar business,Recycling business,Handmade crafts,Printing shop,"
+        "Digital marketing agency,Education app,Fitness app,Fintech startup,Gaming studio").split(",")
+for _i in _IND:
+    for _k, _txt in (("business_plan", "Write a simple business plan for a %s: idea, customers, costs, income, risks and first steps."),
+                     ("name_ideas", "Give 20 catchy business name ideas for a %s with a one-line reason each."),
+                     ("slogans", "Write 15 short catchy slogans for a %s."),
+                     ("marketing_plan", "Make a low-budget 30 day marketing plan for a %s."),
+                     ("social_posts", "Write 7 social media posts for a %s, one for each day of the week."),
+                     ("ad_copy", "Write 5 short ads for a %s with a clear call to action."),
+                     ("customer_reply", "Write polite replies to 5 common customer messages for a %s."),
+                     ("swot", "Write a simple SWOT analysis for a %s.")):
+        _ad(_i + "_" + _k, "Business", "%s: %s" % (_i, _k.replace("_", " ")), _txt % _i, "Add details like city, budget or goal")
+
+# 8. food and recipes
+_CUIS = ("Indian,North Indian,South Indian,Bengali,Gujarati,Punjabi,Rajasthani,Hyderabadi,Kerala,Chinese,Italian,Mexican,Thai,Japanese,"
+         "Korean,French,Mediterranean,American,Lebanese,Turkish,Street food,Vegan,Vegetarian,Jain,Keto,High protein,Baking,Desserts,"
+         "Breakfast,Lunch box,Dinner,Snacks,Smoothies,Soups,Salads,Chutneys,Pickles,Sweets").split(",")
+for _c in _CUIS:
+    _ad("recipe_" + _c, "Food", "Recipe: " + _c, "Give a simple %s recipe for the dish or ingredients given: ingredients with amounts, then short steps." % _c, "Dish name or ingredients you have")
+    _ad("meal_plan_" + _c, "Food", "7 day meal plan: " + _c, "Make a 7 day %s meal plan using the preferences given. Keep it simple and affordable." % _c, "Preferences, budget, family size")
+    _ad("ideas_" + _c, "Food", "10 ideas: " + _c, "Give 10 %s dish ideas for the situation given with one line each." % _c, "Occasion or ingredients")
+
+# 9. health and fitness (general wellness only)
+_HEALTH = ("Weight loss,Muscle gain,Home workout,Gym routine,Yoga,Stretching,Running,Walking,Cycling,Swimming,Posture,Sleep habits,"
+           "Stress relief,Meditation,Focus and study habits,Healthy snacks,Hydration,Morning routine,Evening routine,Office exercises,"
+           "Senior fitness,Kids fitness,Women fitness,Beginner fitness,Skin care routine,Hair care routine,Dental care,Eye care,"
+           "Immunity,Energy boost").split(",")
+for _h in _HEALTH:
+    _ad("plan_" + _h, "Health", "Plan: " + _h, "Make a simple, safe, practical %s plan from the details given. Add one short line to check with a doctor if there is any medical issue." % _h, "Your age, goal and time")
+    _ad("tips_" + _h, "Health", "Tips: " + _h, "Give 10 short practical tips on %s. Add one short line to check with a doctor if there is any medical issue." % _h)
+
+# 10. travel
+_PLACES = ("Delhi,Mumbai,Kolkata,Chennai,Bengaluru,Hyderabad,Jaipur,Udaipur,Goa,Kerala,Manali,Shimla,Leh Ladakh,Kashmir,Rishikesh,"
+           "Varanasi,Agra,Amritsar,Darjeeling,Sikkim,Ooty,Munnar,Andaman,Mysore,Pondicherry,Puri,Hampi,Dubai,Singapore,Bangkok,Bali,"
+           "Maldives,Nepal,Bhutan,Sri Lanka,Paris,London,Rome,Switzerland,Tokyo,New York,Australia").split(",")
+for _p in _PLACES:
+    _ad("trip_" + _p, "Travel", "Trip plan: " + _p, "Make a day by day trip plan for %s using the days and budget given. Include food and local tips." % _p, "Days, budget, who is travelling")
+    _ad("packing_" + _p, "Travel", "Packing list: " + _p, "Make a packing list for a trip to %s for the season and days given." % _p, "Season and days")
+    _ad("places_" + _p, "Travel", "Places to see: " + _p, "List the top 10 places to see in %s with one line each." % _p, "Type anything or your interests")
+
+# 11. fun and creative by theme
+_THEMES = ("Friendship,Love,Family,Mother,Father,Teacher,Nature,Rain,Moon,Ocean,Mountains,Success,Hard work,Dreams,Courage,Hope,"
+           "Freedom,Peace,Time,Money,Technology,Space,Animals,School life,College life,Office life,Monday,Weekend,Food,Cricket,"
+           "Football,Music,Travel,Winter,Summer,Diwali,Holi,Eid,Christmas,Independence Day,Republic Day,Teachers Day,Childrens Day,"
+           "New Year,Navratri,Raksha Bandhan,Ganesh Chaturthi,Onam,Pongal,Baisakhi").split(",")
+for _t in _THEMES:
+    _ad("poem_about_" + _t, "Fun", "Poem about " + _t, "Write an original short poem about %s, adding the details given." % _t, "Add names or details, or type anything")
+    _ad("story_about_" + _t, "Fun", "Short story about " + _t, "Write an original short story about %s in simple words, using the details given." % _t, "Add names or details, or type anything")
+    _ad("quotes_about_" + _t, "Fun", "Quotes about " + _t, "Write 10 original short quotes about %s." % _t)
+    _ad("jokes_about_" + _t, "Fun", "Jokes about " + _t, "Write 8 clean, funny jokes about %s." % _t)
+    _ad("wishes_" + _t, "Fun", "Wishes: " + _t, "Write 5 warm short messages about %s for the person or situation given." % _t, "Person's name or situation")
+    _ad("caption_" + _t, "Fun", "Captions: " + _t, "Write 10 short social media captions about %s." % _t)
+
+# 12. messages for situations
+_SIT = ("Birthday,Wedding,Anniversary,Engagement,Baby born,Get well soon,Congratulations,Good luck,Thank you,Sorry,Miss you,Good morning,"
+        "Good night,Promotion,New job,Retirement,Farewell,Graduation,Exam result,Housewarming,Sympathy,Break the ice,Ask for leave,"
+        "Ask for salary hike,Ask for a refund,Reject an offer politely,Say no politely,Follow up,Remind a friend,Invite to party,"
+        "Complain to a company,Praise a colleague,Welcome a new member,Wish a teacher,Wish a boss,Wish a client").split(",")
+for _s in _SIT:
+    _ad("whatsapp_" + _s, "Messages", "WhatsApp: " + _s, "Write 5 short WhatsApp messages for this situation: %s. Use the details given." % _s, "Names and details")
+    _ad("email_" + _s, "Messages", "Email: " + _s, "Write a clear email for this situation: %s. Use the details given. Include a subject line." % _s, "Names and details")
+    _ad("formal_letter_" + _s, "Messages", "Formal letter: " + _s, "Write a formal letter for this situation: %s. Use the details given." % _s, "Names and details")
+
+# 13. text utilities
+_UTIL = (("fix_grammar", "Fix grammar and spelling. Keep the meaning and style. Output only the corrected text."),
+         ("make_shorter", "Make the text about half as long. Keep the key points. Output only the new text."),
+         ("make_longer", "Expand the text with useful detail. Keep the meaning. Output only the new text."),
+         ("simplify", "Rewrite the text in very simple words a child can understand."),
+         ("make_professional", "Rewrite the text so it sounds professional and polished."),
+         ("bullet_summary", "Summarize the text as 5 to 8 short lines starting with a dash."),
+         ("one_line_summary", "Summarize the text in one sentence."),
+         ("key_points", "Extract the key points from the text as short numbered lines."),
+         ("action_items", "Extract all action items, who owns them and any dates, as short numbered lines."),
+         ("title_ideas", "Give 10 title ideas for the text."),
+         ("hashtag_ideas", "Give 20 relevant hashtags for the text."),
+         ("keywords", "Extract the 15 most important keywords from the text."),
+         ("sentiment", "Say if the text is positive, negative or neutral and explain in two lines."),
+         ("tone_check", "Describe the tone of the text and suggest how to improve it."),
+         ("paraphrase", "Paraphrase the text fully in different words with the same meaning."),
+         ("remove_filler", "Remove filler words and repetition. Keep the meaning."),
+         ("active_voice", "Rewrite the text using active voice."),
+         ("add_examples", "Add 3 simple examples to the text."),
+         ("questions_from_text", "Write 10 questions with answers based on the text."),
+         ("true_false_quiz", "Write 10 true or false questions with answers from the text."),
+         ("fill_blanks", "Write 10 fill in the blank questions with answers from the text."),
+         ("mcq_from_text", "Write 10 multiple choice questions with four options and the answer from the text."),
+         ("headline_writer", "Write 10 strong headlines for the text."),
+         ("email_subject_lines", "Write 10 email subject lines for the text."),
+         ("pros_and_cons", "List the pros and cons of the idea or decision given."),
+         ("decision_helper", "Help decide between the options given. Compare them simply and suggest one with reasons."),
+         ("explain_like_10", "Explain the text like I am 10 years old."),
+         ("explain_like_expert", "Explain the text at an expert level with correct terms."),
+         ("analogy_maker", "Explain the idea using 3 simple everyday analogies."),
+         ("counter_arguments", "Give the strongest arguments against the view given, politely."),
+         ("debate_points", "Give 5 points for and 5 points against the topic."),
+         ("speech_from_points", "Turn these points into a 2 minute speech."),
+         ("story_from_points", "Turn these points into a short story."),
+         ("meeting_notes", "Turn the text into clean meeting notes with decisions and next steps."),
+         ("to_do_list", "Turn the text into a clear to do list in priority order."),
+         ("daily_schedule", "Turn the tasks given into a realistic daily schedule."),
+         ("name_generator", "Give 20 name ideas that fit the description given."),
+         ("username_ideas", "Give 20 cool username ideas based on the details given."),
+         ("password_hint_tips", "Give tips to create a strong password and remember it safely. Do not ask for real passwords."),
+         ("acronym_maker", "Make 10 meaningful acronyms for the words or idea given."),
+         ("rhyme_finder", "List 30 rhyming words for the word given, grouped by sound."),
+         ("synonyms", "Give 15 synonyms for the word with a short note on each."),
+         ("antonyms", "Give 10 antonyms for the word."),
+         ("word_meaning", "Explain the meaning of the word simply with 3 example sentences."),
+         ("idioms", "Explain the idiom or proverb and give 2 example sentences."),
+         ("word_of_the_day", "Teach 5 useful new English words on the topic given, with meaning and example."),
+         ("sentence_builder", "Write 10 example sentences using the word or phrase given."),
+         ("vocabulary_quiz", "Make a 10 question vocabulary quiz from the text with answers."),
+         ("spoken_english", "Rewrite the text in natural spoken English and suggest 5 useful phrases."),
+         ("pronunciation_help", "Give simple pronunciation help for the words given, written with easy letters."),
+         ("excel_formula", "Write the Excel formula for the task and explain it in one line."),
+         ("sql_query", "Write the SQL query for the task and explain it in one line."),
+         ("regex_maker", "Write a regular expression for the task with 3 examples."),
+         ("cron_expression", "Write the cron expression for the schedule given and explain it."),
+         ("math_step_by_step", "Solve the maths problem step by step in plain text."),
+         ("unit_converter", "Convert the units given and show the working briefly."),
+         ("percentage_helper", "Solve the percentage problem step by step."),
+         ("loan_emi_explainer", "Explain how EMI is worked out for the loan details given and show a rough example."),
+         ("budget_planner", "Make a simple monthly budget from the income and expenses given."),
+         ("savings_plan", "Make a simple savings plan for the goal given."),
+         ("gst_helper", "Explain how GST applies to the example given and show the working."),
+         ("invoice_text", "Write clear invoice text from the details given."),
+         ("business_email_reply", "Write a polite professional reply to the email given."),
+         ("negotiation_script", "Write a polite negotiation script for the situation given."),
+         ("customer_complaint_reply", "Write a calm, helpful reply to this customer complaint."),
+         ("review_reply", "Write a polite reply to this customer review."),
+         ("product_description", "Write an attractive product description from the details given."),
+         ("amazon_listing", "Write a product title, 5 bullet points and a description for an online listing from the details given."),
+         ("youtube_title_tags", "Write 10 YouTube titles and 20 tags for the video topic given."),
+         ("reel_ideas", "Give 10 short video ideas with a hook line for the topic given."),
+         ("instagram_bio", "Write 5 short Instagram bio options from the details given."),
+         ("podcast_outline", "Write a simple podcast episode outline for the topic given."),
+         ("lesson_plan", "Write a 40 minute lesson plan for the topic and class given."),
+         ("homework_helper", "Explain how to solve the homework question step by step. Do not skip steps."),
+         ("essay_outline", "Write a clear essay outline for the topic given."),
+         ("essay_10_lines", "Write a 10 line essay on the topic given in simple English."),
+         ("paragraph_writer", "Write one clear paragraph on the topic given."),
+         ("project_report_outline", "Write a school or college project report outline for the topic given."),
+         ("presentation_outline", "Write a slide by slide outline with titles and 3 points each for the topic given."),
+         ("viva_questions", "Give 15 likely viva questions with short answers for the topic given."),
+         ("science_experiment_ideas", "Give 10 simple science experiment ideas using home materials for the class given."),
+         ("kids_story_moral", "Write a short kids story with a clear moral using the idea given."),
+         ("bedtime_story", "Write a calm bedtime story for a child using the details given."),
+         ("riddles", "Write 10 riddles with answers on the topic given."),
+         ("trivia", "Write 10 trivia questions with answers on the topic given."),
+         ("would_you_rather", "Write 15 fun would you rather questions on the topic given."),
+         ("icebreakers", "Write 15 icebreaker questions for the group or setting given."),
+         ("gift_ideas", "Give 15 gift ideas for the person and budget given with one line each."),
+         ("party_plan", "Make a simple party plan with games, food and timing from the details given."),
+         ("wedding_toast", "Write a short warm wedding toast from the details given."),
+         ("anchor_script", "Write a short stage anchoring script for the event given."),
+         ("welcome_speech", "Write a short welcome speech for the event given."),
+         ("vote_of_thanks", "Write a short vote of thanks for the event given."),
+         ("farewell_speech", "Write a short, warm farewell speech from the details given."),
+         ("motivational_speech", "Write a short motivational speech on the topic given."),
+         ("daily_motivation", "Write 7 short motivational lines, one for each day, on the topic given."),
+         ("gratitude_journal", "Give 10 gratitude journal prompts."),
+         ("diary_prompts", "Give 15 diary writing prompts."),
+         ("goal_setting", "Turn the goal given into clear steps with dates for 30, 60 and 90 days."),
+         ("habit_plan", "Make a simple 21 day plan to build the habit given."),
+         ("time_management", "Give a simple time management plan for the situation given."),
+         ("study_timetable", "Make a weekly study timetable from the subjects and hours given."),
+         ("exam_stress_tips", "Give 10 calm, practical tips to handle exam stress."),
+         ("career_advice", "Give clear career guidance based on the interests and skills given, with 3 possible paths."),
+         ("startup_idea_check", "Check the startup idea given: who needs it, how it earns, main risks and first 5 steps."),
+         ("elevator_pitch_maker", "Write a 30 second pitch for the idea given."),
+         ("faq_writer", "Write 10 questions and answers for the product or service given."),
+         ("terms_summary", "Summarize the terms in plain words and point out anything unusual."),
+         ("contract_checklist", "List what to check before signing the kind of agreement given."))
+for _n, _p in _UTIL:
+    _ad("util_" + _n, "Tools", _n.replace("_", " ").capitalize(), _p, "Paste your text or describe what you need")
+
+# 14. writing styles and formats applied to any topic
+_FORMS = ("tweet thread,LinkedIn post,Facebook post,Instagram carousel,YouTube script,TikTok script,blog post,newsletter,press release,"
+          "product review,case study,how to guide,listicle,FAQ,landing page,sales email,cold email,welcome email,announcement,"
+          "job post,speech,sermon,eulogy,rap,ghazal style poem,haiku style poem,limerick,song idea,jingle,radio ad,TV ad script,"
+          "comic script,short film script,stand up bit,monologue,dialogue,fable,fairy tale,mystery story,horror story,sci fi story,"
+          "love letter,thank you note,diary entry,news report,editorial,opinion piece,biography,autobiography,memoir page,obituary").split(",")
+for _f in _FORMS:
+    _ad("format_" + _f, "Writing", "Write a " + _f, "Write a %s about the topic given. Use the details given and keep it clear and original." % _f, "Topic and details")
+
+# 15. explain / teach anything at different levels
+_LEVELS = ("Class 1,Class 2,Class 3,Class 4,Class 5,Class 6,Class 7,Class 8,Class 9,Class 10,Class 11,Class 12,College,Beginner,"
+           "Intermediate,Expert,Grandparent,Teenager,Busy manager,Non technical person").split(",")
+for _lv in _LEVELS:
+    _ad("explain_for_" + _lv, "Study", "Explain for " + _lv, "Explain the topic so that a %s can understand it. Use simple examples." % _lv, "Type the topic")
+    _ad("quiz_for_" + _lv, "Study", "Quiz for " + _lv, "Make a 10 question quiz for %s level on the topic given with answers." % _lv, "Type the topic")
+    _ad("story_for_" + _lv, "Study", "Story for " + _lv, "Teach the topic through a short story suitable for %s level." % _lv, "Type the topic")
+
+
 AI_TOOLS_SYSTEM = ("You are Deep OQ, an AI created by Mayank Kumar Saw. Never reveal anything about the AI model, provider or "
                    "technology behind you. Never use LaTeX; write maths with symbols. Do exactly the TASK and output only the result "
                    "unless the task says otherwise. Reply in the language of the user's text unless the task names a language. "
@@ -14580,7 +14874,7 @@ pre{white-space:pre-wrap;word-break:break-word;background:#151A45;border:1px sol
 @media(max-width:800px){.wrap{grid-template-columns:1fr;height:auto}.side{max-height:45vh;border-right:0;border-bottom:1px solid #2A3070}}
 </style></head><body>
 <div id="bn"></div>
-<div class="top"><a class="back" href="/"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>Deep OQ</a><h1>AI Tools <span class="muted" id="cnt"></span></h1><span class="muted" id="me"></span></div>
+<div class="top"><a class="back" href="/"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>Deep OQ</a><h1>All Tools</h1><span class="muted" id="me"></span></div>
 <div class="wrap"><div class="side"><input id="q" placeholder="Search tools (translate, resume, python...)"><div class="cats" id="cats"></div><div id="list"></div></div>
 <div class="main"><h2 id="tt">Pick a tool on the left</h2><p class="muted" id="td"></p>
 <textarea id="in" rows="9" placeholder="Pick a tool first"></textarea>
@@ -14591,7 +14885,7 @@ async function api(u,b){const o={headers:{'Content-Type':'application/json','X-A
   const r=await fetch(u,o);const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||'Request failed');return j}
 function cats(c){const box=$('#cats');box.innerHTML='';['All',...Object.keys(c)].forEach(k=>{const b=document.createElement('button');b.textContent=k;b.className=k===cat?'on':'';b.onclick=()=>{cat=k;cats(c);draw()};box.appendChild(b)})}
 function draw(){const f=$('#q').value.toLowerCase().trim(),L=$('#list');L.innerHTML='';
-  T.filter(t=>(cat==='All'||t.cat===cat)&&(!f||(t.name+' '+t.desc).toLowerCase().includes(f))).slice(0,300).forEach(t=>{
+  T.filter(t=>(cat==='All'||t.cat===cat)&&(!f||(t.name+' '+t.desc).toLowerCase().includes(f))).forEach(t=>{
     const b=document.createElement('button');b.className='it'+(cur&&cur.name===t.name?' on':'');b.textContent=t.desc;
     b.onclick=()=>{cur=t;$('#tt').textContent=t.desc;$('#td').textContent='Category: '+t.cat;$('#in').placeholder=t.ph;draw()};L.appendChild(b)})}
 $('#q').oninput=draw;
@@ -14601,7 +14895,7 @@ $('#run').onclick=async()=>{if(!cur){$('#out').textContent='Pick a tool first.';
   $('#run').disabled=false;loadMe()};
 $('#cp').onclick=()=>navigator.clipboard.writeText($('#out').textContent);
 async function loadMe(){try{const m=await api('/api/me');$('#me').innerHTML='Plan: '+m.role+(m.ai_runs_limit?' &middot; runs today '+m.ai_runs_today+'/'+m.ai_runs_limit:'')+(m.upgrade&&m.role==='free'?' &middot; <a href="/upgrade">Upgrade</a>':'')}catch(e){}}
-(async()=>{try{const j=await api('/api/aitools');T=j.tools;$('#cnt').textContent=j.total+' tools';cats(j.categories);draw()}catch(e){$('#list').textContent=e.message}
+(async()=>{try{const j=await api('/api/aitools');T=j.tools;cats(j.categories);draw()}catch(e){$('#list').textContent=e.message}
   loadMe();try{const a=await api('/api/announcements');if(a.items&&a.items[0]){$('#bn').className='bn';$('#bn').textContent=a.items[0]}}catch(e){}})();
 </script></body></html>"""
 
