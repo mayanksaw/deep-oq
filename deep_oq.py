@@ -6550,7 +6550,10 @@ function speakText(raw,btn){
     const g=goal.value.trim();if(!g||busy)return;
     busy=true;run.disabled=true;stop.hidden=false;log.innerHTML='';fin.hidden=true;fin.innerHTML='';tm.textContent='';
     let r,j;
-    try{r=await api('/agent',{goal:g,history:hist,sysinfo:$('#agSys').value,temp:+$('#agTemp').value,fmt:$('#agFmt').value,sources:srcList()});j=await r.json().catch(()=>null)}catch(e){j=null}
+    // in go():
+    r=await api('/agent',{goal:g,history:hist,sysinfo:$('#agSys').value,temp:+$('#agTemp').value,fmt:$('#agFmt').value,sources:srcList(),files:fileIds()});
+    // in the notebook button handler:
+    const r=await api('/agent/notebook',{sources:src,files:fileIds(),mode,q:goal.value.trim()});
     if(!r||!r.ok||!j||!j.job){add('<div class="agplan">'+esc((j&&j.error)||'The server did not answer. It may be waking up: wait a minute and try again.')+'</div>');return end()}
     jid=j.job;let since=0,miss=0;
     for(;;){
@@ -6576,7 +6579,57 @@ function speakText(raw,btn){
       }
     }
   }
-  function srcList(){return $('#agSrc').value.split(/\n\s*\n/).map(x=>x.trim()).filter(Boolean).slice(0,8)}
+  function drawAgFiles(){
+  $('#agFiles').innerHTML=agFiles.map((f,i)=>'<span class="chip">'+esc(f.name)+(f.chars?' ('+f.chars.toLocaleString()+' characters)':'')+' <button type="button" data-agrm="'+i+'" aria-label="Remove '+esc(f.name)+'">×</button></span>').join(' ');
+}
+function agUpload(f,note){
+  return new Promise((ok,no)=>{
+    const fd=new FormData();fd.append('file',f);
+    const x=new XMLHttpRequest();x.open('POST','/agent/upload');x.setRequestHeader('X-Access-Key',localStorage.ak||'');
+    x.upload.onprogress=e=>{if(e.lengthComputable)note.textContent='Uploading '+f.name+' '+Math.round(e.loaded/e.total*100)+'%'};
+    x.onerror=()=>no(new Error('Upload failed. Check your internet.'));
+    x.onload=async()=>{
+      let j={};try{j=JSON.parse(x.responseText)}catch(e){}
+      if(x.status!==200||!j.id)return no(new Error(j.error||'Upload failed.'));
+      for(let miss=0;;){
+        await new Promise(r=>setTimeout(r,1500));
+        try{
+          const r=await fetch('/agent/upload/'+j.id,{headers:{'X-Access-Key':localStorage.ak||''}});const s=await r.json();
+          if(!r.ok)return no(new Error(s.error||'File lost.'));
+          if(s.state==='error')return no(new Error(s.error||'Could not read the file.'));
+          note.textContent='Reading '+f.name+': '+(s.chars||0).toLocaleString()+' characters...';
+          if(s.state==='ready')return ok({name:f.name,id:j.id,chars:s.chars});
+        }catch(e){if(++miss>20)return no(new Error('Lost connection to the server.'))}
+      }
+    };
+    x.send(fd);
+  });
+}
+$('#agFile').onchange=async e=>{
+  const list=[...e.target.files];e.target.value='';
+  const note=$('#agFileNote');
+  for(const f of list){
+    if(agFiles.length>=6){note.textContent='Maximum 6 files.';break}
+    if(f.size>100*1048576){note.textContent=f.name+' is over 100 MB.';continue}
+    try{
+      if(f.type.startsWith('image/')){
+        note.textContent='Reading '+f.name+'...';
+        const img=await shrinkImage(f,1600,true);
+        const r=await api('/lab',{mod:'vision',text:'Read every word, number and label in this image exactly, then describe what it shows in detail.',image:img});
+        const j=await r.json().catch(()=>({}));
+        if(!r.ok||j.error)throw new Error(j.error||'Could not read the picture.');
+        agFiles.push({name:f.name,text:String(j.answer||'').slice(0,60000)});
+      }else agFiles.push(await agUpload(f,note));
+      note.textContent='';
+    }catch(err){note.textContent=err.message}
+    drawAgFiles();
+  }
+};
+  function srcList(){
+  const typed=$('#agSrc').value.split(/\n\s*\n/).map(x=>x.trim()).filter(Boolean);
+  return agFiles.filter(f=>!f.id).map(f=>'FILE: '+f.name+'\n'+f.text).concat(typed).slice(0,8);
+}
+const fileIds=()=>agFiles.filter(f=>f.id).map(f=>f.id);
   function appBox(h,i){
     const d=document.createElement('div');d.className='agapp';
     const u=URL.createObjectURL(new Blob([h],{type:'text/html'}));
@@ -6625,7 +6678,7 @@ function speakText(raw,btn){
     };next();
   }
   document.querySelectorAll('[data-nb]').forEach(b=>b.onclick=async()=>{
-    const src=srcList();if(!src.length){alert('Add at least one source first.');$('#agSrc').focus();return}
+    const src=srcList();if(!src.length&&!fileIds().length){alert('Add at least one source first.');$('#agSrc').focus();return}
     const mode=b.dataset.nb,all=document.querySelectorAll('[data-nb]');
     all.forEach(x=>x.disabled=true);const old=b.textContent;b.textContent='Working...';
     log.innerHTML='';fin.hidden=false;fin.innerHTML='<p>Reading your sources...</p>';
@@ -11555,6 +11608,9 @@ def _agent_run(jid, goal, history, opts=None):
         extra += "\nThe user gave you SOURCES (below, numbered). Ground your answer in them first and cite as [1], [2]. Use tools only for what the sources do not cover."
         goal = goal + "\n\nSOURCES:\n" + opts["sources"]
     temp = opts.get("temp", 0.2)
+      if job.get("fids"):
+        extra += _af_prompt(job["fids"])
+        goal = goal + "\n\nMOST RELEVANT PARTS OF THE UPLOADED FILES FOR THIS GOAL:\n" + _af_search(job["fids"], goal, 6)
     msgs = [{"role": "system", "content": AGENT_SYSTEM + extra + "\nToday's date is %s." % today}]
     for h in history[-4:]:
         if isinstance(h, dict) and h.get("role") in ("user", "assistant") and str(h.get("content", "")).strip():
@@ -11591,7 +11647,7 @@ def _agent_run(jid, goal, history, opts=None):
                 inp = json.dumps(inp)
             inp = str(inp)
             thought = str(d.get("thought", ""))[:300]
-            if tool not in ("search", "news", "read", "python", "image", "app", "toolbox"):
+            if tool not in ("search", "news", "read", "python", "image", "app", "toolbox", "files"):
                 msgs.append({"role": "assistant", "content": json.dumps(d)[:1500]})
                 msgs.append({"role": "user", "content": "Unknown tool. Use search, news, read, python, image, app or toolbox, or give the final answer."})
                 continue
@@ -11615,6 +11671,8 @@ def _agent_run(jid, goal, history, opts=None):
                 res = _agent_app(inp, job)
             elif tool == "toolbox":
                 res = toolbox_agent(inp)
+            elif tool == "files":
+                res = _agent_files(inp, job)
             else:
                 res = _agent_image(inp, job)
             ev.append({"k": "result", "n": shown, "text": res[:700]})
@@ -11669,6 +11727,12 @@ def agent_notebook():
     if mode not in _NB_MODES and mode != "audio":
         return jsonify(error="Unknown mode."), 400
     text, titles = _nb_build(d.get("sources"))
+    fids = _af_owned(d.get("files"))
+    if fids:
+        q0 = str(d.get("q", "")).strip()[:300]
+        ex = _af_search(fids, q0, 10) if q0 else _af_sample(fids, 14)
+        text = (text + "\n\n" if text else "") + "[%d] Uploaded files (excerpts)\n%s" % (len(titles) + 1, ex[:20000])
+        titles.append("Uploaded files")
     if not text.strip():
         return jsonify(error="Add at least one source first: paste text or a link."), 400
     q = str(d.get("q", "")).strip()[:600]
@@ -11749,7 +11813,7 @@ def agent_start():
         if any(v["user"] == user and v["state"] == "working" for v in _ajobs.values()):
             return jsonify(error="Your agent is still working. Wait for it to finish or press Stop."), 429
         jid = uuid.uuid4().hex[:16]
-        _ajobs[jid] = {"t": now, "user": user, "state": "working", "events": [], "images": [], "apps": [], "final": "", "plan": ""}
+        _ajobs[jid] = {"t": now, "user": user, "state": "working", "events": [], "images": [], "apps": [], "final": "", "plan": "", "fids": _af_owned(d.get("files"))}
     threading.Thread(target=_agent_run, args=(jid, goal, d.get("history") or [], opts), daemon=True).start()
     return jsonify(job=jid)
 
@@ -12718,7 +12782,217 @@ def admin_stats_page():
     if not is_admin():
         return "Not found", 404
     return STATS_PAGE, 200, {"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store"}
+# ===== AGENT FILES: huge files (up to 100,000,000 characters), searched not stuffed =====
+AF_DIR = os.path.join(tempfile.gettempdir(), "oq_agent_files")
+os.makedirs(AF_DIR, exist_ok=True)
+AF_MAX_CHARS = _env_int("OQ_FILE_MAX_CHARS", 100_000_000)
+AF_MAX_BYTES = _env_int("OQ_FILE_MAX_MB", 100) * 1024 * 1024
+AF_MAX_FILES = 6
+AF_SECONDS = _env_int("OQ_FILE_SECONDS", 900)
+_afiles = {}
+_af_lock = threading.Lock()
 
+
+def _af_db(fid):
+    c = sqlite3.connect(os.path.join(AF_DIR, fid + ".db"), check_same_thread=False)
+    c.execute("CREATE VIRTUAL TABLE IF NOT EXISTS c USING fts5(t, tokenize='porter unicode61')")
+    return c
+
+
+def _af_pieces(path, name):
+    ext = os.path.splitext(name.lower())[1]
+    if ext == ".pdf":
+        from pypdf import PdfReader
+        with open(path, "rb") as fh:
+            reader = PdfReader(fh)
+            seen = 0
+            for i, pg in enumerate(reader.pages):
+                t = pg.extract_text() or ""
+                seen += len(t.strip())
+                if i == 29 and seen < 200:
+                    raise ValueError("This PDF looks scanned (no text). Upload photos of the pages instead.")
+                yield t + "\n"
+        return
+    if ext == ".docx":
+        import zipfile
+        with zipfile.ZipFile(path) as z:
+            xml = z.read("word/document.xml").decode("utf-8", "replace")
+        yield _html.unescape(re.sub(r"<[^>]+>", "", xml.replace("</w:p>", "\n")))
+        return
+    with open(path, "r", encoding="utf-8", errors="replace") as fh:
+        first = True
+        while True:
+            blk = fh.read(262144)
+            if not blk:
+                break
+            if first and (blk.count("\x00") > 5 or blk.count("\ufffd") > 50):
+                raise ValueError(name + " is not a readable text file.")
+            first = False
+            yield blk
+
+
+def _af_ingest(fid, path, name):
+    job = _afiles[fid]
+    t0 = time.time()
+    try:
+        db = _af_db(fid)
+        total = n = 0
+        buf, rows = "", []
+        for piece in _af_pieces(path, name):
+            buf += piece
+            total += len(piece)
+            i = 0
+            while len(buf) - i >= 1600:
+                cut = buf.rfind("\n", i + 800, i + 1600)
+                if cut < 0:
+                    cut = buf.rfind(" ", i + 800, i + 1600)
+                if cut < 0:
+                    cut = i + 1600
+                part = buf[i:cut].strip()
+                i = cut
+                if part:
+                    n += 1
+                    rows.append((n, part))
+            buf = buf[i:]
+            if len(rows) >= 400:
+                db.executemany("INSERT INTO c(rowid, t) VALUES(?, ?)", rows)
+                db.commit()
+                rows = []
+                job.update(chars=total, chunks=n)
+            if total >= AF_MAX_CHARS or time.time() - t0 > AF_SECONDS:
+                break
+        if buf.strip():
+            n += 1
+            rows.append((n, buf.strip()))
+        if rows:
+            db.executemany("INSERT INTO c(rowid, t) VALUES(?, ?)", rows)
+            db.commit()
+        db.close()
+        if n == 0:
+            raise ValueError(name + " has no readable text.")
+        job.update(state="ready", chars=min(total, AF_MAX_CHARS), chunks=n)
+    except ImportError:
+        job.update(state="error", error="PDF reading is not installed on the server (pip install pypdf).")
+    except Exception as e:
+        print("agent file failed:", e)
+        job.update(state="error", error=str(e)[:200] or "Could not read this file.")
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
+def _af_owned(ids):
+    user = login_session.get("user") or ""
+    out = []
+    for i in (ids or [])[:AF_MAX_FILES] if isinstance(ids, list) else []:
+        j = _afiles.get(str(i))
+        if j and j["user"] == user and j["state"] == "ready" and str(i) not in out:
+            out.append(str(i))
+    return out
+
+
+def _af_search(fids, query, k=8):
+    words = [w for w in re.findall(r"[\w\u0900-\u097F]{3,}", query.lower()) if w not in _STOP][:12]
+    per = max(2, k // max(1, len(fids)))
+    out = []
+    for fid in fids:
+        j = _afiles.get(fid)
+        if not j or j["state"] != "ready":
+            continue
+        try:
+            db = _af_db(fid)
+            if words:
+                rows = db.execute("SELECT rowid, t FROM c WHERE c MATCH ? ORDER BY bm25(c) LIMIT ?",
+                                  (" OR ".join('"%s"' % w for w in words), per)).fetchall()
+            else:
+                rows = []
+            db.close()
+        except Exception as e:
+            print("file search failed:", e)
+            rows = []
+        for rid, t in sorted(rows):
+            out.append("[%s, part %d of %d]\n%s" % (j["name"], rid, j["chunks"], t))
+    return "\n\n".join(out) or "No matching parts. Try different or fewer words, or use SUMMARY."
+
+
+def _af_sample(fids, k=12):
+    out = []
+    per = max(3, k // max(1, len(fids)))
+    for fid in fids:
+        j = _afiles.get(fid)
+        if not j or j["state"] != "ready":
+            continue
+        db = _af_db(fid)
+        for s in range(per):
+            rid = 1 + (s * (j["chunks"] - 1)) // max(1, per - 1) if j["chunks"] > 1 else 1
+            r = db.execute("SELECT t FROM c WHERE rowid=?", (rid,)).fetchone()
+            if r:
+                out.append("[%s, part %d of %d]\n%s" % (j["name"], rid, j["chunks"], r[0]))
+        db.close()
+    return "\n\n".join(out)
+
+
+def _agent_files(inp, job):
+    fids = job.get("fids") or []
+    if not fids:
+        return "No files were uploaded."
+    q = str(inp or "").strip()
+    res = _af_sample(fids, 12) if q.upper().startswith("SUMMARY") else _af_search(fids, q, 8)
+    return res[:6500]
+
+
+def _af_prompt(fids):
+    rows = "\n".join("- %s: %s characters in %d parts" % (_afiles[f]["name"], format(_afiles[f]["chars"], ","), _afiles[f]["chunks"]) for f in fids)
+    return ("\nUPLOADED FILES (can be huge, so you cannot see them whole):\n" + rows +
+            "\nUse tool 'files' to look inside: input = the search words for what you need (names, numbers, topic words), "
+            "or the single word SUMMARY to get excerpts spread across the whole files. Search several times with different "
+            "words before you answer. Never say something is not in the file until you have searched for it. "
+            "Mention the file name when you use it.")
+
+
+@app.post("/agent/upload")
+def agent_upload():
+    if denied():
+        return jsonify(error="locked"), 401
+    f = request.files.get("file")
+    if not f or not f.filename:
+        return jsonify(error="Choose a file first."), 400
+    user = login_session.get("user") or ""
+    name = re.sub(r"[\r\n]+", " ", f.filename)[:120]
+    now = time.time()
+    with _af_lock:
+        for k in [k for k, v in _afiles.items() if now - v["t"] > 6 * 3600]:
+            _afiles.pop(k, None)
+            try:
+                os.remove(os.path.join(AF_DIR, k + ".db"))
+            except OSError:
+                pass
+        if sum(1 for v in _afiles.values() if v["user"] == user) >= 12:
+            return jsonify(error="Too many uploaded files. Wait a while, then try again."), 429
+        fid = uuid.uuid4().hex[:16]
+        _afiles[fid] = {"user": user, "name": name, "t": now, "state": "working", "chars": 0, "chunks": 0}
+    path = os.path.join(AF_DIR, fid + ".src")
+    f.save(path)
+    if os.path.getsize(path) > AF_MAX_BYTES:
+        os.remove(path)
+        _afiles.pop(fid, None)
+        return jsonify(error="That file is over %d MB." % (AF_MAX_BYTES // 1048576)), 413
+    threading.Thread(target=_af_ingest, args=(fid, path, name), daemon=True).start()
+    return jsonify(id=fid, name=name)
+
+
+@app.get("/agent/upload/<fid>")
+def agent_upload_status(fid):
+    j = _afiles.get(fid)
+    if denied() or not j or j["user"] != (login_session.get("user") or ""):
+        return jsonify(error="That file was lost because the server restarted. Please upload it again."), 404
+    return jsonify(state=j["state"], chars=j["chars"], chunks=j["chunks"], error=j.get("error"))
+
+
+AGENT_SYSTEM += ("\n\nEXTRA TOOL - files: searches the user's uploaded files (only when files are listed below). "
+                 "input = search words, or SUMMARY. Use tool name \"files\".")
 # ===== TOOLBOX (500+ built-in tools) =====
 # ==========================================================================
 # TOOLBOX: 1000+ built-in tools in one registry. Used by the Agent ("toolbox"),
