@@ -14962,7 +14962,7 @@ async function api(u,b){const o={headers:{'Content-Type':'application/json','X-A
   const r=await fetch(u,o);const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||'Request failed');return j}
 function cats(c){const box=$('#cats');box.innerHTML='';['All',...Object.keys(c)].forEach(k=>{const b=document.createElement('button');b.textContent=k;b.className=k===cat?'on':'';b.onclick=()=>{cat=k;cats(c);draw()};box.appendChild(b)})}
 function draw(){const f=$('#q').value.toLowerCase().trim(),L=$('#list');L.innerHTML='';
-  T.filter(t=>(cat==='All'||t.cat===cat)&&(!f||(t.name+' '+t.desc).toLowerCase().includes(f))).forEach(t=>{
+  T.filter(t=>(cat==='All'||t.cat===cat)&&(!f||(t.name+' '+t.desc).toLowerCase().includes(f))).slice(0,300).forEach(t=>{
     const b=document.createElement('button');b.className='it'+(cur&&cur.name===t.name?' on':'');b.textContent=t.desc;
     b.onclick=()=>{cur=t;stopSpeak();$('#tt').textContent=t.desc;$('#td').textContent='Category: '+t.cat;$('#in').placeholder=t.ph;draw()};L.appendChild(b)})}
 $('#q').oninput=draw;
@@ -15299,7 +15299,108 @@ def wa_hook():
                     threading.Thread(target=_wa_answer, args=(m["from"], m["text"]["body"][:2000]), daemon=True).start()
     return "ok", 200
 
+# ---------------------------------------------------------------- PACK 4: ~1,880 more AI tools
+for _lg4 in _LANGS:
+    _ad("slang_in_" + _lg4, "Languages", "Everyday expressions in " + _lg4,
+        "List 12 common everyday expressions used in %s for the situation given. For each give the meaning in English and when to use it. Mark any that may sound rude." % _lg4,
+        "Situation or topic")
+    _ad("conversation_in_" + _lg4, "Languages", "Practice dialogue in " + _lg4,
+        "Write a short natural dialogue in %s for the situation given, then the English meaning line by line, then 5 key words with meanings." % _lg4,
+        "Situation (market, hotel, office, doctor...)")
+    _ad("culture_tips_" + _lg4, "Languages", "Etiquette for " + _lg4 + " speakers",
+        "Give 10 practical politeness and etiquette tips for talking with %s speakers, for the situation given. Keep it respectful and general." % _lg4,
+        "Situation (visit, business, festival...)")
 
+for _rl4 in _ROLES:
+    _ad("kpi_for_" + _rl4, "Career", "KPIs: " + _rl4,
+        "List 10 useful measurable goals (KPIs) for a %s and how each is tracked." % _rl4, "Company type or team")
+    _ad("email_templates_" + _rl4, "Career", "Email templates: " + _rl4,
+        "Write 5 ready-to-use email templates a %s often needs, with [placeholders]." % _rl4, "Your situation")
+    _ad("growth_path_" + _rl4, "Career", "Growth path: " + _rl4,
+        "Describe a realistic 5 year growth path for a %s: skills for each year, roles, and how to get noticed." % _rl4, "Your current level")
+    _ad("common_mistakes_as_" + _rl4, "Career", "Mistakes to avoid: " + _rl4,
+        "List the 10 most common mistakes a %s makes early in the career and how to avoid each." % _rl4, "Your situation")
+
+for _ex4 in _EXAMS:
+    _ad("topic_priority_" + _ex4, "Exams", "Topic priority: " + _ex4,
+        "Based on the syllabus details given, suggest which topics to prioritise for %s and why. Say clearly that this is general guidance, not the official weightage." % _ex4,
+        "Subjects, weak topics, days left")
+    _ad("formula_sheet_" + _ex4, "Exams", "Formula sheet: " + _ex4,
+        "Make a compact formula and key-fact sheet for %s on the subject or topic given. Only include things you are sure are correct." % _ex4,
+        "Subject or topic")
+    _ad("time_management_in_" + _ex4, "Exams", "Time management: " + _ex4,
+        "Give a practical plan to manage time during the %s paper: how long per section, what to skip, when to review." % _ex4,
+        "Paper pattern if you know it")
+
+for _in4 in _IND:
+    _ad("faq_for_" + _in4, "Business", "Customer FAQ: " + _in4,
+        "Write 12 frequently asked customer questions with clear answers for a %s." % _in4, "Add details like city or services")
+    _ad("sop_for_" + _in4, "Business", "SOP: " + _in4,
+        "Write a simple standard operating procedure for the daily opening and closing work of a %s." % _in4, "Size of your team")
+    _ad("email_campaign_" + _in4, "Business", "Email campaign: " + _in4,
+        "Write a 3-email campaign (welcome, offer, reminder) for a %s with subject lines." % _in4, "Offer, audience")
+    _ad("customer_personas_" + _in4, "Business", "Customer personas: " + _in4,
+        "Describe 3 typical customer personas for a %s: needs, worries, how to reach them." % _in4, "City or market")
+
+for _sb4 in _SUBJ + _SUBJ2:
+    _ad("glossary_" + _sb4, "Study", "Glossary: " + _sb4,
+        "Make a glossary of the 20 most important terms in %s for the topic given, each with a one-line plain definition." % _sb4, "Topic or chapter")
+    _ad("worked_examples_" + _sb4, "Study", "Worked examples: " + _sb4,
+        "Give 3 worked examples in %s on the topic given, from easy to hard, explained step by step." % _sb4, "Topic or chapter")
+    _ad("viva_for_" + _sb4, "Study", "Viva questions: " + _sb4,
+        "Give 12 likely oral exam (viva) questions in %s on the topic given, with short model answers." % _sb4, "Topic or chapter")
+
+for _tc4 in _TECH:
+    _ad("debug_checklist_" + _tc4, "Code", "Debug checklist: " + _tc4,
+        "Give a step-by-step checklist to debug problems in %s, with the 10 most common causes." % _tc4, "Describe the problem")
+    _ad("architecture_for_" + _tc4, "Code", "Project structure: " + _tc4,
+        "Suggest a clean project or folder structure and best practices for a %s project, based on the details given." % _tc4, "What are you building?")
+    _ad("learning_path_" + _tc4, "Code", "Learning path: " + _tc4,
+        "Make a week-by-week learning path for %s from zero to job-ready, with one small project per stage." % _tc4, "Your current level")
+
+for _pl4 in _PLACES:
+    _ad("itinerary_budget_" + _pl4, "Travel", "Budget itinerary: " + _pl4,
+        "Make a budget-friendly itinerary for %s for the days and budget given. All prices are rough estimates." % _pl4, "Days, budget, who travels")
+    _ad("local_phrases_" + _pl4, "Travel", "Local phrases: " + _pl4,
+        "Give 15 useful phrases for a visitor to %s with easy pronunciation in English letters." % _pl4, "Anything specific")
+
+for _cu4 in _CUIS:
+    _ad("healthy_twist_" + _cu4, "Food", "Healthy twist: " + _cu4,
+        "Suggest healthier versions of popular %s dishes with simple swaps and one line on why each is better." % _cu4, "Dish or goal")
+    _ad("party_menu_" + _cu4, "Food", "Party menu: " + _cu4,
+        "Plan a %s party menu (starters, mains, sides, dessert, drink) for the number of guests given, with a prep timeline." % _cu4, "Guests, diet needs")
+
+for _hl4 in _HEALTH:
+    _ad("beginner_mistakes_" + _hl4, "Health", "Beginner mistakes: " + _hl4,
+        "List 10 common beginner mistakes in %s and how to avoid them. General wellness information only." % _hl4)
+    _ad("weekly_tracker_" + _hl4, "Health", "Weekly tracker: " + _hl4,
+        "Make a simple weekly tracking table (as plain lines) to follow progress in %s. General wellness only." % _hl4, "Your goal")
+
+for _th4 in _THEMES:
+    _ad("dialogue_about_" + _th4, "Fun", "Dialogue about " + _th4,
+        "Write a short natural dialogue between two people about %s, using the details given." % _th4, "Characters or setting")
+    _ad("lesson_on_" + _th4, "Fun", "Mini lesson on " + _th4,
+        "Teach a 5 minute mini lesson on %s with a hook, 3 key points, a fun fact and 3 questions." % _th4, "Audience or age")
+
+for _sn4 in _SIT:
+    _ad("short_note_" + _sn4, "Messages", "Short note: " + _sn4,
+        "Write 3 very short handwritten-style notes for this situation: %s. Use the details given." % _sn4, "Names and details")
+    _ad("reply_to_" + _sn4, "Messages", "Reply to: " + _sn4,
+        "The user pasted a message about this situation: %s. Write 3 reply options (warm, formal, brief)." % _sn4, "Paste the message")
+
+for _lv4 in _LEVELS:
+    _ad("worksheet_for_" + _lv4, "Study", "Worksheet for " + _lv4,
+        "Make a worksheet for %s level on the topic given: 5 easy, 5 medium, 2 challenge questions, with an answer key." % _lv4, "Topic")
+    _ad("summary_for_" + _lv4, "Study", "Summary for " + _lv4,
+        "Summarize the text so a %s can follow it. Keep the key facts." % _lv4, "Paste the text")
+
+for _fm4 in _FORMS:
+    _ad("outline_for_" + _fm4, "Writing", "Outline: " + _fm4,
+        "Write a clear outline for a %s about the topic given, with the main beats and a strong opening idea." % _fm4, "Topic and audience")
+    _ad("improve_my_" + _fm4, "Writing", "Improve my " + _fm4,
+        "Improve the %s pasted: fix flow, make it clearer and more engaging, keep the author's voice. Then list the 5 biggest changes." % _fm4, "Paste your draft")
+
+print("Pack 4 added; AI tools now:", len(AI_TOOLS))
 print("AI tools:", len(AI_TOOLS), "ready")
 
 if __name__ == "__main__":
