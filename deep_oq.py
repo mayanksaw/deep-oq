@@ -12345,6 +12345,20 @@ ol.goals li{counter-increment:g;display:flex;gap:14px;align-items:flex-start;pad
 ol.goals li:last-child{border:0}
 ol.goals li::before{content:counter(g);flex:none;width:30px;height:30px;border-radius:50%;display:grid;place-items:center;font-family:"Bricolage Grotesque",sans-serif;font-weight:700;font-size:14px;background:linear-gradient(135deg,var(--teal),var(--blue));color:#04122b}
 .links{display:flex;flex-wrap:wrap;gap:10px}
+.contact{margin-top:34px;position:relative;overflow:hidden;text-align:center;padding:38px 24px;border-radius:28px;border:1px solid var(--line);
+ background:radial-gradient(500px 220px at 50% -20%,rgba(51,230,161,.22),transparent 70%),linear-gradient(160deg,rgba(255,255,255,.08),rgba(255,255,255,.02));
+ box-shadow:0 30px 80px rgba(0,0,0,.35)}
+.contact .mic{width:64px;height:64px;margin:0 auto 16px;border-radius:20px;display:grid;place-items:center;color:#04122b;
+ background:linear-gradient(135deg,var(--teal),var(--blue));box-shadow:0 10px 30px rgba(47,140,255,.45);animation:float 3.5s ease-in-out infinite}
+.contact .mic svg{width:30px;height:30px}
+.contact h2{margin:0 0 6px;font-size:26px;letter-spacing:-.02em}
+.contact p{margin:0 auto 22px;max-width:460px;color:var(--ink2)}
+.contact .mail{display:inline-flex;align-items:center;gap:10px;padding:14px 26px;border-radius:999px;font-family:"Bricolage Grotesque",system-ui,sans-serif;
+ font-weight:700;font-size:17px;text-decoration:none;color:#04122b;background:linear-gradient(135deg,var(--amber),#ff7a59);
+ box-shadow:0 10px 30px rgba(242,160,46,.4);transition:.2s}
+.contact .mail:hover{transform:translateY(-3px);box-shadow:0 16px 40px rgba(242,160,46,.55)}
+.contact .addr{display:block;margin-top:14px;color:var(--ink2);font-size:14px;user-select:all}
+@keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
 .foot{margin-top:40px;text-align:center;color:var(--ink2);font-size:14px}
 .fade{animation:rise .7s both}.card:nth-child(2){animation-delay:.08s}.card:nth-child(3){animation-delay:.16s}.card:nth-child(4){animation-delay:.24s}
 @keyframes rise{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}
@@ -12729,6 +12743,10 @@ def about_page():
             "<div class='top'><a class='brand' href='/'>%sDeep OQ</a><a class='btn pri' href='/'>Open Deep OQ</a></div>"
             "<header class='hero fade'><div class='avatar'>%s</div><div><div class='pill'>%s</div><h1>%s</h1><p class='lead'>%s</p></div></header>"
             "<main class='grid'>%s</main>"
+            "<section class='contact fade'><div class='mic'><svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><rect x='3' y='5' width='18' height='14' rx='3'/><path d='M3 7l9 6 9-6'/></svg></div>"
+            "<h2>Contact me</h2><p>Questions, ideas or want to work together? Send me an email and I will reply.</p>"
+            "<a class='mail' href='mailto:mayanksaw78@gmail.com?subject=Hello%%20from%%20Deep%%20OQ'>Email me on Gmail</a>"
+            "<span class='addr'>mayanksaw78@gmail.com</span></section>"
             "<div class='foot'>Deep OQ &middot; made by %s</div></div></body></html>") % (
         e(name), _ABOUT_CSS, logo, avatar, e(c.get("role", "Creator of Deep OQ")), e(name), e(c.get("about", "")), "".join(cards), e(name))
     return page, 200, {"Content-Type": "text/html; charset=utf-8"}
