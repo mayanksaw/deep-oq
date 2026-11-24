@@ -14853,7 +14853,33 @@ def api_aitools_run():
         print("aitool failed:", e)
         return jsonify(error=hide_ai(str(e)[:200]) or "Could not run the tool right now."), 500
 
-
+@app.post("/api/aitools/improve")
+def api_aitools_improve():
+    """Rewrites the user's rough input into a clearer, more complete input for the chosen tool."""
+    if denied():
+        return jsonify(error="locked"), 401
+    d = request.get_json(silent=True) or {}
+    text = str(d.get("input", "")).strip()[:4000]
+    if not text:
+        return jsonify(error="Type something first, then press Improve prompt."), 400
+    t = AI_TOOLS.get(_slug(d.get("name", "")))
+    purpose = t["desc"] if t else "a general AI writing and thinking tool"
+    sysm = ("You are an expert prompt engineer. The user will send their rough input for this AI tool: " + purpose + ". "
+            "Rewrite it into ONE clearer, more complete input that gets a better result from that tool. Keep the user's "
+            "intent and language. Add the useful details that are missing: audience, goal, tone, length, format, and "
+            "constraints. Do not invent facts, names or numbers the user did not give; use [placeholders] for missing details. "
+            "Keep it under 150 words. Plain text only, no markdown. Output only the rewritten input.")
+    try:
+        _tl.effort = "low"
+        out = chat([{"role": "system", "content": sysm}, {"role": "user", "content": text}], 0.3, 600)
+    except Exception as e:
+        print("aitool improve failed:", e)
+        return jsonify(error="Could not improve it right now. Please try again."), 500
+    out = _plain_tool_text(re.sub(r'^["\s]+|["\s]+$', "", out or ""))
+    if not out:
+        return jsonify(error="Could not improve it right now. Please try again."), 500
+    return jsonify(result=out[:4000])
+  
 TOOLS_PAGE = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Deep OQ AI Tools</title>
 <style>
@@ -14878,7 +14904,7 @@ pre{white-space:pre-wrap;word-break:break-word;background:#151A45;border:1px sol
 <div class="wrap"><div class="side"><input id="q" placeholder="Search tools (translate, resume, python...)"><div class="cats" id="cats"></div><div id="list"></div></div>
 <div class="main"><h2 id="tt">Pick a tool on the left</h2><p class="muted" id="td"></p>
 <textarea id="in" rows="9" placeholder="Pick a tool first"></textarea>
-<div><button class="btn" id="run">Run</button><button class="btn g" id="cp">Copy result</button></div><pre id="out"></pre></div></div>
+<div><button class="btn" id="run">Run</button><button class="btn g" id="imp">Improve prompt</button><button class="btn g" id="cp">Copy result</button></div><pre id="out"></pre></div></div>
 <script>
 const $=s=>document.querySelector(s);let T=[],cat='All',cur=null;
 async function api(u,b){const o={headers:{'Content-Type':'application/json','X-Access-Key':localStorage.ak||''}};if(b){o.method='POST';o.body=JSON.stringify(b)}
@@ -14894,6 +14920,20 @@ $('#run').onclick=async()=>{if(!cur){$('#out').textContent='Pick a tool first.';
   try{const j=await api('/api/aitools/run',{name:cur.name,input:$('#in').value});$('#out').textContent=j.result}catch(e){$('#out').textContent=e.message}
   $('#run').disabled=false;loadMe()};
 $('#cp').onclick=()=>navigator.clipboard.writeText($('#out').textContent);
+let undoText=null;
+$('#in').addEventListener('input',()=>{undoText=null;$('#imp').textContent='Improve prompt'});
+$('#imp').onclick=async()=>{
+  const b=$('#imp');
+  if(undoText!==null){$('#in').value=undoText;undoText=null;b.textContent='Improve prompt';return}
+  const t=$('#in').value.trim();
+  if(!t){$('#out').textContent='Type something first, then press Improve prompt.';return}
+  b.disabled=true;b.textContent='Improving...';
+  try{
+    const j=await api('/api/aitools/improve',{name:cur?cur.name:'',input:t});
+    undoText=t;$('#in').value=j.result;b.textContent='Undo';
+  }catch(e){$('#out').textContent=e.message;b.textContent='Improve prompt'}
+  b.disabled=false;
+};
 async function loadMe(){try{const m=await api('/api/me');$('#me').innerHTML='Plan: '+m.role+(m.ai_runs_limit?' &middot; runs today '+m.ai_runs_today+'/'+m.ai_runs_limit:'')+(m.upgrade&&m.role==='free'?' &middot; <a href="/upgrade">Upgrade</a>':'')}catch(e){}}
 (async()=>{try{const j=await api('/api/aitools');T=j.tools;cats(j.categories);draw()}catch(e){$('#list').textContent=e.message}
   loadMe();try{const a=await api('/api/announcements');if(a.items&&a.items[0]){$('#bn').className='bn';$('#bn').textContent=a.items[0]}}catch(e){}})();
