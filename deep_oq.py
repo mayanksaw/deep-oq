@@ -150,6 +150,7 @@ PG_SCHEMA = [
     "CREATE INDEX IF NOT EXISTS oq_memory_user_idx ON oq_memory(username, id)",
     # ADD THIS LINE:
     "CREATE TABLE IF NOT EXISTS oq_usage(username TEXT, day TEXT, kind TEXT, n INT, PRIMARY KEY(username, day, kind))",
+    "ALTER TABLE oq_usage ADD COLUMN IF NOT EXISTS n INT;",
 ] 
 PG_SCHEMA = [
     # ... other tables ...
