@@ -15453,6 +15453,62 @@ for _fm4 in _FORMS:
         "Write a clear outline for a %s about the topic given, with the main beats and a strong opening idea." % _fm4, "Topic and audience")
     _ad("improve_my_" + _fm4, "Writing", "Improve my " + _fm4,
         "Improve the %s pasted: fix flow, make it clearer and more engaging, keep the author's voice. Then list the 5 biggest changes." % _fm4, "Paste your draft")
+# ---------------------------------------------------------------- PACK 5: ~1,370 more AI tools
+for _lg5 in _LANGS:
+    _ad("grammar_tips_" + _lg5, "Languages", "Grammar tips: " + _lg5,
+        "Explain the most important %s grammar points for the level or topic given, with simple examples and English meanings." % _lg5, "Your level or topic")
+    _ad("vocabulary_in_" + _lg5, "Languages", "Vocabulary: " + _lg5,
+        "Give 20 useful %s words on the topic given with meaning, easy pronunciation in English letters and one example sentence each." % _lg5, "Topic (food, travel, work...)")
+    _ad("story_in_" + _lg5, "Languages", "Short story in " + _lg5,
+        "Write a very short, simple story in %s for learners, then give the English meaning and 5 key words." % _lg5, "Theme or level")
+    _ad("quiz_in_" + _lg5, "Languages", "Quiz: " + _lg5,
+        "Make a 10 question quiz to practise %s on the topic given, with an answer key at the end." % _lg5, "Topic or level")
+
+for _rl5 in _ROLES:
+    _ad("salary_negotiation_" + _rl5, "Career", "Salary talk: " + _rl5,
+        "Write a polite script and 5 tips to negotiate salary as a %s, using the details given. Prices and pay ranges are not guaranteed." % _rl5, "Your experience, offer")
+    _ad("day_in_life_" + _rl5, "Career", "Day in the life: " + _rl5,
+        "Describe a realistic day in the life of a %s, including the good and the hard parts." % _rl5, "Anything specific")
+    _ad("portfolio_ideas_" + _rl5, "Career", "Portfolio ideas: " + _rl5,
+        "Give 8 portfolio or proof-of-work ideas a %s can show to get hired, with what to include in each." % _rl5, "Your level")
+    _ad("networking_message_" + _rl5, "Career", "Networking message: " + _rl5,
+        "Write 3 short, polite messages a %s can send to connect with a professional, using the details given." % _rl5, "Who you want to contact")
+
+for _ex5 in _EXAMS:
+    _ad("mock_test_" + _ex5, "Exams", "Mock test: " + _ex5,
+        "Create a short mock test in the style of %s on the subject given, with answers and short explanations." % _ex5, "Subject and number of questions")
+    _ad("common_mistakes_in_" + _ex5, "Exams", "Common mistakes: " + _ex5,
+        "List the most common mistakes students make in %s and how to avoid each." % _ex5, "Your weak areas")
+    _ad("last_week_plan_" + _ex5, "Exams", "Last week plan: " + _ex5,
+        "Make a calm day by day plan for the last week before %s, using the details given." % _ex5, "Days left, weak topics")
+
+for _in5 in _IND:
+    _ad("pricing_for_" + _in5, "Business", "Pricing ideas: " + _in5,
+        "Suggest simple pricing ideas for a %s with reasons. Say clearly that prices must be checked against the local market." % _in5, "City, costs, competitors")
+    _ad("hiring_post_" + _in5, "Business", "Hiring post: " + _in5,
+        "Write a clear job post for a %s with duties, needed skills and how to apply." % _in5, "Role, pay, location")
+    _ad("risks_for_" + _in5, "Business", "Risks: " + _in5,
+        "List the main risks of running a %s and how to reduce each." % _in5, "Your situation")
+    _ad("launch_plan_" + _in5, "Business", "Launch plan: " + _in5,
+        "Make a 4 week launch plan for a %s with weekly tasks and a small budget guide." % _in5, "Budget, city")
+
+for _sb5 in _SUBJ + _SUBJ2:
+    _ad("mnemonics_" + _sb5, "Study", "Memory tricks: " + _sb5,
+        "Give mnemonics and memory tricks for the %s topic given." % _sb5, "Topic or list to remember")
+    _ad("mcq_" + _sb5, "Study", "MCQs: " + _sb5,
+        "Write 10 multiple choice questions on %s for the topic given, with four options, the answer and a one line reason." % _sb5, "Topic")
+    _ad("real_life_examples_" + _sb5, "Study", "Real life examples: " + _sb5,
+        "Give 8 real life examples that explain the %s topic given in simple words." % _sb5, "Topic")
+
+for _tc5 in _TECH:
+    _ad("security_tips_" + _tc5, "Code", "Security tips: " + _tc5,
+        "Give the top security practices for %s with a short example of what to avoid." % _tc5, "What are you building?")
+    _ad("common_errors_" + _tc5, "Code", "Common errors: " + _tc5,
+        "Explain the 10 most common errors in %s, what causes each and how to fix it." % _tc5, "Paste an error (optional)")
+    _ad("readme_for_" + _tc5, "Code", "README: " + _tc5,
+        "Write a clear README for a %s project from the details given: what it does, setup, usage, and contributing." % _tc5, "Describe your project")
+
+print("Pack 5 added; AI tools now:", len(AI_TOOLS))
 
 print("Pack 4 added; AI tools now:", len(AI_TOOLS))
 print("AI tools:", len(AI_TOOLS), "ready")
