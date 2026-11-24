@@ -10902,7 +10902,7 @@ def _horde_image(prompt):
             with urllib.request.urlopen(urllib.request.Request(base + "generate/status/" + jid, headers=hd),
                                         timeout=40) as r:
                 st = json.loads(r.read().decode())
-            gens = st.get("generations") or []
+            gens = [g for g in (st.get("generations") or []) if not g.get("censored")]
             if not gens:
                 _img_note("horde: no picture at %dpx (queue too long?)" % size)
                 try:
