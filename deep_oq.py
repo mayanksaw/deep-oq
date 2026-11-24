@@ -4716,6 +4716,12 @@ body:not(.chatting) #v-chat.on{padding-top:12vh;padding-bottom:0}
         <div class="agnb"><button type="button" data-nb="brief">Briefing</button><button type="button" data-nb="study">Study guide</button><button type="button" data-nb="faq">FAQ</button><button type="button" data-nb="audio">Audio overview</button><button type="button" data-nb="ask">Ask my sources</button></div>
         <label>The agent also uses these sources (with [1] [2] citations) when you press Run agent.</label>
       </details>
+      <details class="agset"><summary>Files: upload big files (PDF, text, code, up to 100 MB)</summary>
+        <label>The agent searches inside your files. Photos are read as text.</label>
+        <input type="file" id="agFile" multiple accept=".pdf,.docx,.txt,.md,.csv,.tsv,.json,.xml,.log,.html,.py,.js,image/*">
+        <div id="agFiles"></div>
+        <p class="muted" id="agFileNote"></p>
+      </details>
       <div class="agrow">
         <button type="button" class="agb" id="agRun">Run agent</button>
         <button type="button" class="agb ghost" id="agImp" title="Rewrite my goal as a stronger prompt">Improve prompt</button>
@@ -6535,7 +6541,7 @@ function speakText(raw,btn){
 /* ================= agent ================= */
 (function(){
   const goal=$('#agGoal'),run=$('#agRun'),stop=$('#agStop'),log=$('#agLog'),fin=$('#agFinal'),tm=$('#agTime');
-  let jid=null,hist=[],busy=false;
+  let jid=null,hist=[],busy=false,agFiles=[];
   const ICON={search:'Searching the web',news:'Reading the news',read:'Reading a page',python:'Running Python',image:'Making a picture',toolbox:'Using a built-in tool'};
   document.querySelectorAll('#agEx button').forEach(b=>b.onclick=()=>{goal.value=b.textContent;goal.focus()});
   function add(h){const d=document.createElement('div');d.innerHTML=h;const e=d.firstChild;log.appendChild(e);return e}
@@ -6550,11 +6556,8 @@ function speakText(raw,btn){
     const g=goal.value.trim();if(!g||busy)return;
     busy=true;run.disabled=true;stop.hidden=false;log.innerHTML='';fin.hidden=true;fin.innerHTML='';tm.textContent='';
     let r,j;
-    // in go():
     r=await api('/agent',{goal:g,history:hist,sysinfo:$('#agSys').value,temp:+$('#agTemp').value,fmt:$('#agFmt').value,sources:srcList(),files:fileIds()});
-    // in the notebook button handler:
-    const r=await api('/agent/notebook',{sources:src,files:fileIds(),mode,q:goal.value.trim()});
-    if(!r||!r.ok||!j||!j.job){add('<div class="agplan">'+esc((j&&j.error)||'The server did not answer. It may be waking up: wait a minute and try again.')+'</div>');return end()}
+    j=await r.json().catch(()=>null);
     jid=j.job;let since=0,miss=0;
     for(;;){
       await new Promise(ok=>setTimeout(ok,1500));
@@ -6683,7 +6686,7 @@ const fileIds=()=>agFiles.filter(f=>f.id).map(f=>f.id);
     all.forEach(x=>x.disabled=true);const old=b.textContent;b.textContent='Working...';
     log.innerHTML='';fin.hidden=false;fin.innerHTML='<p>Reading your sources...</p>';
     try{
-      const r=await api('/agent/notebook',{sources:src,mode,q:goal.value.trim()});const j=await r.json().catch(()=>null);
+      const r=await api('/agent/notebook',{sources:src,files:fileIds(),mode,q:goal.value.trim()});const j=await r.json().catch(()=>null);
       if(!r.ok||!j)throw new Error((j&&j.error)||'The server did not answer. Try again in a minute.');
       if(j.error)throw new Error(j.error);
       const cite=(j.sources||[]).map((t,i)=>'['+(i+1)+'] '+t).join('<br>');
@@ -6697,6 +6700,7 @@ const fileIds=()=>agFiles.filter(f=>f.id).map(f=>f.id);
     }catch(e){fin.innerHTML='<p>'+esc(e.message||'Could not do that.')+'</p>'}
     all.forEach(x=>x.disabled=false);b.textContent=old;
   });
+  $('#agFiles').onclick=e=>{const b=e.target.closest('[data-agrm]');if(b){agFiles.splice(+b.dataset.agrm,1);drawAgFiles()}};
   run.onclick=go;
   goal.addEventListener('keydown',e=>{if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();go()}});
   stop.onclick=()=>{if(jid){stop.disabled=true;api('/agent/'+jid+'/stop',{}).finally(()=>{stop.disabled=false})}};
@@ -11607,11 +11611,11 @@ def _agent_run(jid, goal, history, opts=None):
     if opts.get("sources"):
         extra += "\nThe user gave you SOURCES (below, numbered). Ground your answer in them first and cite as [1], [2]. Use tools only for what the sources do not cover."
         goal = goal + "\n\nSOURCES:\n" + opts["sources"]
-    temp = opts.get("temp", 0.2)
+      temp = opts.get("temp", 0.2)
       if job.get("fids"):
         extra += _af_prompt(job["fids"])
         goal = goal + "\n\nMOST RELEVANT PARTS OF THE UPLOADED FILES FOR THIS GOAL:\n" + _af_search(job["fids"], goal, 6)
-    msgs = [{"role": "system", "content": AGENT_SYSTEM + extra + "\nToday's date is %s." % today}]
+      msgs = [{"role": "system", "content": AGENT_SYSTEM + extra + "\nToday's date is %s." % today}]
     for h in history[-4:]:
         if isinstance(h, dict) and h.get("role") in ("user", "assistant") and str(h.get("content", "")).strip():
             msgs.append({"role": h["role"], "content": str(h["content"])[:2500]})
