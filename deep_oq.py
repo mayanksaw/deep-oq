@@ -12351,7 +12351,12 @@ ol.goals li::before{content:counter(g);flex:none;width:30px;height:30px;border-r
 .contact .mic{width:64px;height:64px;margin:0 auto 16px;border-radius:20px;display:grid;place-items:center;color:#04122b;
  background:linear-gradient(135deg,var(--teal),var(--blue));box-shadow:0 10px 30px rgba(47,140,255,.45);animation:float 3.5s ease-in-out infinite}
 .contact .mic svg{width:30px;height:30px}
-.contact h2{margin:0 0 6px;font-size:26px;letter-spacing:-.02em}
+.contact h2{justify-content:center;margin:0 0 8px;font-size:26px;letter-spacing:-.02em;text-transform:none;color:var(--ink)}
+.contact h2::before{display:none}
+.contact .row{display:flex;flex-wrap:wrap;gap:12px;justify-content:center}
+.contact .copy{cursor:pointer;font:inherit;font-family:"Bricolage Grotesque",system-ui,sans-serif;font-weight:600;font-size:15px;color:var(--ink);
+ padding:14px 22px;border-radius:999px;border:1px solid var(--line);background:rgba(255,255,255,.05);transition:.2s}
+.contact .copy:hover{background:rgba(255,255,255,.12);transform:translateY(-3px)}
 .contact p{margin:0 auto 22px;max-width:460px;color:var(--ink2)}
 .contact .mail{display:inline-flex;align-items:center;gap:10px;padding:14px 26px;border-radius:999px;font-family:"Bricolage Grotesque",system-ui,sans-serif;
  font-weight:700;font-size:17px;text-decoration:none;color:#04122b;background:linear-gradient(135deg,var(--amber),#ff7a59);
@@ -12745,7 +12750,8 @@ def about_page():
             "<main class='grid'>%s</main>"
             "<section class='contact fade'><div class='mic'><svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><rect x='3' y='5' width='18' height='14' rx='3'/><path d='M3 7l9 6 9-6'/></svg></div>"
             "<h2>Contact me</h2><p>Questions, ideas or want to work together? Send me an email and I will reply.</p>"
-            "<a class='mail' href='mailto:mayanksaw78@gmail.com?subject=Hello%%20from%%20Deep%%20OQ'>Email me on Gmail</a>"
+            "<div class='row'><a class='mail' target='_blank' rel='noopener noreferrer' href='https://mail.google.com/mail/?view=cm&fs=1&to=mayanksaw78@gmail.com&su=Hello+from+Deep+OQ'>Email me on Gmail</a>"
+            "<button type='button' class='copy' onclick=\"navigator.clipboard.writeText('mayanksaw78@gmail.com');this.textContent='Copied!'\">Copy email</button></div>"
             "<span class='addr'>mayanksaw78@gmail.com</span></section>"
             "<div class='foot'>Deep OQ &middot; made by %s</div></div></body></html>") % (
         e(name), _ABOUT_CSS, logo, avatar, e(c.get("role", "Creator of Deep OQ")), e(name), e(c.get("about", "")), "".join(cards), e(name))
