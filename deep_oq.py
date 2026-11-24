@@ -4468,7 +4468,7 @@ body:not(.chatting) #v-chat.on{padding-top:12vh;padding-bottom:0}
             <svg viewBox="0 0 24 24"><rect x="3" y="6" width="13" height="12" rx="3"/><path d="m16 10 5-3v10l-5-3z"/></svg>
             <span><b>Create a video</b><small>Describe it and Deep OQ makes a short video</small></span></button>
         </div>
-        <input type="file" id="fq" hidden multiple accept="image/*,video/*,.pdf,.txt,.md,.csv,.tsv,.json,.xml,.yaml,.yml,.log,.html,.css,.js,.ts,.jsx,.tsx,.py,.java,.c,.cpp,.h,.cs,.go,.rs,.rb,.php,.kt,.swift,.sql,.sh,.bat">
+        <input type="file" id="fq" hidden multiple accept="image/*,video/*,.pdf,.txt,.md,.csv,.tsv,.json,.xml,.yaml,.yml,.log,.html,.css,.js,.ts,.jsx,.tsx,.py,.java,.c,.cpp,.h,.cs,.go,.rs,.rb,.php,.kt,.swift,.sql,.sh,.bat,.docx">
         <input type="file" id="fpe" hidden accept="image/*">
         <input type="file" id="fcam" hidden accept="image/*" capture="environment">
         <input type="file" id="fsolve" hidden multiple accept="image/*">
