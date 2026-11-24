@@ -148,7 +148,7 @@ PG_SCHEMA = [
     "CREATE TABLE IF NOT EXISTS oq_usage(username TEXT NOT NULL, day TEXT NOT NULL, kind TEXT NOT NULL, "
     "n INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(username, day, kind))",
 ]
-PG_SCHEMA = [
+PG_SCHEMA += [
     # ... other tables ...
     "CREATE TABLE IF NOT EXISTS oq_memory(id BIGSERIAL PRIMARY KEY, username TEXT NOT NULL, fact TEXT NOT NULL, "
     "ts TIMESTAMPTZ DEFAULT now())",
@@ -2716,7 +2716,6 @@ def _claude_run(model, system, msgs, temperature, max_tokens, smart, use_tools, 
     if smart and CLAUDE_THINK >= 1024 and model != CLAUDE_TINY:
         attempts.append(dict(base, max_tokens=max(mt, CLAUDE_THINK + 4096),
                              thinking={"type": "enabled", "budget_tokens": CLAUDE_THINK}))
-    attempts.append(dict(base, temperature=temperature))
     attempts.append(dict(base))
     attempts.append(dict(base, max_tokens=min(mt, 16000)))
     last = None
@@ -2724,7 +2723,7 @@ def _claude_run(model, system, msgs, temperature, max_tokens, smart, use_tools, 
         kw["messages"] = [dict(m) for m in msgs]  # a fresh list each time: tool rounds add to it
         try:
             return _claude_attempt(kw, on_text)
-        except anthropic.BadRequestError as e:    # a parameter this model does not accept: try simpler settings
+        except (anthropic.BadRequestError, TypeError) as e:    # a parameter this model does not accept: try simpler settings
             last = e
             continue
     raise last
@@ -2814,12 +2813,13 @@ def _premium_chat(messages, temperature, max_tokens, smart, prefer, force=False)
 
 # ---------- daily limit for max mode (the Research button) ----------
 if USE_PG:
+    try:  # old oq_usage table without column n: drop it so it is rebuilt (it only holds daily counters)
+        if not _pg("SELECT 1 FROM information_schema.columns WHERE table_name='oq_usage' AND column_name='n'", (), "one"):
+            _pg("DROP TABLE IF EXISTS oq_usage")
+    except Exception as e:
+        print("usage table check failed:", e)
     _pg("CREATE TABLE IF NOT EXISTS oq_usage(username TEXT NOT NULL, day TEXT NOT NULL, kind TEXT NOT NULL, "
         "n INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(username, day, kind))")
-else:
-    with DB:
-        DB.execute("CREATE TABLE IF NOT EXISTS usage(username TEXT NOT NULL, day TEXT NOT NULL, kind TEXT NOT NULL, "
-                   "n INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(username, day, kind))")
 
 
 def usage_bump(username, kind="max"):
