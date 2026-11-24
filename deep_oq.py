@@ -14948,10 +14948,17 @@ input,textarea{width:100%;padding:10px 12px;border-radius:12px;border:1px solid 
 .btn{padding:10px 20px;border-radius:99px;border:0;background:#F2A02E;color:#2B1A00;font-weight:700;cursor:pointer;margin:10px 8px 10px 0}.btn.g{background:transparent;border:1px solid #2A3070;color:#EEF0FF}
 pre{white-space:pre-wrap;word-break:break-word;background:#151A45;border:1px solid #2A3070;border-radius:14px;padding:14px;min-height:80px;font:15px/1.55 system-ui}
 .bn{background:#33e6a1;color:#04122b;padding:8px 18px;font-weight:600}.muted{color:#A3A9D1}
+.menub{position:fixed;left:12px;top:10px;z-index:1001;touch-action:none;user-select:none;width:44px;height:44px;border-radius:12px;border:1px solid #2A3070;background:#151A45;color:#EEF0FF;font-size:22px;cursor:grab;box-shadow:0 4px 16px rgba(0,0,0,.4)}
+.menub:active{cursor:grabbing}
+.top{padding-left:68px}
+#cats{display:none;flex-direction:column;align-items:stretch;background:#151A45;border:1px solid #2A3070;border-radius:14px;padding:8px;margin:0}
+#cats.open{display:flex;position:fixed;z-index:1000;width:220px;max-height:70vh;overflow:auto;box-shadow:0 12px 40px rgba(0,0,0,.5)}
+#cats button{text-align:left;border-radius:10px;font-size:15px;padding:9px 12px}
 @media(max-width:800px){.wrap{grid-template-columns:1fr;height:auto}.side{max-height:45vh;border-right:0;border-bottom:1px solid #2A3070}}
 </style></head><body>
 <div id="bn"></div>
-<div class="top"><a class="back" href="/"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>Deep OQ</a><h1>All Tools</h1><span class="muted" id="me"></span></div>
+<div class="top"><button class="menub" id="menub" type="button" aria-label="Categories">☰</button><a class="back" href="/"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>Deep OQ</a><h1>All Tools</h1><span class="muted" id="me"></span></div>
+<div class="top"><button class="menub" id="menub" type="button" aria-label="Categories (drag to move)">☰</button><a class="back" href="/"><svg viewBox="0 0 24 24" ...
 <div class="wrap"><div class="side"><input id="q" placeholder="Search tools (translate, resume, python...)"><div class="cats" id="cats"></div><div id="list"></div></div>
 <div class="main"><h2 id="tt">Pick a tool on the left</h2><p class="muted" id="td"></p>
 <textarea id="in" rows="9" placeholder="Pick a tool first"></textarea>
@@ -14960,12 +14967,59 @@ pre{white-space:pre-wrap;word-break:break-word;background:#151A45;border:1px sol
 const $=s=>document.querySelector(s);let T=[],cat='All',cur=null;
 async function api(u,b){const o={headers:{'Content-Type':'application/json','X-Access-Key':localStorage.ak||''}};if(b){o.method='POST';o.body=JSON.stringify(b)}
   const r=await fetch(u,o);const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||'Request failed');return j}
-function cats(c){const box=$('#cats');box.innerHTML='';['All',...Object.keys(c)].forEach(k=>{const b=document.createElement('button');b.textContent=k;b.className=k===cat?'on':'';b.onclick=()=>{cat=k;cats(c);draw()};box.appendChild(b)})}
+function cats(c){const box=$('#cats');box.innerHTML='';['All',...Object.keys(c)].forEach(k=>{const b=document.createElement('button');b.textContent=k;b.className=k===cat?'on':'';b.onclick=()=>{cat=k;cats(c);draw();$('#cats').classList.remove('open')};box.appendChild(b)})}
 function draw(){const f=$('#q').value.toLowerCase().trim(),L=$('#list');L.innerHTML='';
   T.filter(t=>(cat==='All'||t.cat===cat)&&(!f||(t.name+' '+t.desc).toLowerCase().includes(f))).slice(0,300).forEach(t=>{
     const b=document.createElement('button');b.className='it'+(cur&&cur.name===t.name?' on':'');b.textContent=t.desc;
     b.onclick=()=>{cur=t;stopSpeak();$('#tt').textContent=t.desc;$('#td').textContent='Category: '+t.cat;$('#in').placeholder=t.ph;draw()};L.appendChild(b)})}
 $('#q').oninput=draw;
+(function(){
+  const b=$('#menub'),m=$('#cats');
+  let drag=false,moved=false,sx=0,sy=0,ox=0,oy=0,just=false;
+  function place(x,y){
+    x=Math.min(Math.max(4,x),innerWidth-b.offsetWidth-4);
+    y=Math.min(Math.max(4,y),innerHeight-b.offsetHeight-4);
+    b.style.left=x+'px';b.style.top=y+'px';
+  }
+  function openMenu(){
+    const r=b.getBoundingClientRect(),w=220;
+    m.classList.add('open');
+    let x=Math.min(Math.max(4,r.left),innerWidth-w-4);
+    let y=r.bottom+8;
+    if(y+m.offsetHeight>innerHeight-4)y=Math.max(4,r.top-m.offsetHeight-8);
+    m.style.left=x+'px';m.style.top=y+'px';
+  }
+  try{const p=JSON.parse(localStorage.getItem('menubPos')||'null');if(p)place(p.x,p.y)}catch(e){}
+  b.addEventListener('pointerdown',e=>{
+    drag=true;moved=false;sx=e.clientX;sy=e.clientY;
+    const r=b.getBoundingClientRect();ox=r.left;oy=r.top;
+    try{b.setPointerCapture(e.pointerId)}catch(_){}
+  });
+  b.addEventListener('pointermove',e=>{
+    if(!drag)return;
+    const dx=e.clientX-sx,dy=e.clientY-sy;
+    if(!moved&&Math.hypot(dx,dy)<6)return;
+    moved=true;m.classList.remove('open');
+    place(ox+dx,oy+dy);e.preventDefault();
+  });
+  const end=()=>{
+    if(!drag)return;drag=false;
+    if(moved){
+      just=true;setTimeout(()=>just=false,300);
+      const r=b.getBoundingClientRect();
+      try{localStorage.setItem('menubPos',JSON.stringify({x:r.left,y:r.top}))}catch(_){}
+    }
+  };
+  b.addEventListener('pointerup',end);
+  b.addEventListener('pointercancel',end);
+  b.addEventListener('click',e=>{
+    e.stopPropagation();
+    if(just)return;
+    m.classList.contains('open')?m.classList.remove('open'):openMenu();
+  });
+  document.addEventListener('click',e=>{if(!e.target.closest('#cats,#menub'))m.classList.remove('open')});
+  addEventListener('resize',()=>{const r=b.getBoundingClientRect();place(r.left,r.top)});
+})();
 $('#run').onclick=async()=>{if(!cur){$('#out').textContent='Pick a tool first.';return}
   $('#run').disabled=true;$('#out').textContent='Working...';
   try{const j=await api('/api/aitools/run',{name:cur.name,input:$('#in').value});$('#out').textContent=j.result}catch(e){$('#out').textContent=e.message}
