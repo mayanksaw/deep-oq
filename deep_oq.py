@@ -159,21 +159,19 @@ PG_SCHEMA += [
 
 def _pg_open():
     from psycopg_pool import ConnectionPool  # pip install "psycopg[binary,pool]"
-    opts = dict(
-       min_size=1, max_size=10, open=False,
-       max_lifetime=240,
-       max_idle=30,
-       reconnect_timeout=10,
-       timeout=15,
-        kwargs={"autocommit": True, "connect_timeout": 10,
+    pool = ConnectionPool(
+        DATABASE_URL,
+        min_size=2, max_size=8, open=False,
+        max_lifetime=900,        # was 240: reconnecting every 4 minutes was too often
+        max_idle=300,            # was 30
+        reconnect_timeout=30,
+        timeout=30,              # wait longer before giving up
+        num_workers=3,
+        kwargs={"autocommit": True, "connect_timeout": 15,
                 "keepalives": 1, "keepalives_idle": 30,
                 "keepalives_interval": 10, "keepalives_count": 5},
     )
-    try:
-        pool = ConnectionPool(DATABASE_URL, check=ConnectionPool.check_connection, **opts)
-    except TypeError:  # older psycopg_pool without the check option
-        pool = ConnectionPool(DATABASE_URL, **opts)
-    pool.open(wait=True, timeout=30)
+    pool.open(wait=True, timeout=45)
     with pool.connection() as conn:
         with conn.transaction():
             conn.execute("SELECT pg_advisory_xact_lock(727274)")
@@ -184,7 +182,8 @@ def _pg_open():
 
 def _pg(sql, params=(), fetch=None):
     import psycopg
-    for attempt in (1, 2):
+    import psycopg_pool
+    for attempt in (1, 2, 3):
         try:
             with PG.connection() as conn:
                 cur = conn.execute(sql, params)
@@ -193,11 +192,11 @@ def _pg(sql, params=(), fetch=None):
                 if fetch == "all":
                     return cur.fetchall()
                 return None
-        except (psycopg.OperationalError, psycopg.InterfaceError) as e:
-            if attempt == 2:
+        except (psycopg.OperationalError, psycopg.InterfaceError, psycopg_pool.PoolTimeout) as e:
+            if attempt == 3:
                 raise
-            print("database connection was dead, retrying:", str(e)[:120])
-            time.sleep(0.3)
+            print("database connection problem, retrying:", str(e)[:120])
+            time.sleep(1.0 * attempt)
 
 
 def _kb_conn():
@@ -14306,9 +14305,13 @@ PRO_DAYS = _env_num("PRO_DAYS", 30)
 def plan_of(user):
     if not user:
         return "free"
-    r = _s("SELECT plan, expires FROM plans WHERE username=?", "SELECT plan, expires FROM oq_plans WHERE username=%s", (user,))
+    try:
+        r = _s("SELECT plan, expires FROM plans WHERE username=?",
+               "SELECT plan, expires FROM oq_plans WHERE username=%s", (user,))
+    except Exception as e:
+        print("plan lookup failed:", str(e)[:120])
+        return "free"
     return r[0][0] if r and (r[0][1] or 0) > time.time() else "free"
-
 
 def set_plan(user, plan, days):
     cur = _s("SELECT expires FROM plans WHERE username=?", "SELECT expires FROM oq_plans WHERE username=%s", (user,))
@@ -14322,8 +14325,12 @@ def set_plan(user, plan, days):
 
 def _used_today(user, kind):
     day = time.strftime("%Y-%m-%d", time.gmtime())
-    r = _s("SELECT n FROM usage WHERE username=? AND day=? AND kind=?",
-           "SELECT n FROM oq_usage WHERE username=%s AND day=%s AND kind=%s", (user, day, kind))
+    try:
+        r = _s("SELECT n FROM usage WHERE username=? AND day=? AND kind=?",
+               "SELECT n FROM oq_usage WHERE username=%s AND day=%s AND kind=%s", (user, day, kind))
+    except Exception as e:
+        print("usage lookup failed:", str(e)[:120])
+        return 0
     return int(r[0][0]) if r else 0
 
 
