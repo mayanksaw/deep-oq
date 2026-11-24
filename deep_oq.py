@@ -11611,11 +11611,11 @@ def _agent_run(jid, goal, history, opts=None):
     if opts.get("sources"):
         extra += "\nThe user gave you SOURCES (below, numbered). Ground your answer in them first and cite as [1], [2]. Use tools only for what the sources do not cover."
         goal = goal + "\n\nSOURCES:\n" + opts["sources"]
-      temp = opts.get("temp", 0.2)
-      if job.get("fids"):
+    temp = opts.get("temp", 0.2)
+    if job.get("fids"):
         extra += _af_prompt(job["fids"])
         goal = goal + "\n\nMOST RELEVANT PARTS OF THE UPLOADED FILES FOR THIS GOAL:\n" + _af_search(job["fids"], goal, 6)
-      msgs = [{"role": "system", "content": AGENT_SYSTEM + extra + "\nToday's date is %s." % today}]
+    msgs = [{"role": "system", "content": AGENT_SYSTEM + extra + "\nToday's date is %s." % today}]
     for h in history[-4:]:
         if isinstance(h, dict) and h.get("role") in ("user", "assistant") and str(h.get("content", "")).strip():
             msgs.append({"role": h["role"], "content": str(h["content"])[:2500]})
