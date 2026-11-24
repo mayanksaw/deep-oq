@@ -4369,11 +4369,16 @@ body:not(.chatting) #v-chat.on{padding-top:12vh;padding-bottom:0}
   #scroll .col{padding-top:46px}
   .hero{flex-direction:column;gap:8px}
 }
-.atts{gap:10px;margin:0 6px 10px}
-.achip.tile{position:relative;padding:0;width:110px;height:110px;border-radius:14px;overflow:hidden}
-.achip.tile img{width:100%;height:100%;object-fit:cover;border-radius:0}
-.achip.tile span{display:none}
-.achip.tile button{position:absolute;top:5px;right:5px;width:24px;height:24px;padding:0;border-radius:50%;background:rgba(0,0,0,.65);color:#fff;opacity:1;font-size:16px;line-height:24px;text-align:center}
+/* Agent: dropdown list colours */
+.agset select,.agset select option,#agFmt,#agFmt option{background-color:#151A45;color:#EEF0FF}
+.agset select option:checked,#agFmt option:checked{background-color:#2A3192;color:#fff}
+.agset select{color-scheme:dark}
+
+/* Agent: download links in white */
+.agfinal a.agb2,.agapp a.agb2{color:#fff !important;background:#2A3192;border:1px solid #3a428f;
+  border-radius:999px;padding:7px 14px;font:700 13.5px var(--ui);text-decoration:none;display:inline-block;margin:6px 6px 6px 0}
+.agfinal a.agb2:hover,.agapp a.agb2:hover{background:#7C5CFF}
+
 [hidden]{display:none!important}
 
 </style>
