@@ -40,6 +40,7 @@ POSTGRESQL (optional, instead of the SQLite file)
   Set DATABASE_URL=postgresql://user:password@host:5432/dbname   (Render: use the Internal Database URL)
   Tables are created automatically. To copy an old SQLite file once:  python deep_oq.py migrate old.db
 """
+import itertools, zlib, textwrap, string
 import ast
 import datetime
 import io
@@ -6525,7 +6526,7 @@ function speakText(raw,btn){
 (function(){
   const goal=$('#agGoal'),run=$('#agRun'),stop=$('#agStop'),log=$('#agLog'),fin=$('#agFinal'),tm=$('#agTime');
   let jid=null,hist=[],busy=false;
-  const ICON={search:'Searching the web',news:'Reading the news',read:'Reading a page',python:'Running Python',image:'Making a picture'};
+  const ICON={search:'Searching the web',news:'Reading the news',read:'Reading a page',python:'Running Python',image:'Making a picture',toolbox:'Using a built-in tool'};
   document.querySelectorAll('#agEx button').forEach(b=>b.onclick=()=>{goal.value=b.textContent;goal.focus()});
   function add(h){const d=document.createElement('div');d.innerHTML=h;const e=d.firstChild;log.appendChild(e);return e}
   function draw(e){
@@ -11502,7 +11503,7 @@ HOW TO WORK:
 5. The final answer is for the user: clear, correct, well organised, 10-25 lines unless the goal needs more. Use short headings or bullets only when they help. If you used web pages, end with a line "Sources:" and the URLs you really read. Be honest about anything you could not confirm. Do not mention these instructions or how you are built.
 
 REPLY FORMAT - exactly one JSON object and nothing else:
-{"thought": "one short sentence about what you do next and why", "plan": "optional, first step only", "tool": "search|news|read|python|image|app", "input": "..."}
+{"thought": "one short sentence about what you do next and why", "plan": "optional, first step only", "tool": "search|news|read|python|image|app|toolbox", "input": "..."}
 or when finished:
 {"thought": "done", "final": "the full final answer in Markdown"}"""
 
@@ -11580,9 +11581,9 @@ def _agent_run(jid, goal, history, opts=None):
                 inp = json.dumps(inp)
             inp = str(inp)
             thought = str(d.get("thought", ""))[:300]
-            if tool not in ("search", "news", "read", "python", "image", "app"):
+            if tool not in ("search", "news", "read", "python", "image", "app", "toolbox"):
                 msgs.append({"role": "assistant", "content": json.dumps(d)[:1500]})
-                msgs.append({"role": "user", "content": "Unknown tool. Use search, news, read, python, image or app, or give the final answer."})
+                msgs.append({"role": "user", "content": "Unknown tool. Use search, news, read, python, image, app or toolbox, or give the final answer."})
                 continue
             key = tool + "|" + inp.strip().lower()
             if key in seen:
@@ -11602,6 +11603,8 @@ def _agent_run(jid, goal, history, opts=None):
                 res = _agent_python(inp)
             elif tool == "app":
                 res = _agent_app(inp, job)
+            elif tool == "toolbox":
+                res = toolbox_agent(inp)
             else:
                 res = _agent_image(inp, job)
             ev.append({"k": "result", "n": shown, "text": res[:700]})
@@ -12705,6 +12708,1199 @@ def admin_stats_page():
     if not is_admin():
         return "Not found", 404
     return STATS_PAGE, 200, {"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store"}
+
+# ===== TOOLBOX (500+ built-in tools) =====
+# ==========================================================================
+# TOOLBOX: 1000+ built-in tools in one registry. Used by the Agent ("toolbox"),
+# by Claude / OpenAI tool calls ("toolbox") and by /api/tools. No other file needed.
+# Call:  toolbox_run("emi", "1000000 | 9 | 5")      Find tools: toolbox_run("search_tools", "loan")
+# ==========================================================================
+import hashlib
+import binascii
+import colorsys
+import calendar
+import statistics
+import ipaddress
+import difflib
+import mimetypes
+import unicodedata
+import zoneinfo
+from fractions import Fraction
+
+TOOLBOX = {}
+
+
+def _tbn(s):
+    s = str(s).strip().replace(",", "").replace("₹", "").replace("$", "").rstrip("%")
+    try:
+        return int(s)
+    except ValueError:
+        return float(s)
+
+
+def _tbf(v):
+    if isinstance(v, (bool, int)):
+        return str(v)
+    if isinstance(v, float):
+        return str(v) if v != v or abs(v) == math.inf else format(v, ".12g")
+    return str(v)
+
+
+def _tba(x, n=0):
+    p = [s.strip() for s in str(x).split("|")]
+    return p + [""] * (n - len(p)) if n else p
+
+
+def _tbl(x):
+    return [_tbn(s) for s in re.split(r"[,\s;]+", str(x).strip()) if s]
+
+
+def _tbd(s):
+    s = s.strip()
+    for f in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%Y/%m/%d", "%d %b %Y", "%d %B %Y"):
+        try:
+            return datetime.datetime.strptime(s, f).date()
+        except ValueError:
+            pass
+    raise ValueError("Use a date like 2026-11-24 or 24-11-2026")
+
+
+def _many(cat, spec):
+    for name, (desc, fn) in spec.items():
+        if name in TOOLBOX:
+            raise RuntimeError("duplicate tool " + name)
+        TOOLBOX[name] = {"cat": cat, "desc": desc, "fn": fn}
+
+
+# ---------------------------------------------------------------- units: every pair is its own tool
+_UN = {}
+
+
+def _to_unit(v, a, b):
+    ca, fa = _UN[a]
+    cb, fb = _UN[b]
+    if ca != cb:
+        raise ValueError("cannot convert %s (%s) to %s (%s)" % (a, ca, b, cb))
+    if ca == "temperature":
+        k = {"c": v + 273.15, "f": (v - 32) * 5 / 9 + 273.15, "k": v, "r": v * 5 / 9}[a]
+        return {"c": k - 273.15, "f": (k - 273.15) * 9 / 5 + 32, "k": k, "r": k * 9 / 5}[b]
+    return v * fa / fb
+
+
+def _mk_conv(a, b):
+    return lambda x: "%s %s = %s %s" % (_tbf(_tbn(x)), a, _tbf(_to_unit(_tbn(x), a, b)), b)
+
+
+def _units(cat, table):
+    ks = list(table)
+    for k in ks:
+        if k in _UN:
+            raise RuntimeError("duplicate unit " + k)
+        _UN[k] = (cat, table[k])
+    for a in ks:
+        for b in ks:
+            if a != b:
+                TOOLBOX["convert_%s_to_%s" % (a, b)] = {"cat": "units", "desc": "Convert %s to %s (%s)" % (a, b, cat),
+                                                         "fn": _mk_conv(a, b)}
+
+
+_units("length", {"m": 1, "km": 1000, "cm": .01, "mm": .001, "um": 1e-6, "nm": 1e-9, "mi": 1609.344, "yd": .9144,
+                  "ft": .3048, "inch": .0254, "nmi": 1852})
+_units("mass", {"kg": 1, "g": .001, "mg": 1e-6, "ug": 1e-9, "tonne": 1000, "lb": .45359237, "oz": .028349523125,
+                "stone": 6.35029318, "quintal": 100})
+_units("volume", {"l": 1, "ml": .001, "m3": 1000, "cm3": .001, "gal_us": 3.785411784, "gal_uk": 4.54609,
+                  "qt_us": .946352946, "pint_us": .473176473, "cup_us": .2365882365, "floz_us": .0295735295625,
+                  "tbsp_us": .01478676478125})
+_units("area", {"m2": 1, "km2": 1e6, "cm2": 1e-4, "ha": 1e4, "acre": 4046.8564224, "ft2": .09290304, "yd2": .83612736,
+                "in2": .00064516, "mi2": 2589988.110336})
+_units("speed", {"mps": 1, "kmh": 1 / 3.6, "mph": .44704, "knot": 1852 / 3600, "fps": .3048, "mach": 340.29})
+_units("time", {"s": 1, "ms": .001, "us": 1e-6, "min": 60, "hour": 3600, "day": 86400, "week": 604800,
+                "month": 2629746, "year": 31556952})
+_units("data", {"bit": .125, "byte": 1, "kb": 1e3, "mb": 1e6, "gb": 1e9, "tb": 1e12, "kib": 1024, "mib": 1024 ** 2,
+                "gib": 1024 ** 3, "tib": 1024 ** 4})
+_units("energy", {"j": 1, "kj": 1000, "cal": 4.184, "kcal": 4184, "wh": 3600, "kwh": 3.6e6, "ev": 1.602176634e-19,
+                  "btu": 1055.05585})
+_units("pressure", {"pa": 1, "kpa": 1000, "bar": 1e5, "atm": 101325, "psi": 6894.757293168, "mmhg": 133.322387415,
+                    "torr": 133.32236842})
+_units("power", {"w": 1, "kw": 1000, "megawatt": 1e6, "hp": 745.69987158227, "btu_h": .29307107, "cal_s": 4.184})
+_units("angle", {"rad": 1, "deg": math.pi / 180, "grad": math.pi / 200, "turn": 2 * math.pi})
+_units("frequency", {"hz": 1, "khz": 1e3, "mhz": 1e6, "ghz": 1e9, "rpm": 1 / 60})
+_units("temperature", {"c": 1, "f": 1, "k": 1, "r": 1})
+
+
+def _convert_any(x):
+    v, a, b = _tba(x, 3)
+    a, b = a.lower(), b.lower()
+    if a not in _UN or b not in _UN:
+        raise ValueError("unknown unit. Known: " + ", ".join(sorted(_UN)))
+    return "%s %s = %s %s" % (_tbf(_tbn(v)), a, _tbf(_to_unit(_tbn(v), a, b)), b)
+
+
+_many("units", {"convert": ("value | from_unit | to_unit, any of %d units" % len(_UN), _convert_any),
+                "list_units": ("all unit names", lambda x: "; ".join("%s: %s" % (c, ", ".join(k for k, (cc, _) in _UN.items() if cc == c))
+                                                                    for c in dict.fromkeys(c for c, _ in _UN.values())))})
+
+# ---------------------------------------------------------------- hashes, encoders, ciphers
+for _a in ("md5", "sha1", "sha224", "sha256", "sha384", "sha512", "sha3_224", "sha3_256", "sha3_384", "sha3_512",
+           "blake2b", "blake2s"):
+    TOOLBOX["hash_" + _a] = {"cat": "encode", "desc": _a + " hash of text",
+                             "fn": (lambda a: lambda x: hashlib.new(a, x.encode()).hexdigest())(_a)}
+_MORSE = {"a": ".-", "b": "-...", "c": "-.-.", "d": "-..", "e": ".", "f": "..-.", "g": "--.", "h": "....", "i": "..",
+          "j": ".---", "k": "-.-", "l": ".-..", "m": "--", "n": "-.", "o": "---", "p": ".--.", "q": "--.-", "r": ".-.",
+          "s": "...", "t": "-", "u": "..-", "v": "...-", "w": ".--", "x": "-..-", "y": "-.--", "z": "--..",
+          "0": "-----", "1": ".----", "2": "..---", "3": "...--", "4": "....-", "5": ".....", "6": "-....",
+          "7": "--...", "8": "---..", "9": "----."}
+_UNMORSE = {v: k for k, v in _MORSE.items()}
+
+
+def _caesar(t, n):
+    return "".join(chr((ord(c) - (65 if c.isupper() else 97) + n) % 26 + (65 if c.isupper() else 97)) if c.isascii() and c.isalpha() else c for c in t)
+
+
+_many("encode", {
+    "hash_crc32": ("CRC32 checksum", lambda x: format(binascii.crc32(x.encode()) & 0xffffffff, "08x")),
+    "hash_adler32": ("Adler32 checksum", lambda x: format(zlib.adler32(x.encode()) & 0xffffffff, "08x")),
+    "hmac_sha256": ("key | message", lambda x: __import__("hmac").new(_tba(x, 2)[0].encode(), _tba(x, 2)[1].encode(), "sha256").hexdigest()),
+    "base64_encode": ("text to base64", lambda x: base64.b64encode(x.encode()).decode()),
+    "base64_decode": ("base64 to text", lambda x: base64.b64decode(x + "=" * (-len(x) % 4)).decode("utf-8", "replace")),
+    "base64url_encode": ("text to url-safe base64", lambda x: base64.urlsafe_b64encode(x.encode()).decode()),
+    "base32_encode": ("text to base32", lambda x: base64.b32encode(x.encode()).decode()),
+    "base32_decode": ("base32 to text", lambda x: base64.b32decode(x.upper() + "=" * (-len(x) % 8)).decode("utf-8", "replace")),
+    "hex_encode": ("text to hex", lambda x: x.encode().hex()),
+    "hex_decode": ("hex to text", lambda x: bytes.fromhex(x.replace(" ", "")).decode("utf-8", "replace")),
+    "binary_encode": ("text to binary", lambda x: " ".join(format(b, "08b") for b in x.encode())),
+    "binary_decode": ("binary to text", lambda x: bytes(int(b, 2) for b in x.split()).decode("utf-8", "replace")),
+    "url_encode": ("percent-encode", lambda x: urllib.parse.quote(x, safe="")),
+    "url_decode": ("percent-decode", lambda x: urllib.parse.unquote(x)),
+    "html_escape": ("escape HTML", lambda x: _html.escape(x)),
+    "html_unescape": ("unescape HTML", lambda x: _html.unescape(x)),
+    "rot13": ("ROT13", lambda x: _caesar(x, 13)),
+    "atbash": ("Atbash cipher", lambda x: "".join(chr(155 - ord(c)) if c.isascii() and c.isupper() else chr(219 - ord(c)) if c.isascii() and c.islower() else c for c in x)),
+    "caesar_decode": ("text | shift (undo a Caesar shift)", lambda x: _caesar(_tba(x, 2)[0], -int(_tba(x, 2)[1] or 0))),
+    "caesar_any": ("text | shift", lambda x: _caesar(_tba(x, 2)[0], int(_tba(x, 2)[1] or 0))),
+    "caesar_bruteforce": ("text, all 25 shifts", lambda x: "\n".join("%2d: %s" % (n, _caesar(x, n)) for n in range(1, 26))),
+    "morse_encode": ("text to morse", lambda x: " ".join(_MORSE.get(c, "?") if c != " " else "/" for c in x.lower())),
+    "morse_decode": ("morse to text", lambda x: "".join(" " if t == "/" else _UNMORSE.get(t, "?") for t in x.split())),
+    "ascii_codes": ("text to character codes", lambda x: " ".join(str(ord(c)) for c in x)),
+    "from_ascii_codes": ("codes to text", lambda x: "".join(chr(int(n)) for n in x.split())),
+    "jwt_decode": ("decode a JWT payload (not verified)", lambda x: base64.urlsafe_b64decode(x.split(".")[1] + "=" * (-len(x.split(".")[1]) % 4)).decode()),
+    "vigenere_encode": ("text | key", lambda x: _vig(*_tba(x, 2), 1)),
+    "vigenere_decode": ("text | key", lambda x: _vig(*_tba(x, 2), -1)),
+})
+for _n in range(1, 26):
+    TOOLBOX["caesar_%d" % _n] = {"cat": "encode", "desc": "Caesar cipher, shift %d" % _n, "fn": (lambda n: lambda x: _caesar(x, n))(_n)}
+
+
+def _vig(t, k, d):
+    k = [ord(c) - 97 for c in k.lower() if c.isalpha()] or [0]
+    out, i = [], 0
+    for c in t:
+        if c.isascii() and c.isalpha():
+            b = 65 if c.isupper() else 97
+            out.append(chr((ord(c) - b + d * k[i % len(k)]) % 26 + b))
+            i += 1
+        else:
+            out.append(c)
+    return "".join(out)
+
+
+# ---------------------------------------------------------------- text
+def _ws(s):
+    return re.findall(r"[^\W_]+", re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", s))
+
+
+def _lev(a, b):
+    p = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        c = [i]
+        for j, cb in enumerate(b, 1):
+            c.append(min(p[j] + 1, c[j - 1] + 1, p[j - 1] + (ca != cb)))
+        p = c
+    return p[-1]
+
+
+_many("text", {
+    "text_upper": ("UPPERCASE", lambda x: x.upper()), "text_lower": ("lowercase", lambda x: x.lower()),
+    "text_title": ("Title Case", lambda x: x.title()), "text_swapcase": ("sWAP cASE", lambda x: x.swapcase()),
+    "text_sentence_case": ("Sentence case", lambda x: ". ".join(s.strip().capitalize() for s in x.split("."))),
+    "snake_case": ("to snake_case", lambda x: "_".join(w.lower() for w in _ws(x))),
+    "kebab_case": ("to kebab-case", lambda x: "-".join(w.lower() for w in _ws(x))),
+    "camel_case": ("to camelCase", lambda x: (lambda w: w[0].lower() + "".join(i.capitalize() for i in w[1:]) if w else "")(_ws(x))),
+    "pascal_case": ("to PascalCase", lambda x: "".join(w.capitalize() for w in _ws(x))),
+    "constant_case": ("to CONSTANT_CASE", lambda x: "_".join(w.upper() for w in _ws(x))),
+    "slugify": ("url slug", lambda x: re.sub(r"[^a-z0-9]+", "-", unicodedata.normalize("NFKD", x).encode("ascii", "ignore").decode().lower()).strip("-")),
+    "remove_accents": ("strip accents", lambda x: "".join(c for c in unicodedata.normalize("NFKD", x) if not unicodedata.combining(c))),
+    "count_words": ("word count", lambda x: str(len(x.split()))), "count_chars": ("character count", lambda x: str(len(x))),
+    "count_chars_no_spaces": ("characters without spaces", lambda x: str(len(re.sub(r"\s", "", x)))),
+    "count_lines": ("line count", lambda x: str(len(x.splitlines()))),
+    "count_sentences": ("sentence count", lambda x: str(len(re.findall(r"[.!?]+(?:\s|$)", x)))),
+    "count_vowels": ("vowel count", lambda x: str(sum(c in "aeiouAEIOU" for c in x))),
+    "count_consonants": ("consonant count", lambda x: str(sum(c.isalpha() and c not in "aeiouAEIOU" for c in x))),
+    "count_substring": ("text | part", lambda x: str(_tba(x, 2)[0].count(_tba(x, 2)[1]))),
+    "reading_time": ("minutes to read (200 wpm)", lambda x: "%.1f minutes" % (len(x.split()) / 200)),
+    "char_frequency": ("letter frequency", lambda x: str(collections.Counter(c for c in x.lower() if c.isalpha()).most_common())),
+    "word_frequency": ("top words", lambda x: str(collections.Counter(re.findall(r"[^\W_]+", x.lower())).most_common(20))),
+    "longest_word": ("longest word", lambda x: max(x.split() or [""], key=len)),
+    "shortest_word": ("shortest word", lambda x: min(x.split() or [""], key=len)),
+    "reverse_text": ("reverse characters", lambda x: x[::-1]),
+    "reverse_words": ("reverse word order", lambda x: " ".join(x.split()[::-1])),
+    "reverse_lines": ("reverse line order", lambda x: "\n".join(x.splitlines()[::-1])),
+    "sort_lines": ("sort lines", lambda x: "\n".join(sorted(x.splitlines()))),
+    "sort_lines_desc": ("sort lines Z-A", lambda x: "\n".join(sorted(x.splitlines(), reverse=True))),
+    "unique_lines": ("remove duplicate lines", lambda x: "\n".join(dict.fromkeys(x.splitlines()))),
+    "number_lines": ("number the lines", lambda x: "\n".join("%d. %s" % (i, l) for i, l in enumerate(x.splitlines(), 1))),
+    "remove_spaces": ("remove all spaces", lambda x: re.sub(r"\s+", "", x)),
+    "collapse_spaces": ("single spaces", lambda x: re.sub(r"\s+", " ", x).strip()),
+    "remove_punctuation": ("remove punctuation", lambda x: re.sub(r"[^\w\s]", "", x)),
+    "remove_digits": ("remove digits", lambda x: re.sub(r"\d", "", x)),
+    "extract_emails": ("find emails", lambda x: "\n".join(re.findall(r"[\w.+-]+@[\w-]+\.[\w.-]+", x)) or "none"),
+    "extract_urls": ("find links", lambda x: "\n".join(re.findall(r"https?://[^\s<>\"')]+", x)) or "none"),
+    "extract_numbers": ("find numbers", lambda x: ", ".join(re.findall(r"-?\d+(?:\.\d+)?", x)) or "none"),
+    "extract_hashtags": ("find #tags", lambda x: " ".join(re.findall(r"#\w+", x)) or "none"),
+    "extract_phone_numbers": ("find phone numbers", lambda x: "\n".join(re.findall(r"(?:\+?\d{1,3}[\s-]?)?\d{10}|\+?\d[\d\s-]{8,14}\d", x)) or "none"),
+    "is_palindrome": ("palindrome check", lambda x: str((lambda s: s == s[::-1])(re.sub(r"[\W_]", "", x.lower())))),
+    "is_anagram": ("a | b", lambda x: str(sorted(re.sub(r"\W", "", _tba(x, 2)[0].lower())) == sorted(re.sub(r"\W", "", _tba(x, 2)[1].lower())))),
+    "levenshtein": ("edit distance a | b", lambda x: str(_lev(*_tba(x, 2)[:2]))),
+    "text_similarity": ("a | b, 0 to 1", lambda x: "%.3f" % difflib.SequenceMatcher(None, *_tba(x, 2)[:2]).ratio()),
+    "diff_text": ("a | b line diff", lambda x: "\n".join(difflib.unified_diff(_tba(x, 2)[0].splitlines(), _tba(x, 2)[1].splitlines(), lineterm="")) or "identical"),
+    "find_replace": ("text | find | replace", lambda x: _tba(x, 3)[0].replace(_tba(x, 3)[1], _tba(x, 3)[2])),
+    "regex_find": ("pattern | text", lambda x: str(re.findall(_tba(x, 2)[0], _tba(x, 2)[1])[:100])),
+    "regex_replace": ("pattern | replacement | text", lambda x: re.sub(_tba(x, 3)[0], _tba(x, 3)[1], _tba(x, 3)[2])),
+    "regex_test": ("pattern | text", lambda x: str(bool(re.search(_tba(x, 2)[0], _tba(x, 2)[1])))),
+    "wrap_text": ("width | text", lambda x: textwrap.fill(_tba(x, 2)[1], int(_tba(x, 2)[0] or 60))),
+    "repeat_text": ("times | text", lambda x: (_tba(x, 2)[1] + "\n") * min(int(_tba(x, 2)[0] or 1), 200)),
+    "initials": ("initials of a name", lambda x: "".join(w[0].upper() for w in x.split())),
+    "acronym": ("acronym of phrase", lambda x: "".join(w[0].upper() for w in re.findall(r"[^\W_]+", x))),
+    "leetspeak": ("1337 speak", lambda x: x.translate(str.maketrans("aeiostAEIOST", "431057431057"))),
+    "mirror_text": ("text and its mirror", lambda x: x + x[::-1]),
+    "lorem_ipsum": ("n sentences of filler", lambda x: " ".join(["Lorem ipsum dolor sit amet, consectetur adipiscing elit."] * min(int(x or 3), 50))),
+    "is_email_valid": ("email format", lambda x: str(bool(re.fullmatch(r"[\w.+-]+@[\w-]+(\.[\w-]+)+", x.strip())))),
+    "is_url_valid": ("url format", lambda x: str(bool(re.fullmatch(r"https?://[^\s/$.?#][^\s]*", x.strip())))),
+    "is_numeric": ("is a number", lambda x: str(bool(re.fullmatch(r"-?\d+(\.\d+)?", x.strip())))),
+    "string_to_list": ("comma list to lines", lambda x: "\n".join(s.strip() for s in x.split(","))),
+    "lines_to_list": ("lines to comma list", lambda x: ", ".join(l.strip() for l in x.splitlines() if l.strip())),
+    "list_sort": ("a, b, c sorted", lambda x: ", ".join(sorted((s.strip() for s in x.split(",")), key=str.lower))),
+    "list_unique": ("remove duplicates", lambda x: ", ".join(dict.fromkeys(s.strip() for s in x.split(",")))),
+    "list_reverse": ("reverse list", lambda x: ", ".join(s.strip() for s in x.split(",")[::-1])),
+    "list_count": ("items in list", lambda x: str(len([s for s in x.split(",") if s.strip()]))),
+    "unicode_info": ("unicode names of characters", lambda x: "\n".join("%s U+%04X %s" % (c, ord(c), unicodedata.name(c, "?")) for c in x[:50])),
+})
+
+# ---------------------------------------------------------------- maths
+_PR = (2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37)
+
+
+def _isp(n):
+    if n < 2:
+        return False
+    for p in _PR:
+        if n % p == 0:
+            return n == p
+    d, s = n - 1, 0
+    while d % 2 == 0:
+        d //= 2
+        s += 1
+    for a in _PR:
+        x = pow(a, d, n)
+        if x in (1, n - 1):
+            continue
+        for _ in range(s - 1):
+            x = x * x % n
+            if x == n - 1:
+                break
+        else:
+            return False
+    return True
+
+
+def _rho(n):
+    for c in range(1, 60):
+        x = y = 2
+        d = 1
+        while d == 1:
+            x = (x * x + c) % n
+            y = (y * y + c) % n
+            y = (y * y + c) % n
+            d = math.gcd(abs(x - y), n)
+        if d != n:
+            return d
+    return n
+
+
+def _fac(n):
+    if n < 1 or n > 10 ** 24:
+        raise ValueError("give a whole number from 1 to 10^24")
+    out = []
+    for p in (2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37):
+        while n % p == 0:
+            out.append(p)
+            n //= p
+
+    def go(m):
+        if m == 1:
+            return
+        if _isp(m):
+            out.append(m)
+            return
+        d = _rho(m)
+        if d == m:
+            out.append(m)
+            return
+        go(d)
+        go(m // d)
+    go(n)
+    return sorted(out)
+
+
+def _i(x):
+    return int(_tbn(x))
+
+
+def _divs(n):
+    f = collections.Counter(_fac(n))
+    ds = [1]
+    for p, e in f.items():
+        ds = [d * p ** k for d in ds for k in range(e + 1)]
+    return sorted(ds)
+
+
+def _roman(n):
+    if not 0 < n < 4000:
+        raise ValueError("1 to 3999")
+    out = ""
+    for v, s in ((1000, "M"), (900, "CM"), (500, "D"), (400, "CD"), (100, "C"), (90, "XC"), (50, "L"), (40, "XL"),
+                 (10, "X"), (9, "IX"), (5, "V"), (4, "IV"), (1, "I")):
+        while n >= v:
+            out += s
+            n -= v
+    return out
+
+
+def _unroman(s):
+    v = {"I": 1, "V": 5, "X": 10, "L": 50, "C": 100, "D": 500, "M": 1000}
+    s = s.upper().strip()
+    t = 0
+    for i, c in enumerate(s):
+        t += -v[c] if i + 1 < len(s) and v[c] < v[s[i + 1]] else v[c]
+    return t
+
+
+_ONES = "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen".split()
+_TENS = "_ _ twenty thirty forty fifty sixty seventy eighty ninety".split()
+
+
+def _w99(n):
+    if n < 20:
+        return _ONES[n]
+    return _TENS[n // 10] + ("-" + _ONES[n % 10] if n % 10 else "")
+
+
+def _w999(n):
+    return (_ONES[n // 100] + " hundred" + (" and " + _w99(n % 100) if n % 100 else "")) if n >= 100 else _w99(n)
+
+
+def _words_intl(n):
+    if n == 0:
+        return "zero"
+    parts, names = [], ["", " thousand", " million", " billion", " trillion", " quadrillion"]
+    for i in range(len(names)):
+        n, r = divmod(n, 1000)
+        if r:
+            parts.append(_w999(r) + names[i])
+        if not n:
+            break
+    return " ".join(reversed(parts))
+
+
+def _words_ind(n):
+    if n == 0:
+        return "zero"
+    out = []
+    for div, name in ((10 ** 7, "crore"), (10 ** 5, "lakh"), (1000, "thousand"), (100, "hundred")):
+        q, n = divmod(n, div)
+        if q:
+            out.append((_words_ind(q) if div == 10 ** 7 else _w99(q)) + " " + name)
+    if n:
+        out.append(_w99(n))
+    return " ".join(out)
+
+
+def _indian_commas(n):
+    s = str(abs(int(n)))
+    if len(s) > 3:
+        s = re.sub(r"(\d+?)(?=(\d\d)+(\d)$)", r"\1,", s)
+    return ("-" if n < 0 else "") + s
+
+
+def _det(m):
+    m = [[Fraction(v) for v in r] for r in m]
+    n, d = len(m), Fraction(1)
+    for i in range(n):
+        p = next((r for r in range(i, n) if m[r][i] != 0), None)
+        if p is None:
+            return 0
+        if p != i:
+            m[i], m[p] = m[p], m[i]
+            d = -d
+        d *= m[i][i]
+        for r in range(i + 1, n):
+            f = m[r][i] / m[i][i]
+            m[r] = [a - f * b for a, b in zip(m[r], m[i])]
+    return d
+
+
+def _mat(x):
+    m = json.loads(x)
+    if not (isinstance(m, list) and m and all(isinstance(r, list) for r in m)):
+        raise ValueError("give a matrix like [[1,2],[3,4]]")
+    return m
+
+
+def _fr(s):
+    return Fraction(s.strip())
+
+
+_ST = lambda f: (lambda x: _tbf(f(_tbl(x))))
+_F1 = lambda f: (lambda x: _tbf(f(_tbn(x))))
+
+
+def _quad(x):
+    a, b, c = (_tbn(v) for v in _tba(x, 3))
+    d = b * b - 4 * a * c
+    if a == 0:
+        return "not quadratic: x = %s" % _tbf(-c / b) if b else "no equation"
+    if d >= 0:
+        return "x = %s or x = %s (discriminant %s)" % (_tbf((-b + math.sqrt(d)) / (2 * a)), _tbf((-b - math.sqrt(d)) / (2 * a)), _tbf(d))
+    r, im = -b / (2 * a), math.sqrt(-d) / (2 * a)
+    return "x = %s ± %si (discriminant %s)" % (_tbf(r), _tbf(im), _tbf(d))
+
+
+def _sys2(x):
+    a1, b1, c1, a2, b2, c2 = (_tbn(v) for v in _tba(x, 6))
+    d = a1 * b2 - a2 * b1
+    if d == 0:
+        return "no single solution (lines are parallel or the same)"
+    return "x = %s, y = %s" % (_tbf((c1 * b2 - c2 * b1) / d), _tbf((a1 * c2 - a2 * c1) / d))
+
+
+_many("math", {
+    "calculate": ("exact arithmetic expression", lambda x: _tbf(calc_v2(x))),
+    "is_prime": ("prime test (up to huge numbers)", lambda x: str(_isp(_i(x)))),
+    "prime_factors": ("prime factorisation", lambda x: " × ".join(map(str, _fac(_i(x))))),
+    "next_prime": ("next prime after n", lambda x: str(next(n for n in itertools.count(_i(x) + 1) if _isp(n)))),
+    "prev_prime": ("previous prime before n", lambda x: str(next(n for n in range(_i(x) - 1, 1, -1) if _isp(n)))),
+    "primes_up_to": ("primes up to n (max 100000)", lambda x: ", ".join(str(p) for p in range(2, min(_i(x), 100000) + 1) if _isp(p))),
+    "nth_prime": ("the n-th prime (n up to 20000)", lambda x: str(list(itertools.islice((p for p in itertools.count(2) if _isp(p)), min(_i(x), 20000)))[-1])),
+    "divisors": ("all divisors", lambda x: ", ".join(map(str, _divs(_i(x))))),
+    "divisor_count": ("number of divisors", lambda x: str(len(_divs(_i(x))))),
+    "divisor_sum": ("sum of divisors", lambda x: str(sum(_divs(_i(x))))),
+    "euler_totient": ("Euler phi", lambda x: str(round(_i(x) * math.prod(1 - 1 / p for p in set(_fac(_i(x))))))),
+    "gcd": ("a | b | ...", lambda x: str(math.gcd(*[int(_tbn(v)) for v in _tba(x)]))),
+    "lcm": ("a | b | ...", lambda x: str(math.lcm(*[int(_tbn(v)) for v in _tba(x)]))),
+    "fibonacci": ("n-th Fibonacci", lambda x: str((lambda n: next(a for i, (a, b) in enumerate(itertools.accumulate(range(n), lambda s, _: (s[1], s[0] + s[1]), initial=(0, 1))) if i == n))(min(_i(x), 20000)))),
+    "fibonacci_series": ("first n Fibonacci numbers", lambda x: ", ".join(str(a) for a, b in itertools.islice(itertools.accumulate(range(10 ** 6), lambda s, _: (s[1], s[0] + s[1]), initial=(0, 1)), min(_i(x), 200)))),
+    "factorial": ("n! (n up to 3000)", lambda x: str(math.factorial(min(_i(x), 3000)))),
+    "ncr": ("combinations n | r", lambda x: str(math.comb(*[_i(v) for v in _tba(x, 2)]))),
+    "npr": ("permutations n | r", lambda x: str(math.perm(*[_i(v) for v in _tba(x, 2)]))),
+    "catalan": ("n-th Catalan", lambda x: str(math.comb(2 * _i(x), _i(x)) // (_i(x) + 1))),
+    "sqrt": ("square root", _F1(math.sqrt)), "cbrt": ("cube root", _F1(lambda v: math.copysign(abs(v) ** (1 / 3), v))),
+    "square": ("x²", _F1(lambda v: v * v)), "cube": ("x³", _F1(lambda v: v ** 3)),
+    "nth_root": ("x | n", lambda x: _tbf(_tbn(_tba(x, 2)[0]) ** (1 / _tbn(_tba(x, 2)[1])))),
+    "power": ("a | b", lambda x: _tbf(_tbn(_tba(x, 2)[0]) ** _tbn(_tba(x, 2)[1]))),
+    "abs": ("absolute value", _F1(abs)), "reciprocal": ("1/x", _F1(lambda v: 1 / v)),
+    "ln": ("natural log", _F1(math.log)), "log10": ("log base 10", _F1(math.log10)), "log2": ("log base 2", _F1(math.log2)),
+    "log_base": ("x | base", lambda x: _tbf(math.log(_tbn(_tba(x, 2)[0]), _tbn(_tba(x, 2)[1])))),
+    "exp": ("e^x", _F1(math.exp)),
+    "sin_deg": ("sin of degrees", _F1(lambda v: math.sin(math.radians(v)))), "cos_deg": ("cos of degrees", _F1(lambda v: math.cos(math.radians(v)))),
+    "tan_deg": ("tan of degrees", _F1(lambda v: math.tan(math.radians(v)))),
+    "asin_deg": ("arcsin in degrees", _F1(lambda v: math.degrees(math.asin(v)))), "acos_deg": ("arccos in degrees", _F1(lambda v: math.degrees(math.acos(v)))),
+    "atan_deg": ("arctan in degrees", _F1(lambda v: math.degrees(math.atan(v)))),
+    "sin_rad": ("sin of radians", _F1(math.sin)), "cos_rad": ("cos of radians", _F1(math.cos)), "tan_rad": ("tan of radians", _F1(math.tan)),
+    "sinh": ("sinh", _F1(math.sinh)), "cosh": ("cosh", _F1(math.cosh)), "tanh": ("tanh", _F1(math.tanh)),
+    "floor": ("floor", _F1(math.floor)), "ceil": ("ceiling", _F1(math.ceil)),
+    "round_to": ("x | decimals", lambda x: _tbf(round(_tbn(_tba(x, 2)[0]), int(_tba(x, 2)[1] or 0)))),
+    "sign": ("sign of number", _F1(lambda v: (v > 0) - (v < 0))),
+    "is_even": ("even test", lambda x: str(_i(x) % 2 == 0)),
+    "is_perfect_square": ("perfect square test", lambda x: str(math.isqrt(_i(x)) ** 2 == _i(x))),
+    "is_perfect_number": ("perfect number test", lambda x: str(sum(_divs(_i(x))) == 2 * _i(x))),
+    "is_armstrong": ("Armstrong number test", lambda x: str(sum(int(d) ** len(x.strip()) for d in x.strip()) == _i(x))),
+    "digit_sum": ("sum of digits", lambda x: str(sum(int(d) for d in str(abs(_i(x)))))),
+    "digital_root": ("digital root", lambda x: str(0 if _i(x) == 0 else 1 + (abs(_i(x)) - 1) % 9)),
+    "digit_count": ("number of digits", lambda x: str(len(str(abs(_i(x)))))),
+    "reverse_number": ("reverse digits", lambda x: str(int(str(abs(_i(x)))[::-1]) * (1 if _i(x) >= 0 else -1))),
+    "collatz_steps": ("Collatz steps to reach 1", lambda x: str(next(k for k, n in enumerate(itertools.accumulate(range(10 ** 6), lambda n, _: n // 2 if n % 2 == 0 else 3 * n + 1, initial=_i(x))) if n == 1))),
+    "to_binary": ("decimal to binary", lambda x: bin(_i(x))[2:] if _i(x) >= 0 else "-" + bin(-_i(x))[2:]),
+    "to_octal": ("decimal to octal", lambda x: oct(_i(x))[2:]), "to_hex": ("decimal to hex", lambda x: hex(_i(x))[2:]),
+    "from_binary": ("binary to decimal", lambda x: str(int(x.strip(), 2))), "from_octal": ("octal to decimal", lambda x: str(int(x.strip(), 8))),
+    "from_hex": ("hex to decimal", lambda x: str(int(x.strip(), 16))),
+    "to_base": ("number | base 2 to 36", lambda x: (lambda n, b: (lambda f: f(f, abs(n)) if n else "0")(lambda f, m: "" if m == 0 else f(f, m // b) + "0123456789abcdefghijklmnopqrstuvwxyz"[m % b]))(_i(_tba(x, 2)[0]), int(_tba(x, 2)[1] or 2))),
+    "from_base": ("text | base", lambda x: str(int(_tba(x, 2)[0], int(_tba(x, 2)[1] or 10)))),
+    "to_roman": ("number to Roman numerals", lambda x: _roman(_i(x))), "from_roman": ("Roman numerals to number", lambda x: str(_unroman(x))),
+    "number_to_words": ("number in English words", lambda x: ("minus " if _i(x) < 0 else "") + _words_intl(abs(_i(x)))),
+    "number_to_words_indian": ("number in lakh / crore words", lambda x: ("minus " if _i(x) < 0 else "") + _words_ind(abs(_i(x)))),
+    "indian_format": ("1,23,45,678 style commas", lambda x: _indian_commas(_i(x))),
+    "intl_format": ("12,345,678 style commas", lambda x: format(_i(x), ",")),
+    "percent_of": ("percent | number", lambda x: _tbf(_tbn(_tba(x, 2)[0]) * _tbn(_tba(x, 2)[1]) / 100)),
+    "percentage": ("part | total", lambda x: _tbf(_tbn(_tba(x, 2)[0]) / _tbn(_tba(x, 2)[1]) * 100) + "%"),
+    "percent_change": ("old | new", lambda x: _tbf((_tbn(_tba(x, 2)[1]) - _tbn(_tba(x, 2)[0])) / _tbn(_tba(x, 2)[0]) * 100) + "%"),
+    "ratio_simplify": ("a | b", lambda x: (lambda g, a, b: "%d : %d" % (a // g, b // g))(math.gcd(_i(_tba(x, 2)[0]), _i(_tba(x, 2)[1])), _i(_tba(x, 2)[0]), _i(_tba(x, 2)[1]))),
+    "fraction_simplify": ("a/b", lambda x: str(_fr(x))),
+    "fraction_to_decimal": ("a/b", lambda x: _tbf(float(_fr(x)))),
+    "decimal_to_fraction": ("0.375", lambda x: str(Fraction(x.strip()).limit_denominator(10 ** 6))),
+    "fraction_add": ("a/b | c/d", lambda x: str(_fr(_tba(x, 2)[0]) + _fr(_tba(x, 2)[1]))),
+    "fraction_sub": ("a/b | c/d", lambda x: str(_fr(_tba(x, 2)[0]) - _fr(_tba(x, 2)[1]))),
+    "fraction_mul": ("a/b | c/d", lambda x: str(_fr(_tba(x, 2)[0]) * _fr(_tba(x, 2)[1]))),
+    "fraction_div": ("a/b | c/d", lambda x: str(_fr(_tba(x, 2)[0]) / _fr(_tba(x, 2)[1]))),
+    "mean": ("average of list", _ST(statistics.fmean)), "median": ("median", _ST(statistics.median)),
+    "mode": ("most common value", _ST(statistics.mode)), "stdev": ("sample standard deviation", _ST(statistics.stdev)),
+    "pstdev": ("population standard deviation", _ST(statistics.pstdev)), "variance": ("sample variance", _ST(statistics.variance)),
+    "pvariance": ("population variance", _ST(statistics.pvariance)),
+    "geometric_mean": ("geometric mean", _ST(statistics.geometric_mean)), "harmonic_mean": ("harmonic mean", _ST(statistics.harmonic_mean)),
+    "list_sum": ("sum", _ST(sum)), "list_product": ("product", _ST(math.prod)), "list_min": ("minimum", _ST(min)), "list_max": ("maximum", _ST(max)),
+    "list_range": ("max - min", _ST(lambda v: max(v) - min(v))),
+    "sort_numbers": ("sort ascending", lambda x: ", ".join(_tbf(v) for v in sorted(_tbl(x)))),
+    "cumulative_sum": ("running totals", lambda x: ", ".join(_tbf(v) for v in itertools.accumulate(_tbl(x)))),
+    "quartiles": ("Q1, Q2, Q3", lambda x: ", ".join(_tbf(v) for v in statistics.quantiles(_tbl(x), n=4))),
+    "iqr": ("interquartile range", lambda x: (lambda q: _tbf(q[2] - q[0]))(statistics.quantiles(_tbl(x), n=4))),
+    "correlation": ("xs | ys (comma lists)", lambda x: _tbf(statistics.correlation(_tbl(_tba(x, 2)[0]), _tbl(_tba(x, 2)[1])))),
+    "linear_regression": ("xs | ys, gives slope and intercept", lambda x: (lambda r: "slope=%s intercept=%s" % (_tbf(r.slope), _tbf(r.intercept)))(statistics.linear_regression(_tbl(_tba(x, 2)[0]), _tbl(_tba(x, 2)[1])))),
+    "quadratic_solve": ("a | b | c for ax²+bx+c=0", _quad),
+    "linear_solve": ("a | b for ax+b=0", lambda x: "x = " + _tbf(-_tbn(_tba(x, 2)[1]) / _tbn(_tba(x, 2)[0]))),
+    "system_2x2": ("a1|b1|c1|a2|b2|c2 for a1x+b1y=c1, a2x+b2y=c2", _sys2),
+    "matrix_determinant": ("[[1,2],[3,4]]", lambda x: str(_det(_mat(x)))),
+    "matrix_transpose": ("[[1,2],[3,4]]", lambda x: json.dumps([list(r) for r in zip(*_mat(x))])),
+    "matrix_multiply": ("A | B as JSON matrices", lambda x: json.dumps([[sum(a * b for a, b in zip(r, c)) for c in zip(*json.loads(_tba(x, 2)[1]))] for r in json.loads(_tba(x, 2)[0])])),
+    "matrix_add": ("A | B as JSON matrices", lambda x: json.dumps([[a + b for a, b in zip(r, s)] for r, s in zip(json.loads(_tba(x, 2)[0]), json.loads(_tba(x, 2)[1]))])),
+    "complex_calc": ("python complex expression like (1+2j)*(3-1j)", lambda x: str(eval(compile(ast.parse(x, mode="eval"), "c", "eval"), {"__builtins__": {}}, {})) if re.fullmatch(r"[\d+\-*/().j\s e]+", x) else "only numbers, + - * / ( ) and j allowed"),
+    "simplify": ("algebra expression", lambda x: symbolic_math("simplify", _tba(x, 2)[0], _tba(x, 2)[1] or "x")),
+    "expand": ("expand (x+1)^3", lambda x: symbolic_math("expand", _tba(x, 2)[0], _tba(x, 2)[1] or "x")),
+    "factor": ("factor x^2-1", lambda x: symbolic_math("factor", _tba(x, 2)[0], _tba(x, 2)[1] or "x")),
+    "derivative": ("expr | variable", lambda x: symbolic_math("diff", _tba(x, 2)[0], _tba(x, 2)[1] or "x")),
+    "integral": ("expr | variable | lower | upper", lambda x: symbolic_math("integrate", _tba(x, 4)[0], _tba(x, 4)[1] or "x", None, _tba(x, 4)[2] or None, _tba(x, 4)[3] or None)),
+    "solve_equation": ("equation like x^2-5x+6=0 | variable", lambda x: symbolic_math("solve", _tba(x, 2)[0], _tba(x, 2)[1] or "x")),
+    "limit": ("expr | variable | point", lambda x: symbolic_math("limit", _tba(x, 3)[0], _tba(x, 3)[1] or "x", _tba(x, 3)[2] or "0")),
+    "taylor_series": ("expr | variable | point | order", lambda x: symbolic_math("series", _tba(x, 4)[0], _tba(x, 4)[1] or "x", _tba(x, 4)[2] or "0", None, None, int(_tba(x, 4)[3] or 6))),
+    "evaluate_precise": ("30-digit numeric value", lambda x: symbolic_math("evaluate", _tba(x, 2)[0], _tba(x, 2)[1] or "x")),
+})
+
+# ---------------------------------------------------------------- geometry
+_A = lambda x, n: [_tbn(v) for v in _tba(x, n)]
+_many("geometry", {
+    "circle_area": ("radius", _F1(lambda r: math.pi * r * r)), "circle_circumference": ("radius", _F1(lambda r: 2 * math.pi * r)),
+    "sphere_volume": ("radius", _F1(lambda r: 4 / 3 * math.pi * r ** 3)), "sphere_surface": ("radius", _F1(lambda r: 4 * math.pi * r * r)),
+    "cylinder_volume": ("r | h", lambda x: _tbf(math.pi * _A(x, 2)[0] ** 2 * _A(x, 2)[1])),
+    "cylinder_surface": ("r | h", lambda x: _tbf(2 * math.pi * _A(x, 2)[0] * (_A(x, 2)[0] + _A(x, 2)[1]))),
+    "cone_volume": ("r | h", lambda x: _tbf(math.pi * _A(x, 2)[0] ** 2 * _A(x, 2)[1] / 3)),
+    "cone_surface": ("r | h", lambda x: _tbf(math.pi * _A(x, 2)[0] * (_A(x, 2)[0] + math.hypot(*_A(x, 2))))),
+    "rectangle_area": ("l | w", lambda x: _tbf(math.prod(_A(x, 2)))), "rectangle_perimeter": ("l | w", lambda x: _tbf(2 * sum(_A(x, 2)))),
+    "square_area": ("side", _F1(lambda s: s * s)), "cube_volume": ("side", _F1(lambda s: s ** 3)), "cube_surface": ("side", _F1(lambda s: 6 * s * s)),
+    "cuboid_volume": ("l | w | h", lambda x: _tbf(math.prod(_A(x, 3)))),
+    "cuboid_surface": ("l | w | h", lambda x: (lambda l, w, h: _tbf(2 * (l * w + w * h + l * h)))(*_A(x, 3))),
+    "triangle_area": ("base | height", lambda x: _tbf(_A(x, 2)[0] * _A(x, 2)[1] / 2)),
+    "heron_area": ("a | b | c", lambda x: (lambda a, b, c: _tbf(math.sqrt((a + b + c) / 2 * ((a + b + c) / 2 - a) * ((a + b + c) / 2 - b) * ((a + b + c) / 2 - c))))(*_A(x, 3))),
+    "hypotenuse": ("a | b", lambda x: _tbf(math.hypot(*_A(x, 2)))),
+    "right_triangle_leg": ("hypotenuse | other leg", lambda x: _tbf(math.sqrt(_A(x, 2)[0] ** 2 - _A(x, 2)[1] ** 2))),
+    "trapezoid_area": ("a | b | h", lambda x: (lambda a, b, h: _tbf((a + b) * h / 2))(*_A(x, 3))),
+    "parallelogram_area": ("base | height", lambda x: _tbf(math.prod(_A(x, 2)))),
+    "rhombus_area": ("d1 | d2", lambda x: _tbf(math.prod(_A(x, 2)) / 2)),
+    "ellipse_area": ("a | b", lambda x: _tbf(math.pi * math.prod(_A(x, 2)))),
+    "regular_polygon_area": ("sides | side length", lambda x: (lambda n, s: _tbf(n * s * s / (4 * math.tan(math.pi / n))))(*_A(x, 2))),
+    "sector_area": ("radius | degrees", lambda x: (lambda r, d: _tbf(math.pi * r * r * d / 360))(*_A(x, 2))),
+    "arc_length": ("radius | degrees", lambda x: (lambda r, d: _tbf(2 * math.pi * r * d / 360))(*_A(x, 2))),
+    "distance_2d": ("x1|y1|x2|y2", lambda x: (lambda a, b, c, d: _tbf(math.hypot(c - a, d - b)))(*_A(x, 4))),
+    "distance_3d": ("x1|y1|z1|x2|y2|z2", lambda x: (lambda a, b, c, d, e, f: _tbf(math.sqrt((d - a) ** 2 + (e - b) ** 2 + (f - c) ** 2)))(*_A(x, 6))),
+    "midpoint": ("x1|y1|x2|y2", lambda x: (lambda a, b, c, d: "(%s, %s)" % (_tbf((a + c) / 2), _tbf((b + d) / 2)))(*_A(x, 4))),
+    "slope": ("x1|y1|x2|y2", lambda x: (lambda a, b, c, d: _tbf((d - b) / (c - a)))(*_A(x, 4))),
+    "triangle_angles": ("sides a | b | c in degrees", lambda x: (lambda a, b, c: ", ".join(_tbf(math.degrees(math.acos((p * p + q * q - r * r) / (2 * p * q)))) for p, q, r in ((b, c, a), (a, c, b), (a, b, c))))(*_A(x, 3))),
+    "polygon_interior_angle": ("sides", _F1(lambda n: (n - 2) * 180 / n)),
+    "diagonal_of_rectangle": ("l | w", lambda x: _tbf(math.hypot(*_A(x, 2)))),
+})
+
+# ---------------------------------------------------------------- finance
+def _emi(x):
+    p, r, y = _A(x, 3)
+    r, n = r / 1200, int(y * 12)
+    e = p / n if r == 0 else p * r * (1 + r) ** n / ((1 + r) ** n - 1)
+    return "EMI %.2f per month, total paid %.2f, total interest %.2f" % (e, e * n, e * n - p)
+
+
+def _emi_schedule(x):
+    p, r, y = _A(x, 3)
+    r, n = r / 1200, int(y * 12)
+    e = p / n if r == 0 else p * r * (1 + r) ** n / ((1 + r) ** n - 1)
+    out, bal = [], p
+    for m in range(1, min(n, 24) + 1):
+        i = bal * r
+        bal -= e - i
+        out.append("month %d: interest %.0f, principal %.0f, balance %.0f" % (m, i, e - i, max(bal, 0)))
+    return "EMI %.2f. First %d months:\n%s" % (e, len(out), "\n".join(out))
+
+
+def _sip(x):
+    m, r, y = _A(x, 3)
+    i, n = r / 1200, int(y * 12)
+    fv = m * n if i == 0 else m * (((1 + i) ** n - 1) / i) * (1 + i)
+    return "Future value %.2f on investing %.2f (gain %.2f)" % (fv, m * n, fv - m * n)
+
+
+_many("finance", {
+    "emi": ("principal | yearly rate % | years", _emi), "emi_schedule": ("principal | rate % | years, first 24 months", _emi_schedule),
+    "sip_future_value": ("monthly | yearly rate % | years", _sip),
+    "simple_interest": ("principal | rate % | years", lambda x: (lambda p, r, t: "interest %.2f, total %.2f" % (p * r * t / 100, p + p * r * t / 100))(*_A(x, 3))),
+    "compound_interest": ("principal | rate % | years | times per year", lambda x: (lambda p, r, t, n: "total %.2f, interest %.2f" % (p * (1 + r / 100 / (n or 1)) ** ((n or 1) * t), p * (1 + r / 100 / (n or 1)) ** ((n or 1) * t) - p))(*(lambda a: a if _tba(x, 4)[3] else a[:3] + [1])(_A(x, 4)[:3] + [_tbn(_tba(x, 4)[3] or 1)]))),
+    "lumpsum_future_value": ("amount | yearly rate % | years", lambda x: (lambda p, r, t: "%.2f" % (p * (1 + r / 100) ** t))(*_A(x, 3))),
+    "fd_maturity": ("amount | rate % | years, quarterly compounding", lambda x: (lambda p, r, t: "%.2f" % (p * (1 + r / 400) ** (4 * t)))(*_A(x, 3))),
+    "gst_add": ("amount | gst %", lambda x: (lambda a, g: "GST %.2f, total %.2f" % (a * g / 100, a * (1 + g / 100)))(*_A(x, 2))),
+    "gst_remove": ("gst-inclusive amount | gst %", lambda x: (lambda a, g: "base %.2f, GST %.2f" % (a / (1 + g / 100), a - a / (1 + g / 100)))(*_A(x, 2))),
+    "discount_price": ("price | discount %", lambda x: (lambda p, d: "pay %.2f, save %.2f" % (p * (1 - d / 100), p * d / 100))(*_A(x, 2))),
+    "profit_loss_percent": ("cost price | selling price", lambda x: (lambda c, s: ("profit" if s >= c else "loss") + " %.2f (%.2f%%)" % (abs(s - c), abs(s - c) / c * 100))(*_A(x, 2))),
+    "selling_price_for_margin": ("cost | profit %", lambda x: "%.2f" % (_A(x, 2)[0] * (1 + _A(x, 2)[1] / 100))),
+    "cagr": ("start value | end value | years", lambda x: (lambda a, b, y: "%.2f%% per year" % (((b / a) ** (1 / y) - 1) * 100))(*_A(x, 3))),
+    "roi": ("gain or final value | cost", lambda x: "%.2f%%" % ((_A(x, 2)[0] - _A(x, 2)[1]) / _A(x, 2)[1] * 100)),
+    "rule_of_72": ("yearly rate %", lambda x: "%.1f years to double" % (72 / _tbn(x))),
+    "break_even_units": ("fixed cost | price per unit | variable cost per unit", lambda x: (lambda f, p, v: "%.0f units" % math.ceil(f / (p - v)))(*_A(x, 3))),
+    "tip_split": ("bill | tip % | people", lambda x: (lambda b, t, n: "tip %.2f, total %.2f, each %.2f" % (b * t / 100, b * (1 + t / 100), b * (1 + t / 100) / n))(*_A(x, 3))),
+    "inflation_adjust": ("amount | yearly inflation % | years", lambda x: (lambda a, r, y: "worth %.2f in today's money after %s years, or you need %.2f then" % (a / (1 + r / 100) ** y, _tbf(y), a * (1 + r / 100) ** y))(*_A(x, 3))),
+    "loan_affordability": ("monthly EMI you can pay | rate % | years", lambda x: (lambda e, r, y: "max loan %.0f" % (e * ((1 + r / 1200) ** (y * 12) - 1) / ((r / 1200) * (1 + r / 1200) ** (y * 12))))(*_A(x, 3))),
+    "ppf_maturity": ("yearly deposit | rate % | years", lambda x: (lambda d, r, y: "%.2f" % (d * (((1 + r / 100) ** y - 1) / (r / 100)) * (1 + r / 100)))(*_A(x, 3))),
+    "hra_exempt_basic": ("basic+DA yearly | hra received yearly | rent paid yearly | metro 1 or 0", lambda x: (lambda b, h, r, m: "exempt HRA %.0f (least of received, rent-10%% basic, %s%% basic)" % (min(h, max(r - .1 * b, 0), b * (.5 if m else .4)), "50" if m else "40"))(*_A(x, 4))),
+})
+
+# ---------------------------------------------------------------- health (information only)
+_many("health", {
+    "bmi": ("weight kg | height cm", lambda x: (lambda w, h: "BMI %.1f (%s)" % (w / (h / 100) ** 2, (lambda b: "underweight" if b < 18.5 else "normal" if b < 25 else "overweight" if b < 30 else "obese")(w / (h / 100) ** 2)))(*_A(x, 2))),
+    "bmr": ("sex m or f | kg | cm | age (Mifflin-St Jeor)", lambda x: (lambda s, w, h, a: "BMR %.0f kcal/day" % (10 * w + 6.25 * h - 5 * a + (5 if s.lower().startswith("m") else -161)))(_tba(x, 4)[0], *[_tbn(v) for v in _tba(x, 4)[1:]])),
+    "daily_water_litres": ("weight kg", lambda x: "about %.1f litres (35 ml per kg)" % (_tbn(x) * .035)),
+    "ideal_weight": ("height cm | sex m or f (Devine)", lambda x: "%.1f kg" % ((50 if _tba(x, 2)[1].lower().startswith("m") else 45.5) + 2.3 * (_tbn(_tba(x, 2)[0]) / 2.54 - 60))),
+    "heart_rate_zones": ("age", lambda x: (lambda m: "max %d bpm; fat burn %d-%d; cardio %d-%d; peak %d-%d" % (m, m * .6, m * .7, m * .7, m * .85, m * .85, m))(220 - _tbn(x))),
+    "pace_per_km": ("km | minutes", lambda x: (lambda k, m: "%d:%02d min/km, %.1f km/h" % (m / k, (m / k % 1) * 60, k / m * 60))(*_A(x, 2))),
+    "calories_per_day_goal": ("bmr | activity: sedentary/light/moderate/active", lambda x: "%.0f kcal/day to maintain" % (_tbn(_tba(x, 2)[0]) * {"sedentary": 1.2, "light": 1.375, "moderate": 1.55, "active": 1.725}.get(_tba(x, 2)[1].lower(), 1.2))),
+    "waist_hip_ratio": ("waist | hip", lambda x: "%.2f" % (_A(x, 2)[0] / _A(x, 2)[1])),
+})
+
+# ---------------------------------------------------------------- dates and time
+def _age(x):
+    b, t = _tbd(x), datetime.date.today()
+    y, m = t.year - b.year, t.month - b.month
+    d = t.day - b.day
+    if d < 0:
+        m -= 1
+        d += calendar.monthrange(t.year if t.month > 1 else t.year - 1, t.month - 1 or 12)[1]
+    if m < 0:
+        y -= 1
+        m += 12
+    return "%d years, %d months, %d days (%d days old)" % (y, m, d, (t - b).days)
+
+
+def _addmonths(x):
+    d, n = _tba(x, 2)
+    d = _tbd(d)
+    m = d.month - 1 + int(n)
+    y, m = d.year + m // 12, m % 12 + 1
+    return str(datetime.date(y, m, min(d.day, calendar.monthrange(y, m)[1])))
+
+
+def _bizdays(x):
+    a, b = (_tbd(v) for v in _tba(x, 2))
+    return str(sum(1 for i in range((b - a).days) if (a + datetime.timedelta(i)).weekday() < 5))
+
+
+def _tz(x):
+    t, a, b = _tba(x, 3)
+    dt = datetime.datetime.fromisoformat(t.replace(" ", "T")).replace(tzinfo=zoneinfo.ZoneInfo(a))
+    return dt.astimezone(zoneinfo.ZoneInfo(b)).strftime("%Y-%m-%d %H:%M %Z")
+
+
+_many("datetime", {
+    "today": ("today's date", lambda x: datetime.date.today().strftime("%A, %d %B %Y")),
+    "now_utc": ("current UTC time", lambda x: datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")),
+    "now_ist": ("current India time", lambda x: (datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d %H:%M:%S IST")),
+    "now_in_timezone": ("zone name like Asia/Tokyo", lambda x: datetime.datetime.now(zoneinfo.ZoneInfo(x.strip())).strftime("%Y-%m-%d %H:%M:%S %Z")),
+    "timezone_convert": ("YYYY-MM-DD HH:MM | from zone | to zone", _tz),
+    "days_between": ("date1 | date2", lambda x: "%d days" % abs((_tbd(_tba(x, 2)[1]) - _tbd(_tba(x, 2)[0])).days)),
+    "business_days_between": ("date1 | date2 (Mon-Fri)", _bizdays),
+    "date_diff_ymd": ("date1 | date2", lambda x: (lambda a, b: "%d years, %d months, %d days" % (lambda y, m, d: (y - (m < 0 or (m == 0 and d < 0)), (m - (d < 0)) % 12, d % 30 if d < 0 else d))(b.year - a.year, b.month - a.month, b.day - a.day))(*sorted(_tbd(v) for v in _tba(x, 2)))),
+    "add_days": ("date | days (negative to go back)", lambda x: str(_tbd(_tba(x, 2)[0]) + datetime.timedelta(int(_tba(x, 2)[1])))),
+    "add_months": ("date | months", _addmonths),
+    "weekday_of": ("date", lambda x: _tbd(x).strftime("%A")),
+    "age_from_dob": ("date of birth", _age),
+    "is_leap_year": ("year", lambda x: str(calendar.isleap(_i(x)))),
+    "days_in_month": ("year | month", lambda x: str(calendar.monthrange(*[_i(v) for v in _tba(x, 2)])[1])),
+    "week_number": ("date", lambda x: "week %d of %d" % (_tbd(x).isocalendar()[1], _tbd(x).isocalendar()[0])),
+    "day_of_year": ("date", lambda x: str(_tbd(x).timetuple().tm_yday)),
+    "unix_to_date": ("unix seconds", lambda x: datetime.datetime.utcfromtimestamp(_tbn(x)).strftime("%Y-%m-%d %H:%M:%S UTC")),
+    "date_to_unix": ("date", lambda x: str(int(calendar.timegm(_tbd(x).timetuple())))),
+    "calendar_month": ("year | month", lambda x: calendar.month(*[_i(v) for v in _tba(x, 2)])),
+    "countdown_to": ("future date", lambda x: "%d days left" % (_tbd(x) - datetime.date.today()).days),
+    "next_weekday_date": ("weekday name | from date optional", lambda x: str((lambda d, w: d + datetime.timedelta((["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"].index(w) - d.weekday()) % 7 or 7))(_tbd(_tba(x, 2)[1]) if _tba(x, 2)[1] else datetime.date.today(), _tba(x, 2)[0].lower()))),
+    "zodiac_sign": ("day-month like 24-11", lambda x: (lambda d, m: next(n for (mm, dd, n) in ((1, 20, "Capricorn"), (2, 19, "Aquarius"), (3, 21, "Pisces"), (4, 20, "Aries"), (5, 21, "Taurus"), (6, 21, "Gemini"), (7, 23, "Cancer"), (8, 23, "Leo"), (9, 23, "Virgo"), (10, 23, "Libra"), (11, 22, "Scorpio"), (12, 22, "Sagittarius"), (13, 32, "Capricorn")) if (m, d) < (mm, dd) or mm == 13))(*[_i(v) for v in re.split(r"[-/ ]", x.strip())[:2]])),
+    "hours_to_hm": ("decimal hours to h:m", lambda x: "%d h %d min" % divmod(round(_tbn(x) * 60), 60)),
+    "seconds_to_hms": ("seconds", lambda x: "%d:%02d:%02d" % (_i(x) // 3600, _i(x) % 3600 // 60, _i(x) % 60)),
+})
+
+# ---------------------------------------------------------------- colour
+def _hx(x):
+    h = x.strip().lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def _tohex(r, g, b):
+    return "#%02x%02x%02x" % tuple(max(0, min(255, round(v))) for v in (r, g, b))
+
+
+def _hsl_shift(x, d):
+    h, p = _tba(x, 2)
+    r, g, b = (v / 255 for v in _hx(h))
+    hh, l, s = colorsys.rgb_to_hls(r, g, b)
+    l = max(0, min(1, l + d * (_tbn(p or 10)) / 100))
+    return _tohex(*(v * 255 for v in colorsys.hls_to_rgb(hh, l, s)))
+
+
+def _lum(rgb):
+    return sum(c * w for c, w in zip(((v / 255 / 12.92) if v / 255 <= .03928 else ((v / 255 + .055) / 1.055) ** 2.4 for v in rgb), (.2126, .7152, .0722)))
+
+
+def _rot(x, deg):
+    r, g, b = (v / 255 for v in _hx(x))
+    h, l, s = colorsys.rgb_to_hls(r, g, b)
+    return _tohex(*(v * 255 for v in colorsys.hls_to_rgb((h + deg / 360) % 1, l, s)))
+
+
+_many("color", {
+    "hex_to_rgb": ("#rrggbb", lambda x: "rgb(%d, %d, %d)" % _hx(x)),
+    "rgb_to_hex": ("r | g | b", lambda x: _tohex(*_A(x, 3))),
+    "rgb_to_hsl": ("r | g | b", lambda x: (lambda h, l, s: "hsl(%d, %d%%, %d%%)" % (h * 360, s * 100, l * 100))(*colorsys.rgb_to_hls(*(v / 255 for v in _A(x, 3))))),
+    "hsl_to_rgb": ("h | s% | l%", lambda x: (lambda h, s, l: "rgb(%d, %d, %d)" % tuple(round(v * 255) for v in colorsys.hls_to_rgb(h / 360, l / 100, s / 100)))(*_A(x, 3))),
+    "hex_to_hsl": ("#rrggbb", lambda x: (lambda h, l, s: "hsl(%d, %d%%, %d%%)" % (h * 360, s * 100, l * 100))(*colorsys.rgb_to_hls(*(v / 255 for v in _hx(x))))),
+    "rgb_to_hsv": ("r | g | b", lambda x: (lambda h, s, v: "hsv(%d, %d%%, %d%%)" % (h * 360, s * 100, v * 100))(*colorsys.rgb_to_hsv(*(v / 255 for v in _A(x, 3))))),
+    "lighten_color": ("hex | percent", lambda x: _hsl_shift(x, 1)), "darken_color": ("hex | percent", lambda x: _hsl_shift(x, -1)),
+    "invert_color": ("hex", lambda x: _tohex(*(255 - v for v in _hx(x)))),
+    "grayscale_color": ("hex", lambda x: (lambda g: _tohex(g, g, g))(sum(c * w for c, w in zip(_hx(x), (.299, .587, .114))))),
+    "complement_color": ("hex", lambda x: _rot(x, 180)),
+    "triad_palette": ("hex", lambda x: ", ".join([x.strip(), _rot(x, 120), _rot(x, 240)])),
+    "analogous_palette": ("hex", lambda x: ", ".join([_rot(x, -30), x.strip(), _rot(x, 30)])),
+    "contrast_ratio": ("hex | hex (WCAG)", lambda x: (lambda a, b: "%.2f:1 (%s)" % ((max(a, b) + .05) / (min(a, b) + .05), "passes AA for text" if (max(a, b) + .05) / (min(a, b) + .05) >= 4.5 else "fails AA for small text"))(*(_lum(_hx(v)) for v in _tba(x, 2)))),
+    "random_color": ("a random colour", lambda x: _tohex(*(secrets.randbelow(256) for _ in range(3)))),
+    "text_color_for_background": ("hex background, black or white text", lambda x: "black" if _lum(_hx(x)) > .179 else "white"),
+})
+
+# ---------------------------------------------------------------- generators
+def _dice(x):
+    m = re.fullmatch(r"\s*(\d*)d(\d+)\s*", x or "1d6")
+    n, s = int(m.group(1) or 1), int(m.group(2))
+    r = [secrets.randbelow(s) + 1 for _ in range(min(n, 100))]
+    return "%s = %d" % (r, sum(r))
+
+
+_many("generate", {
+    "uuid4": ("random UUID", lambda x: str(uuid.uuid4())), "uuid1": ("time-based UUID", lambda x: str(uuid.uuid1())),
+    "random_number": ("low | high", lambda x: str(random.randint(*[_i(v) for v in _tba(x, 2)]))),
+    "random_choice": ("a, b, c", lambda x: secrets.choice([s.strip() for s in x.split(",")])),
+    "shuffle_list": ("a, b, c", lambda x: ", ".join(random.sample([s.strip() for s in x.split(",")], len(x.split(","))))),
+    "roll_dice": ("like 2d6", _dice), "coin_flip": ("heads or tails", lambda x: secrets.choice(["heads", "tails"])),
+    "password": ("length 8-64", lambda x: "".join(secrets.choice(string.ascii_letters + string.digits + "!@#$%^&*-_") for _ in range(max(8, min(int(x or 16), 64))))),
+    "random_string": ("length", lambda x: "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(min(int(x or 12), 500)))),
+    "random_hex": ("bytes", lambda x: secrets.token_hex(min(int(x or 16), 256))),
+    "random_pin": ("digits", lambda x: "".join(secrets.choice(string.digits) for _ in range(min(int(x or 4), 20)))),
+    "lucky_number": ("1 to 100", lambda x: str(secrets.randbelow(100) + 1)),
+    "password_strength": ("password", lambda x: "%d/5 (%s)" % ((s := (len(x) >= 8) + (len(x) >= 12) + bool(re.search(r"[a-z]", x) and re.search(r"[A-Z]", x)) + bool(re.search(r"\d", x)) + bool(re.search(r"[^\w]", x))), ["very weak", "weak", "fair", "good", "strong", "very strong"][s])),
+})
+
+# ---------------------------------------------------------------- data, web, networks
+def _jget(x):
+    j, path = _tba(x, 2)
+    v = json.loads(j)
+    for k in [p for p in path.split(".") if p]:
+        v = v[int(k)] if isinstance(v, list) else v[k]
+    return json.dumps(v, ensure_ascii=False)
+
+
+def _csv_json(x):
+    return json.dumps(list(csv.DictReader(io.StringIO(x))), ensure_ascii=False, indent=1)
+
+
+def _json_csv(x):
+    rows = json.loads(x)
+    o = io.StringIO()
+    w = csv.DictWriter(o, fieldnames=list(dict.fromkeys(k for r in rows for k in r)))
+    w.writeheader()
+    w.writerows(rows)
+    return o.getvalue()
+
+
+def _cidr(x):
+    n = ipaddress.ip_network(x.strip(), strict=False)
+    return "network %s, netmask %s, broadcast %s, hosts %d, first %s, last %s" % (
+        n.network_address, n.netmask, n.broadcast_address if n.version == 4 else "-", max(n.num_addresses - 2, 0) if n.version == 4 else n.num_addresses,
+        n.network_address + 1 if n.num_addresses > 2 else n.network_address, n.broadcast_address - 1 if n.version == 4 and n.num_addresses > 2 else n.broadcast_address)
+
+
+_HTTP = {200: "OK", 201: "Created", 204: "No Content", 301: "Moved Permanently", 302: "Found", 304: "Not Modified", 400: "Bad Request",
+         401: "Unauthorized", 403: "Forbidden", 404: "Not Found", 405: "Method Not Allowed", 408: "Request Timeout", 409: "Conflict",
+         418: "I'm a teapot", 422: "Unprocessable Entity", 429: "Too Many Requests", 500: "Internal Server Error", 502: "Bad Gateway",
+         503: "Service Unavailable", 504: "Gateway Timeout"}
+_PORTS = {20: "FTP data", 21: "FTP", 22: "SSH", 23: "Telnet", 25: "SMTP", 53: "DNS", 80: "HTTP", 110: "POP3", 143: "IMAP", 443: "HTTPS",
+          465: "SMTPS", 587: "SMTP submission", 993: "IMAPS", 995: "POP3S", 3306: "MySQL", 3389: "RDP", 5432: "PostgreSQL", 6379: "Redis",
+          8080: "HTTP alt", 27017: "MongoDB"}
+_many("data", {
+    "json_pretty": ("pretty-print JSON", lambda x: json.dumps(json.loads(x), indent=2, ensure_ascii=False)),
+    "json_minify": ("minify JSON", lambda x: json.dumps(json.loads(x), separators=(",", ":"), ensure_ascii=False)),
+    "json_validate": ("is it valid JSON", lambda x: (lambda: (json.loads(x), "valid JSON")[1])()),
+    "json_keys": ("top-level keys", lambda x: ", ".join(map(str, json.loads(x).keys())) if isinstance(json.loads(x), dict) else "list of %d items" % len(json.loads(x))),
+    "json_get": ("json | path like a.0.b", _jget), "csv_to_json": ("CSV with header to JSON", _csv_json), "json_to_csv": ("JSON list of objects to CSV", _json_csv),
+    "url_parse": ("split a URL", lambda x: json.dumps(dict(zip(("scheme", "host", "path", "query", "fragment"), (lambda u: (u.scheme, u.netloc, u.path, u.query, u.fragment))(urllib.parse.urlsplit(x.strip())))))),
+    "url_query_params": ("query string as JSON", lambda x: json.dumps(urllib.parse.parse_qs(urllib.parse.urlsplit(x.strip()).query or x.strip()))),
+    "ip_validate": ("IPv4 or IPv6", lambda x: (lambda a: "valid IPv%d, %s" % (a.version, "private" if a.is_private else "public"))(ipaddress.ip_address(x.strip()))),
+    "cidr_info": ("10.0.0.0/24", _cidr),
+    "subnet_split": ("cidr | new prefix", lambda x: "\n".join(map(str, list(ipaddress.ip_network(_tba(x, 2)[0], strict=False).subnets(new_prefix=int(_tba(x, 2)[1])))[:64]))),
+    "ip_to_int": ("IPv4 to integer", lambda x: str(int(ipaddress.ip_address(x.strip())))),
+    "int_to_ip": ("integer to IPv4", lambda x: str(ipaddress.ip_address(_i(x)))),
+    "mac_validate": ("MAC address", lambda x: str(bool(re.fullmatch(r"([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}", x.strip())))),
+    "http_status": ("status code meaning", lambda x: "%s %s" % (x.strip(), _HTTP.get(_i(x), "unknown code"))),
+    "port_service": ("port number", lambda x: _PORTS.get(_i(x), "not in my short list")),
+    "mime_type": ("file name to MIME type", lambda x: mimetypes.guess_type(x.strip())[0] or "unknown"),
+    "file_extension": ("file name extension", lambda x: os.path.splitext(x.strip())[1] or "none"),
+    "cron_explain": ("5-field cron expression", lambda x: (lambda m, h, d, mo, w: "minute %s, hour %s, day-of-month %s, month %s, weekday %s" % (m, h, d, mo, w))(*(x.split() + ["*"] * 5)[:5])),
+})
+
+# constants and physics
+_CONST = {"speed_of_light": (299792458, "m/s"), "planck_constant": (6.62607015e-34, "J s"), "reduced_planck": (1.054571817e-34, "J s"),
+          "gravitational_constant": (6.6743e-11, "m3 kg-1 s-2"), "avogadro": (6.02214076e23, "1/mol"), "boltzmann": (1.380649e-23, "J/K"),
+          "elementary_charge": (1.602176634e-19, "C"), "electron_mass": (9.1093837015e-31, "kg"), "proton_mass": (1.67262192369e-27, "kg"),
+          "neutron_mass": (1.67492749804e-27, "kg"), "earth_gravity": (9.80665, "m/s2"), "earth_radius": (6371000, "m"), "earth_mass": (5.972e24, "kg"),
+          "moon_mass": (7.342e22, "kg"), "moon_distance": (384400000, "m"), "sun_mass": (1.98847e30, "kg"), "astronomical_unit": (149597870700, "m"),
+          "light_year": (9.4607304725808e15, "m"), "parsec": (3.0856775814913673e16, "m"), "gas_constant": (8.314462618, "J/(mol K)"),
+          "coulomb_constant": (8.9875517923e9, "N m2 C-2"), "vacuum_permittivity": (8.8541878128e-12, "F/m"), "vacuum_permeability": (1.25663706212e-6, "N/A2"),
+          "stefan_boltzmann": (5.670374419e-8, "W m-2 K-4"), "rydberg_energy": (13.605693122994, "eV"), "bohr_radius": (5.29177210903e-11, "m"),
+          "atomic_mass_unit": (1.66053906660e-27, "kg"), "standard_atmosphere": (101325, "Pa"), "water_density": (997, "kg/m3"), "speed_of_sound_air": (343, "m/s"),
+          "specific_heat_water": (4184, "J/(kg K)"), "absolute_zero_celsius": (-273.15, "C"), "hubble_constant": (70, "km/s/Mpc")}
+for _k, (_v, _u) in _CONST.items():
+    TOOLBOX["const_" + _k] = {"cat": "physics", "desc": "constant: " + _k.replace("_", " "), "fn": (lambda k, v, u: lambda x: "%s = %s %s" % (k, _tbf(float(v)), u))(_k, _v, _u)}
+_G, _C, _H = 6.6743e-11, 299792458, 6.62607015e-34
+_many("physics", {
+    "kinetic_energy": ("mass kg | speed m/s", lambda x: _tbf(.5 * _A(x, 2)[0] * _A(x, 2)[1] ** 2) + " J"),
+    "potential_energy": ("mass kg | height m", lambda x: _tbf(_A(x, 2)[0] * 9.80665 * _A(x, 2)[1]) + " J"),
+    "momentum": ("mass | velocity", lambda x: _tbf(math.prod(_A(x, 2))) + " kg m/s"), "force": ("mass | acceleration", lambda x: _tbf(math.prod(_A(x, 2))) + " N"),
+    "work_done": ("force N | distance m | angle deg optional", lambda x: (lambda f, d, a: _tbf(f * d * math.cos(math.radians(a))) + " J")(*(_A(x, 3)[:2] + [_tbn(_tba(x, 3)[2] or 0)]))),
+    "power_from_work": ("work J | time s", lambda x: _tbf(_A(x, 2)[0] / _A(x, 2)[1]) + " W"),
+    "ohms_law": ("V | I | R, leave the unknown blank", lambda x: (lambda v, i, r: "V = %s V" % _tbf(i * r) if v == "" else "I = %s A" % _tbf(_tbn(v) / r) if i == "" else "R = %s ohm" % _tbf(_tbn(v) / _tbn(i)))(*[(s if s == "" else _tbn(s)) if k else s for k, s in enumerate(_tba(x, 3))]) if False else _ohm(x)),
+    "resistors_series": ("r1 | r2 | ...", lambda x: _tbf(sum(_tbl(x.replace("|", ",")))) + " ohm"),
+    "resistors_parallel": ("r1 | r2 | ...", lambda x: _tbf(1 / sum(1 / v for v in _tbl(x.replace("|", ",")))) + " ohm"),
+    "capacitors_series": ("c1 | c2 | ...", lambda x: _tbf(1 / sum(1 / v for v in _tbl(x.replace("|", ",")))) + " (same unit)"),
+    "capacitors_parallel": ("c1 | c2 | ...", lambda x: _tbf(sum(_tbl(x.replace("|", ",")))) + " (same unit)"),
+    "electric_power": ("V | I", lambda x: _tbf(math.prod(_A(x, 2))) + " W"),
+    "coulomb_force": ("q1 C | q2 C | r m", lambda x: (lambda a, b, r: _tbf(8.9875517923e9 * a * b / r ** 2) + " N")(*_A(x, 3))),
+    "wave_speed": ("frequency Hz | wavelength m", lambda x: _tbf(math.prod(_A(x, 2))) + " m/s"),
+    "photon_energy_ev": ("wavelength nm", lambda x: _tbf(1239.84198 / _tbn(x)) + " eV"),
+    "de_broglie_wavelength": ("mass kg | speed m/s", lambda x: _tbf(_H / math.prod(_A(x, 2))) + " m"),
+    "escape_velocity": ("mass kg | radius m", lambda x: _tbf(math.sqrt(2 * _G * _A(x, 2)[0] / _A(x, 2)[1])) + " m/s"),
+    "orbital_velocity": ("mass kg | orbit radius m", lambda x: _tbf(math.sqrt(_G * _A(x, 2)[0] / _A(x, 2)[1])) + " m/s"),
+    "orbital_period": ("central mass kg | orbit radius m", lambda x: _tbf(2 * math.pi * math.sqrt(_A(x, 2)[1] ** 3 / (_G * _A(x, 2)[0]))) + " s"),
+    "free_fall_time": ("height m", lambda x: _tbf(math.sqrt(2 * _tbn(x) / 9.80665)) + " s"),
+    "projectile_range": ("speed m/s | angle deg", lambda x: _tbf(_A(x, 2)[0] ** 2 * math.sin(2 * math.radians(_A(x, 2)[1])) / 9.80665) + " m"),
+    "projectile_max_height": ("speed m/s | angle deg", lambda x: _tbf((_A(x, 2)[0] * math.sin(math.radians(_A(x, 2)[1]))) ** 2 / (2 * 9.80665)) + " m"),
+    "projectile_flight_time": ("speed m/s | angle deg", lambda x: _tbf(2 * _A(x, 2)[0] * math.sin(math.radians(_A(x, 2)[1])) / 9.80665) + " s"),
+    "snell_law": ("n1 | angle1 deg | n2", lambda x: (lambda n1, a, n2: _tbf(math.degrees(math.asin(n1 * math.sin(math.radians(a)) / n2))) + " deg")(*_A(x, 3))),
+    "lens_equation": ("focal length | object distance, gives image distance", lambda x: (lambda f, u: _tbf(1 / (1 / f - 1 / u)))(*_A(x, 2))),
+    "density": ("mass | volume", lambda x: _tbf(_A(x, 2)[0] / _A(x, 2)[1])), "pressure_from_force": ("force | area", lambda x: _tbf(_A(x, 2)[0] / _A(x, 2)[1]) + " Pa"),
+    "heat_energy": ("mass kg | specific heat J/kg K | temperature change", lambda x: _tbf(math.prod(_A(x, 3))) + " J"),
+    "ideal_gas_pressure": ("n mol | T kelvin | V m3", lambda x: (lambda n, t, v: _tbf(n * 8.314462618 * t / v) + " Pa")(*_A(x, 3))),
+    "half_life_remaining": ("initial amount | half-life | elapsed time", lambda x: (lambda n, h, t: _tbf(n * .5 ** (t / h)))(*_A(x, 3))),
+    "lorentz_factor": ("speed as fraction of c, or m/s if above 1", lambda x: _tbf(1 / math.sqrt(1 - (_tbn(x) / (_C if _tbn(x) > 1 else 1)) ** 2))),
+    "mass_energy": ("mass kg, E = mc²", lambda x: _tbf(_tbn(x) * _C ** 2) + " J"),
+    "centripetal_force": ("mass | speed | radius", lambda x: (lambda m, v, r: _tbf(m * v * v / r) + " N")(*_A(x, 3))),
+    "pendulum_period": ("length m", lambda x: _tbf(2 * math.pi * math.sqrt(_tbn(x) / 9.80665)) + " s"),
+    "spring_period": ("mass kg | spring constant N/m", lambda x: _tbf(2 * math.pi * math.sqrt(_A(x, 2)[0] / _A(x, 2)[1])) + " s"),
+    "hookes_law": ("spring constant | extension m", lambda x: _tbf(math.prod(_A(x, 2))) + " N"),
+    "average_speed": ("distance | time", lambda x: _tbf(_A(x, 2)[0] / _A(x, 2)[1])),
+    "acceleration": ("initial v | final v | time", lambda x: (lambda u, v, t: _tbf((v - u) / t) + " m/s2")(*_A(x, 3))),
+    "stopping_distance": ("speed m/s | deceleration m/s2", lambda x: _tbf(_A(x, 2)[0] ** 2 / (2 * _A(x, 2)[1])) + " m"),
+    "doppler_frequency": ("source Hz | source speed toward you m/s | sound speed m/s", lambda x: (lambda f, v, c: _tbf(f * c / (c - v)) + " Hz")(*(_A(x, 3)[:2] + [_tbn(_tba(x, 3)[2] or 343)]))),
+    "sound_decibel_ratio": ("intensity | reference intensity", lambda x: _tbf(10 * math.log10(_A(x, 2)[0] / _A(x, 2)[1])) + " dB"),
+    "kepler_third_law_a": ("period years, gives semi-major axis in AU around the Sun", lambda x: _tbf(_tbn(x) ** (2 / 3)) + " AU"),
+})
+
+
+def _ohm(x):
+    v, i, r = _tba(x, 3)
+    if v == "":
+        return "V = %s V" % _tbf(_tbn(i) * _tbn(r))
+    if i == "":
+        return "I = %s A" % _tbf(_tbn(v) / _tbn(r))
+    return "R = %s ohm" % _tbf(_tbn(v) / _tbn(i))
+
+
+# chemistry
+_ELS = {}
+for _row in ("H 1 1.008 Hydrogen;He 2 4.0026 Helium;Li 3 6.94 Lithium;Be 4 9.0122 Beryllium;B 5 10.81 Boron;C 6 12.011 Carbon;N 7 14.007 Nitrogen;"
+             "O 8 15.999 Oxygen;F 9 18.998 Fluorine;Ne 10 20.180 Neon;Na 11 22.990 Sodium;Mg 12 24.305 Magnesium;Al 13 26.982 Aluminium;"
+             "Si 14 28.085 Silicon;P 15 30.974 Phosphorus;S 16 32.06 Sulfur;Cl 17 35.45 Chlorine;Ar 18 39.948 Argon;K 19 39.098 Potassium;"
+             "Ca 20 40.078 Calcium;Sc 21 44.956 Scandium;Ti 22 47.867 Titanium;V 23 50.942 Vanadium;Cr 24 51.996 Chromium;Mn 25 54.938 Manganese;"
+             "Fe 26 55.845 Iron;Co 27 58.933 Cobalt;Ni 28 58.693 Nickel;Cu 29 63.546 Copper;Zn 30 65.38 Zinc;Ga 31 69.723 Gallium;"
+             "Ge 32 72.630 Germanium;As 33 74.922 Arsenic;Se 34 78.971 Selenium;Br 35 79.904 Bromine;Kr 36 83.798 Krypton;Rb 37 85.468 Rubidium;"
+             "Sr 38 87.62 Strontium;Ag 47 107.87 Silver;Sn 50 118.71 Tin;I 53 126.90 Iodine;Xe 54 131.29 Xenon;Cs 55 132.91 Caesium;"
+             "Ba 56 137.33 Barium;W 74 183.84 Tungsten;Pt 78 195.08 Platinum;Au 79 196.97 Gold;Hg 80 200.59 Mercury;Pb 82 207.2 Lead;U 92 238.03 Uranium").split(";"):
+    _s, _z, _m, _nm = _row.split()
+    _ELS[_s] = (int(_z), float(_m), _nm)
+    TOOLBOX["element_" + _s.lower()] = {"cat": "chemistry", "desc": "facts about " + _nm,
+                                         "fn": (lambda s, z, m, n: lambda x: "%s (%s): atomic number %d, atomic mass %s" % (n, s, z, m))(_s, _z, _m, _nm)}
+
+
+def _molar_one(f):
+    def parse(s, i):
+        tot = {}
+        while i < len(s):
+            c = s[i]
+            if c in "([":
+                sub, i = parse(s, i + 1)
+                m = re.match(r"\d+", s[i:])
+                k = int(m.group()) if m else 1
+                i += len(m.group()) if m else 0
+                for e, n in sub.items():
+                    tot[e] = tot.get(e, 0) + n * k
+            elif c in ")]":
+                return tot, i + 1
+            else:
+                m = re.match(r"([A-Z][a-z]?)(\d*)", s[i:])
+                if not m or m.group(1) not in _ELS:
+                    raise ValueError("unknown element near '%s'" % s[i:i + 3])
+                tot[m.group(1)] = tot.get(m.group(1), 0) + int(m.group(2) or 1)
+                i += len(m.group())
+        return tot, i
+    return parse(f, 0)[0]
+
+
+def _molar(f):
+    total, parts = {}, []
+    for part in re.split(r"[.·*]", f.strip()):
+        m = re.match(r"(\d+)(.*)", part)
+        k, body = (int(m.group(1)), m.group(2)) if m else (1, part)
+        for e, n in _molar_one(body).items():
+            total[e] = total.get(e, 0) + n * k
+    return sum(_ELS[e][1] * n for e, n in total.items()), total
+
+
+_many("chemistry", {
+    "molar_mass": ("formula like Ca(OH)2 or CuSO4.5H2O", lambda x: (lambda r: "%.3f g/mol; atoms: %s" % (r[0], ", ".join("%s%d" % kv for kv in r[1].items())))(_molar(x))),
+    "moles_from_mass": ("grams | formula", lambda x: "%.5f mol" % (_tbn(_tba(x, 2)[0]) / _molar(_tba(x, 2)[1])[0])),
+    "mass_from_moles": ("moles | formula", lambda x: "%.5f g" % (_tbn(_tba(x, 2)[0]) * _molar(_tba(x, 2)[1])[0])),
+    "molecules_from_moles": ("moles", lambda x: _tbf(_tbn(x) * 6.02214076e23)),
+    "percent_composition": ("formula", lambda x: (lambda r: ", ".join("%s %.2f%%" % (e, _ELS[e][1] * n / r[0] * 100) for e, n in r[1].items()))(_molar(x))),
+    "molarity": ("moles | litres", lambda x: _tbf(_A(x, 2)[0] / _A(x, 2)[1]) + " M"),
+    "dilution_final_volume": ("M1 | V1 | M2 gives V2", lambda x: (lambda m1, v1, m2: _tbf(m1 * v1 / m2))(*_A(x, 3))),
+    "ph_from_h_concentration": ("[H+] in mol/L", lambda x: "pH %.3f" % -math.log10(_tbn(x))),
+    "h_concentration_from_ph": ("pH", lambda x: _tbf(10 ** -_tbn(x)) + " mol/L"),
+    "poh_from_ph": ("pH", lambda x: "pOH %.3f" % (14 - _tbn(x))),
+    "ph_strong_acid": ("molarity of strong monoprotic acid", lambda x: "pH %.3f" % -math.log10(_tbn(x))),
+    "ph_strong_base": ("molarity of strong monobasic base", lambda x: "pH %.3f" % (14 + math.log10(_tbn(x)))),
+    "element_lookup": ("symbol or name", lambda x: next(("%s (%s): atomic number %d, mass %s" % (v[2], k, v[0], v[1]) for k, v in _ELS.items() if x.strip().lower() in (k.lower(), v[2].lower())), "not in my list of %d elements" % len(_ELS))),
+    "element_by_number": ("atomic number", lambda x: next(("%s (%s) mass %s" % (v[2], k, v[1]) for k, v in _ELS.items() if v[0] == _i(x)), "not in my list")),
+    "celsius_boiling_point_pressure": ("pressure kPa, water boiling point", lambda x: "%.1f C" % (100 + 28.0 * math.log(_tbn(x) / 101.325) / 1.0 if False else (1 / (1 / 373.15 - 8.314 * math.log(_tbn(x) / 101.325) / 40660)) - 273.15)),
+})
+
+# ---------------------------------------------------------------- live data (internet, free public sources)
+def _geo(place):
+    g = _get_json("https://geocoding-api.open-meteo.com/v1/search?count=1&name=" + urllib.parse.quote(place))
+    if not g.get("results"):
+        raise ValueError("place not found")
+    return g["results"][0]
+
+
+def _weather(x):
+    name, days = forecast(x.strip())
+    return "Weather for %s:\n" % name + "\n".join("%s: %s-%s C, rain %s mm, wind %s km/h" % (d["date"], d["temperature_2m_min"], d["temperature_2m_max"], d["precipitation_sum"], d["wind_speed_10m_max"]) for d in days)
+
+
+def _air(x):
+    p = _geo(x.strip())
+    j = _get_json("https://air-quality-api.open-meteo.com/v1/air-quality?latitude=%s&longitude=%s&current=pm10,pm2_5,us_aqi" % (p["latitude"], p["longitude"]))["current"]
+    return "%s now: US AQI %s, PM2.5 %s, PM10 %s" % (p["name"], j.get("us_aqi"), j.get("pm2_5"), j.get("pm10"))
+
+
+def _currency(x):
+    a, f, t = _tba(x, 3)
+    j = _get_json("https://api.frankfurter.app/latest?amount=%s&from=%s&to=%s" % (_tbn(a), f.upper(), t.upper()))
+    return "%s %s = %s %s (rate date %s)" % (a, f.upper(), j["rates"][t.upper()], t.upper(), j["date"])
+
+
+def _crypto(x):
+    cid, cur = (_tba(x, 2)[0].lower(), _tba(x, 2)[1].lower() or "usd,inr")
+    j = _get_json("https://api.coingecko.com/api/v3/simple/price?ids=%s&vs_currencies=%s&include_24hr_change=true" % (urllib.parse.quote(cid), urllib.parse.quote(cur)))
+    return json.dumps(j)
+
+
+def _country(x):
+    j = _get_json("https://restcountries.com/v3.1/name/%s?fields=name,capital,population,region,subregion,area,currencies,languages,timezones" % urllib.parse.quote(x.strip()))[0]
+    return "%s: capital %s, region %s, population %s, area %s km2, currencies %s, languages %s" % (
+        j["name"]["common"], ", ".join(j.get("capital", [])), j.get("region"), j.get("population"), j.get("area"),
+        ", ".join(j.get("currencies", {})), ", ".join(j.get("languages", {}).values()))
+
+
+def _define(x):
+    j = _get_json("https://api.dictionaryapi.dev/api/v2/entries/en/" + urllib.parse.quote(x.strip()))
+    return "\n".join("%s: %s" % (m["partOfSpeech"], m["definitions"][0]["definition"]) for e in j[:1] for m in e["meanings"][:4])
+
+
+def _github(x):
+    j = _get_json("https://api.github.com/repos/" + x.strip().strip("/"))
+    return "%s: %s | stars %s, forks %s, language %s, updated %s" % (j["full_name"], j.get("description"), j["stargazers_count"], j["forks_count"], j.get("language"), j["pushed_at"])
+
+
+def _pypi(x):
+    i = _get_json("https://pypi.org/pypi/%s/json" % urllib.parse.quote(x.strip()))["info"]
+    return "%s %s: %s | requires python %s | %s" % (i["name"], i["version"], i["summary"], i.get("requires_python"), i.get("home_page") or i.get("project_url"))
+
+
+def _npm(x):
+    j = _get_json("https://registry.npmjs.org/%s/latest" % urllib.parse.quote(x.strip(), safe="@/"))
+    return "%s %s: %s" % (j["name"], j["version"], j.get("description"))
+
+
+def _arxiv(x):
+    req = urllib.request.Request("https://export.arxiv.org/api/query?max_results=5&search_query=all:" + urllib.parse.quote(x.strip()), headers={"User-Agent": "DeepOQ/1.0"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        root = ET.fromstring(r.read(500000))
+    ns = "{http://www.w3.org/2005/Atom}"
+    return "\n".join("- %s (%s) %s" % (re.sub(r"\s+", " ", e.findtext(ns + "title") or ""), (e.findtext(ns + "published") or "")[:10], e.findtext(ns + "id")) for e in root.iter(ns + "entry")) or "no papers found"
+
+
+def _hn(x):
+    ids = _get_json("https://hacker-news.firebaseio.com/v0/topstories.json")[:8]
+    return "\n".join("- %s (%s points) %s" % ((j := _get_json("https://hacker-news.firebaseio.com/v0/item/%d.json" % i))["title"], j.get("score"), j.get("url", "")) for i in ids)
+
+
+def _books(x):
+    j = _get_json("https://openlibrary.org/search.json?limit=5&q=" + urllib.parse.quote(x.strip()))["docs"]
+    return "\n".join("- %s by %s (%s)" % (d.get("title"), ", ".join(d.get("author_name", [])[:2]), d.get("first_publish_year")) for d in j) or "none"
+
+
+def _quakes(x):
+    j = _get_json("https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/significant_week.geojson")["features"]
+    return "\n".join("- M%s %s" % (f["properties"]["mag"], f["properties"]["place"]) for f in j[:10]) or "no significant quakes this week"
+
+
+def _sun(x):
+    p = _geo(x.strip())
+    j = _get_json("https://api.open-meteo.com/v1/forecast?latitude=%s&longitude=%s&daily=sunrise,sunset&timezone=auto&forecast_days=1" % (p["latitude"], p["longitude"]))["daily"]
+    return "%s: sunrise %s, sunset %s (local time)" % (p["name"], j["sunrise"][0][-5:], j["sunset"][0][-5:])
+
+
+def _geocode(x):
+    p = _geo(x.strip())
+    return "%s, %s, %s: lat %s, lon %s, elevation %s m, timezone %s, population %s" % (p["name"], p.get("admin1", ""), p.get("country", ""), p["latitude"], p["longitude"], p.get("elevation"), p.get("timezone"), p.get("population"))
+
+
+def _wikisum(x):
+    j = _get_json("https://en.wikipedia.org/api/rest_v1/page/summary/" + urllib.parse.quote(x.strip().replace(" ", "_")))
+    return "%s: %s" % (j.get("title"), j.get("extract"))
+
+
+def _read_page(x):
+    t, b = read_url(x.strip(), 6000)
+    return "TITLE: %s\n%s" % (t, b)
+
+
+def _websrch(x):
+    return "\n".join("- %s: %s (%s)" % (h["title"][:100], h["body"][:300], h.get("url", "")) for h in web_search(x.strip(), 6)) or "no results"
+
+
+def _news_tool(x):
+    return "\n".join("- %s [%s]" % (i["title"], i["source"]) for i in live_news(x.strip(), _news_cat(x), 10)) or "no headlines"
+
+
+_many("live", {
+    "web_search": ("search the web", _websrch), "read_webpage": ("read a public page by URL", _read_page), "news_headlines": ("latest headlines on a topic", _news_tool),
+    "wikipedia_summary": ("article summary", _wikisum), "wikipedia_search": ("search Wikipedia", lambda x: "\n".join("- %s: %s" % (h["title"], h["body"][:300]) for h in wiki_lookup(x.strip(), 4)) or "none"),
+    "weather_forecast": ("7-day forecast for a city", _weather), "air_quality": ("air quality of a city", _air), "sunrise_sunset": ("sun times for a city", _sun),
+    "geocode_place": ("coordinates and facts about a place", _geocode),
+    "currency_convert": ("amount | from | to like 100 | USD | INR", _currency), "crypto_price": ("coin id like bitcoin | currencies", _crypto),
+    "country_info": ("facts about a country", _country), "define_word": ("English dictionary definition", _define),
+    "github_repo_info": ("owner/repo", _github), "pypi_package_info": ("package name", _pypi), "npm_package_info": ("package name", _npm),
+    "arxiv_search": ("find research papers", _arxiv), "hacker_news_top": ("top stories now", _hn), "book_search": ("find books", _books),
+    "earthquakes_this_week": ("significant earthquakes", _quakes),
+})
+
+
+# ---------------------------------------------------------------- finder, runner, hooks
+def _tb_search(x):
+    q = [w for w in re.findall(r"[a-z0-9]+", x.lower()) if w]
+    if not q:
+        cats = collections.Counter(v["cat"] for v in TOOLBOX.values())
+        return "%d tools. Categories: %s. Use search_tools with a keyword." % (len(TOOLBOX), ", ".join("%s (%d)" % kv for kv in sorted(cats.items())))
+    hits = [(sum(w in (k + " " + v["desc"] + " " + v["cat"]).lower() for w in q), k, v) for k, v in TOOLBOX.items()]
+    hits = [h for h in sorted(hits, key=lambda h: (-h[0], h[1])) if h[0] > 0][:25]
+    return "\n".join("%s | %s [%s]" % (k, v["desc"], v["cat"]) for _, k, v in hits) or "nothing matched; try another word"
+
+
+TOOLBOX["search_tools"] = {"cat": "meta", "desc": "keyword to find tool names; empty = list categories", "fn": _tb_search}
+
+
+def toolbox_run(name, x=""):
+    name = re.sub(r"[\s\-]+", "_", str(name).strip().lower())
+    t = TOOLBOX.get(name)
+    if not t:
+        close = difflib.get_close_matches(name, list(TOOLBOX), 5)
+        return "Unknown tool '%s'. %s" % (name, ("Did you mean: " + ", ".join(close)) if close else "Use search_tools | keyword to find one.")
+    try:
+        return str(t["fn"](str(x)[:20000]))[:6000]
+    except ZeroDivisionError:
+        return "tool error: division by zero"
+    except Exception as e:
+        return "tool error: %s: %s. Input format: %s" % (type(e).__name__, str(e)[:160], t["desc"])
+
+
+def toolbox_agent(inp):
+    name, _, rest = str(inp).partition("|")
+    return toolbox_run(name, rest.strip())
+
+
+AGENT_SYSTEM += ("\n\nEXTRA TOOL - toolbox: %d instant built-in tools, no waiting. input = 'tool_name | argument | argument'. "
+                 "If you do not know the exact name, first run 'search_tools | keyword' (for example 'search_tools | loan'). "
+                 "Categories: units (every pair of %d units, plus 'convert | 5 | km | mi'), maths and statistics, algebra and calculus, geometry, "
+                 "finance (emi, sip, gst, cagr), health, dates and time zones, colours, text and encoders (base64, hashes, ciphers), "
+                 "generators (password, uuid, dice), data (json, csv, ip, cidr), physics and constants, chemistry (molar_mass, elements, pH), "
+                 "and live data (weather, currency, crypto, countries, dictionary, github, pypi, npm, arxiv, hacker news, books, earthquakes). "
+                 "Prefer toolbox over python for any of these because it is exact and instant." % (len(TOOLBOX), len(_UN)))
+
+CLAUDE_TOOLS.append({
+    "name": "toolbox",
+    "description": "%d instant exact tools. Set tool to a tool name and input to its argument (several arguments separated by |). "
+                   "Call tool='search_tools' with a keyword to find names. Covers unit conversion between %d units, maths, algebra, statistics, "
+                   "geometry, finance (emi, sip, gst), dates and time zones, colours, hashes and encoders, physics and chemistry formulas "
+                   "(molar_mass, pH), generators, json/csv/ip tools and live data (weather, currency, crypto, countries, dictionary, arxiv, github)." % (len(TOOLBOX), len(_UN)),
+    "input_schema": {"type": "object", "properties": {"tool": {"type": "string"}, "input": {"type": "string"}}, "required": ["tool"]}})
+_claude_tool_base = _claude_tool
+
+
+def _claude_tool(name, args):
+    if name == "toolbox":
+        out = toolbox_run(args.get("tool", ""), args.get("input", ""))
+        return out, out.startswith(("Unknown tool", "tool error"))
+    return _claude_tool_base(name, args)
+
+
+@app.get("/api/tools")
+def api_tools():
+    """List tools. ?q=word filters by name, description or category."""
+    q = request.args.get("q", "").lower().strip()
+    items = [{"name": k, "category": v["cat"], "input": v["desc"]} for k, v in TOOLBOX.items()
+             if not q or q in k or q in v["desc"].lower() or q == v["cat"]]
+    return jsonify(total=len(TOOLBOX), matched=len(items), categories=dict(collections.Counter(v["cat"] for v in TOOLBOX.values())), tools=items[:400])
+
+
+@app.post("/api/tools/run")
+def api_tools_run():
+    if denied():
+        return jsonify(error="locked"), 401
+    d = request.get_json(silent=True) or {}
+    return jsonify(result=toolbox_run(d.get("name", ""), d.get("input", "")))
+
+
+print("Toolbox:", len(TOOLBOX), "tools ready")
+
+
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "ingest":
         ingest(sys.argv[2:])
