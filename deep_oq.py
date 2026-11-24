@@ -14958,7 +14958,7 @@ pre{white-space:pre-wrap;word-break:break-word;background:#151A45;border:1px sol
 </style></head><body>
 <div id="bn"></div>
 <div class="top"><button class="menub" id="menub" type="button" aria-label="Categories">☰</button><a class="back" href="/"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>Deep OQ</a><h1>All Tools</h1><span class="muted" id="me"></span></div>
-<div class="top"><button class="menub" id="menub" type="button" aria-label="Categories (drag to move)">☰</button><a class="back" href="/"><svg viewBox="0 0 24 24" ...
+<div class="top"><button class="menub" id="menub" type="button" aria-label="Categories (drag to move)">☰</button>
 <div class="wrap"><div class="side"><input id="q" placeholder="Search tools (translate, resume, python...)"><div class="cats" id="cats"></div><div id="list"></div></div>
 <div class="main"><h2 id="tt">Pick a tool on the left</h2><p class="muted" id="td"></p>
 <textarea id="in" rows="9" placeholder="Pick a tool first"></textarea>
