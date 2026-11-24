@@ -145,13 +145,9 @@ PG_SCHEMA = [
     "CREATE TABLE IF NOT EXISTS oq_memory(id BIGSERIAL PRIMARY KEY, username TEXT NOT NULL, fact TEXT NOT NULL, "
     "ts TIMESTAMPTZ DEFAULT now())",
     "CREATE INDEX IF NOT EXISTS oq_memory_user_idx ON oq_memory(username, id)",
-    "CREATE TABLE IF NOT EXISTS oq_memory(id BIGSERIAL PRIMARY KEY, username TEXT NOT NULL, fact TEXT NOT NULL, "
-    "ts TIMESTAMPTZ DEFAULT now())",
-    "CREATE INDEX IF NOT EXISTS oq_memory_user_idx ON oq_memory(username, id)",
-    # ADD THIS LINE:
-    "CREATE TABLE IF NOT EXISTS oq_usage(username TEXT, day TEXT, kind TEXT, n INT, PRIMARY KEY(username, day, kind))",
-    "ALTER TABLE oq_usage ADD COLUMN IF NOT EXISTS n INT;",
-] 
+    "CREATE TABLE IF NOT EXISTS oq_usage(username TEXT NOT NULL, day TEXT NOT NULL, kind TEXT NOT NULL, "
+    "n INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(username, day, kind))",
+]
 PG_SCHEMA = [
     # ... other tables ...
     "CREATE TABLE IF NOT EXISTS oq_memory(id BIGSERIAL PRIMARY KEY, username TEXT NOT NULL, fact TEXT NOT NULL, "
@@ -163,7 +159,16 @@ PG_SCHEMA = [
 
 def _pg_open():
     from psycopg_pool import ConnectionPool  # pip install "psycopg[binary,pool]"
-    opts = dict(min_size=1, max_size=5, kwargs={"autocommit": True}, open=False)
+    opts = dict(
+        min_size=1, max_size=5, open=False,
+        max_lifetime=300,       # recycle every connection after 5 minutes
+        max_idle=60,            # close connections idle for more than 1 minute
+        reconnect_timeout=30,
+        timeout=30,
+        kwargs={"autocommit": True, "connect_timeout": 10,
+                "keepalives": 1, "keepalives_idle": 30,
+                "keepalives_interval": 10, "keepalives_count": 5},
+    )
     try:
         pool = ConnectionPool(DATABASE_URL, check=ConnectionPool.check_connection, **opts)
     except TypeError:  # older psycopg_pool without the check option
@@ -171,19 +176,28 @@ def _pg_open():
     pool.open(wait=True, timeout=30)
     with pool.connection() as conn:
         with conn.transaction():
-            conn.execute("SELECT pg_advisory_xact_lock(727274)")  # one worker creates the tables at a time
+            conn.execute("SELECT pg_advisory_xact_lock(727274)")
             for stmt in PG_SCHEMA:
                 conn.execute(stmt)
     return pool
 
 
 def _pg(sql, params=(), fetch=None):
-    with PG.connection() as conn:
-        cur = conn.execute(sql, params)
-        if fetch == "one":
-            return cur.fetchone()
-        if fetch == "all":
-            return cur.fetchall()
+    import psycopg
+    for attempt in (1, 2):
+        try:
+            with PG.connection() as conn:
+                cur = conn.execute(sql, params)
+                if fetch == "one":
+                    return cur.fetchone()
+                if fetch == "all":
+                    return cur.fetchall()
+                return None
+        except (psycopg.OperationalError, psycopg.InterfaceError) as e:
+            if attempt == 2:
+                raise
+            print("database connection was dead, retrying:", str(e)[:120])
+            time.sleep(0.3)
 
 
 def _kb_conn():
