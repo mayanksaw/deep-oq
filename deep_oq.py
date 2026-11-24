@@ -145,6 +145,12 @@ PG_SCHEMA = [
     "CREATE TABLE IF NOT EXISTS oq_memory(id BIGSERIAL PRIMARY KEY, username TEXT NOT NULL, fact TEXT NOT NULL, "
     "ts TIMESTAMPTZ DEFAULT now())",
     "CREATE INDEX IF NOT EXISTS oq_memory_user_idx ON oq_memory(username, id)",
+    "CREATE TABLE IF NOT EXISTS oq_memory(id BIGSERIAL PRIMARY KEY, username TEXT NOT NULL, fact TEXT NOT NULL, "
+    "ts TIMESTAMPTZ DEFAULT now())",
+    "CREATE INDEX IF NOT EXISTS oq_memory_user_idx ON oq_memory(username, id)",
+    # ADD THIS LINE:
+    "CREATE TABLE IF NOT EXISTS oq_usage(username TEXT, day TEXT, kind TEXT, n INT, PRIMARY KEY(username, day, kind))",
+]
 ]
 
 
