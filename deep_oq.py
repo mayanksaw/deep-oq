@@ -3990,6 +3990,12 @@ PAGE = r"""<!doctype html>
     --code-bg:#090C26; --code-line:#222962; --err:#FF8D78;
   }
 }
+:root{
+  --bg:#0E1233; --surface:#151A45; --ink:#EEF0FF; --ink-2:#A3A9D1; --line:#2A3070;
+  --bubble:#2A3192; --bubble-ink:#FFFFFF;
+  --code-bg:#090C26; --code-line:#222962; --err:#FF8D78;
+  color-scheme:dark;
+}
 *{box-sizing:border-box}
 html,body{height:100%}
 body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--read);
