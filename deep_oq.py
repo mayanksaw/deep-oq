@@ -4370,6 +4370,15 @@ header.top #kbBtn{justify-content:center;gap:6px;padding:6px 8px;font-size:13px}
 header.top .tab{padding:5px 2px}header.top #newBtn{padding:7px 10px;font-size:13px}header.top .sbsearch input{padding:6px 10px;font-size:13px}header.top #kbBtn{padding:5px 8px;width:100%}
 .sbhd{margin:8px 8px 2px}
 .recents{min-height:110px;overflow-x:hidden}
+/* ---- extra compact buttons ---- */
+header.top .tab{padding:3px 2px;font-size:12px;border-radius:8px}
+header.top a.tab{padding:3px 2px}
+header.top .tabs{gap:2px;margin:2px 0}
+header.top .mrow .btn{padding:4px 6px;font-size:12px}
+header.top #newBtn{padding:5px 10px;font-size:12.5px}
+header.top #kbBtn{padding:3px 8px;font-size:12px}
+.sbsearch{padding:5px 10px;font-size:12.5px}
+header.top{padding:10px 8px 8px}
 .recents .hi{min-width:0}
 .recents .ht{padding:7px 10px;font-size:14px;min-width:0;overflow:hidden}
 .recents .ht span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
