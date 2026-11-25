@@ -16934,7 +16934,21 @@ h1{font-size:clamp(36px,7vw,64px);line-height:1.05;margin:0 0 16px;letter-spacin
 def welcome_page():
     html = WELCOME_HTML.replace("__SITE__", SITE_URL).replace("__GSC__", _gsc_meta())
     return html, 200, {"Content-Type": "text/html; charset=utf-8"}
+# ---- restore helpers that the pack loops overwrote ----
+def _x(lite, pg, params=()):
+    if USE_PG:
+        _pg(pg, params)
+    else:
+        with DB:
+            DB.execute(lite, params)
 
+
+def _s(lite, pg, params=()):
+    return _pg(pg, params, "all") if USE_PG else DB.execute(lite, params).fetchall()
+
+
+def _i(x):
+    return int(_tbn(x))
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "ingest":
         ingest(sys.argv[2:])
