@@ -17419,6 +17419,252 @@ db.onclick=async()=>{
 _i16 = PAGE.rfind("</body>")      # rfind: the page text contains "</body>" inside a JS string earlier
 if _i16 > 0:
     PAGE = PAGE[:_i16] + _OQ16_HTML + PAGE[_i16:]
+  # ==========================================================================
+# PACK 17: signature brand colour, regional-language replies (Hindi first),
+#          shareable study-streak card
+# ==========================================================================
+
+# ---- 1. Branding: one setting changes the accent everywhere -----------------
+# On Render set DEEP_OQ_ACCENT=#RRGGBB to use your own colour.
+BRAND_ACCENT = os.environ.get("DEEP_OQ_ACCENT", "#FF7A1A").strip()
+if not re.fullmatch(r"#[0-9a-fA-F]{6}", BRAND_ACCENT):
+    BRAND_ACCENT = "#FF7A1A"
+
+
+def _ink_for17(hexc):
+    r, g, b = (int(hexc[i:i + 2], 16) for i in (1, 3, 5))
+    return "#1A0F00" if (0.299 * r + 0.587 * g + 0.114 * b) > 150 else "#FFFFFF"
+
+
+_BR17 = tuple(int(BRAND_ACCENT[i:i + 2], 16) for i in (1, 3, 5))
+_OLD_ACCENT, _OLD_RGB = "#F2A02E", "rgba(242,160,46"
+
+
+def _brand17(s):
+    return (s.replace(_OLD_ACCENT, BRAND_ACCENT)
+             .replace("--accent-ink:#2B1A00", "--accent-ink:" + _ink_for17(BRAND_ACCENT))
+             .replace(_OLD_RGB, "rgba(%d,%d,%d" % _BR17))
+
+
+_ICON_SVG = _brand17(_ICON_SVG)       # app icon dot
+_ABOUT_CSS = _brand17(_ABOUT_CSS)     # About page amber
+
+
+# ---- 2. Regional-language replies (server side) ----------------------------
+_RLANGS17 = {
+    "hi": "Hindi (हिन्दी, Devanagari script)", "bn": "Bengali (বাংলা)", "ta": "Tamil (தமிழ்)",
+    "te": "Telugu (తెలుగు)", "mr": "Marathi (मराठी)", "gu": "Gujarati (ગુજરાતી)",
+    "pa": "Punjabi (ਪੰਜਾਬੀ, Gurmukhi script)", "kn": "Kannada (ಕನ್ನಡ)", "ml": "Malayalam (മലയാളം)",
+    "or": "Odia (ଓଡ଼ିଆ)", "as": "Assamese (অসমীয়া)", "ur": "Urdu (اردو)", "en": "English",
+}
+_RLANG_BY_SESSION17 = {}
+
+
+@app.before_request
+def _lang_capture17():
+    if request.method == "POST" and request.path in ("/ask", "/ask_stream"):
+        d = request.get_json(silent=True) or {}
+        sess = (login_session.get("user") or "guest") + ":" + str(d.get("session") or "default")
+        c = str(d.get("rlang", ""))[:3]
+        if len(_RLANG_BY_SESSION17) > 5000:
+            _RLANG_BY_SESSION17.clear()
+        _RLANG_BY_SESSION17[sess] = c if c in _RLANGS17 else ""
+    return None
+
+
+_hist_base17 = kb_load_history
+
+
+def kb_load_history(session, n=12):
+    h = _hist_base17(session, n)
+    code = _RLANG_BY_SESSION17.get(session, "")
+    if code:
+        name = _RLANGS17[code]
+        note = ("[Language instruction for this chat] Reply fully in %s, in its native script, whatever language the "
+                "question is written in. Keep code, formulas, numbers and proper nouns unchanged. For exam, law or "
+                "science terms, add the English term in brackets the first time. Use simple, natural, spoken-style "
+                "words, not heavy bookish vocabulary." % name)
+        h = [{"role": "user", "content": note},
+             {"role": "assistant", "content": "Understood. I will reply in that language."}] + h
+    return h
+
+
+# ---- 3 + 2b. Client side: language picker, Hindi-first voice, streak card ---
+_OQ17_HEAD = ("<script>try{if(!localStorage.vcl)localStorage.vcl='auto'}catch(e){}</script>")
+# 'auto' = voice chat listens for Hindi or English (or the regional language you pick on the voice screen)
+
+_OQ17_HTML = r"""
+<style>
+.oqlang{flex:none;border:1px solid var(--line);background:transparent;color:var(--ink-2);border-radius:99px;
+ padding:5px 10px;font:600 12.5px var(--ui);cursor:pointer;max-width:170px}
+.oqlang option{color:#111;background:#fff}
+.oqlang.on{background:var(--accent);color:var(--accent-ink);border-color:transparent}
+.oqshare{margin:10px 0 4px}
+</style>
+<script>
+(function(){
+const LS={get:k=>{try{return localStorage.getItem(k)}catch(e){return null}},set:(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}}};
+
+/* ---------- reply-language picker (sent with every question) ---------- */
+const LANGS=[['','🌐 Reply: same as me'],['hi','हिन्दी Hindi'],['bn','বাংলা Bengali'],['ta','தமிழ் Tamil'],['te','తెలుగు Telugu'],
+  ['mr','मराठी Marathi'],['gu','ગુજરાતી Gujarati'],['pa','ਪੰਜਾਬੀ Punjabi'],['kn','ಕನ್ನಡ Kannada'],['ml','മലയാളം Malayalam'],
+  ['or','ଓଡ଼ିଆ Odia'],['as','অসমীয়া Assamese'],['ur','اردو Urdu'],['en','English']];
+let rl=LS.get('oqrlang')||'';
+const sel=document.createElement('select');sel.className='oqlang';sel.setAttribute('aria-label','Reply language');
+LANGS.forEach(([k,l])=>{const o=document.createElement('option');o.value=k;o.textContent=l;sel.appendChild(o)});
+sel.value=rl;sel.classList.toggle('on',!!rl);
+sel.onchange=()=>{rl=sel.value;LS.set('oqrlang',rl);sel.classList.toggle('on',!!rl)};
+const row=document.querySelector('.oqmodes');
+if(row)row.insertBefore(sel,row.firstChild);
+const f2=window.fetch;
+window.fetch=function(u,o){
+  try{if((u==='/ask_stream'||u==='/ask')&&o&&typeof o.body==='string'&&rl){const j=JSON.parse(o.body);j.rlang=rl;o=Object.assign({},o,{body:JSON.stringify(j)})}}catch(e){}
+  return f2.call(this,u,o);
+};
+
+/* ---------- study-streak share card ---------- */
+const FF='"Bricolage Grotesque","Noto Sans Devanagari","Segoe UI",system-ui,sans-serif';
+const EM='"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif';
+async function getDaily(){const r=await fetch('/api/daily'),j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||'Could not load your streak.');return j}
+async function streakBlob(d){
+  try{await document.fonts.ready}catch(e){}
+  const W=1080,H=1350,c=document.createElement('canvas');c.width=W;c.height=H;const g=c.getContext('2d');
+  const acc=(getComputedStyle(document.documentElement).getPropertyValue('--accent')||'#FF7A1A').trim();
+  const bg=g.createLinearGradient(0,0,W,H);bg.addColorStop(0,'#0E1233');bg.addColorStop(1,'#2A3192');g.fillStyle=bg;g.fillRect(0,0,W,H);
+  const gl=g.createRadialGradient(W/2,560,20,W/2,560,620);gl.addColorStop(0,'rgba(255,140,40,.40)');gl.addColorStop(1,'rgba(255,140,40,0)');g.fillStyle=gl;g.fillRect(0,0,W,H);
+  g.lineWidth=9;g.strokeStyle='#EEF0FF';g.beginPath();g.arc(100,100,34,0,Math.PI*2);g.stroke();
+  g.fillStyle=acc;g.beginPath();g.arc(128,128,10,0,Math.PI*2);g.fill();
+  g.fillStyle='#EEF0FF';g.textBaseline='middle';g.textAlign='left';g.font='800 44px '+FF;g.fillText('Deep OQ',160,100);
+  const nm=((document.querySelector('.acct')||{dataset:{}}).dataset.name||'').split(' ')[0];
+  g.textAlign='center';g.fillStyle='rgba(238,240,255,.85)';g.font='600 46px '+FF;
+  g.fillText(nm?nm+'’s study streak':'My study streak',W/2,270);
+  g.font='210px '+EM;g.fillText('🔥',W/2,470);
+  g.fillStyle='#fff';g.font='900 330px '+FF;g.fillText(String(d.streak),W/2,760);
+  g.fillStyle=acc;g.font='800 62px '+FF;g.fillText(d.streak===1?'DAY STREAK':'DAYS STREAK',W/2,935);
+  g.fillStyle='rgba(255,255,255,.16)';g.fillRect(100,1030,W-200,26);
+  g.fillStyle=acc;g.fillRect(100,1030,(W-200)*((d.xp%100)/100),26);
+  g.fillStyle='#EEF0FF';g.font='700 42px '+FF;g.fillText('Level '+d.level+'  •  '+d.xp+' XP  •  Best '+d.best+' days',W/2,1120);
+  g.fillStyle='rgba(238,240,255,.8)';g.font='600 36px '+FF;g.fillText('Kya tum meri streak tod sakte ho?',W/2,1215);
+  g.font='600 30px '+FF;g.fillStyle='rgba(238,240,255,.65)';g.fillText('Join me on Deep OQ  •  '+location.host,W/2,1285);
+  return new Promise(r=>c.toBlob(r,'image/png'));
+}
+function shareText(d){
+  return '🔥 I am on a '+d.streak+'-day study streak on Deep OQ (Level '+d.level+')! Can you beat it? '+location.origin+'/welcome';
+}
+async function shareStreak(btn){
+  const old=btn.textContent;btn.disabled=true;btn.textContent='Making…';
+  try{
+    const d=await getDaily(),blob=await streakBlob(d),file=new File([blob],'deep-oq-streak.png',{type:'image/png'});
+    if(navigator.canShare&&navigator.canShare({files:[file]})){
+      try{await navigator.share({files:[file],title:'My Deep OQ streak',text:shareText(d)});btn.textContent=old;btn.disabled=false;return}
+      catch(e){if(e.name==='AbortError'){btn.textContent=old;btn.disabled=false;return}}
+    }
+    const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='deep-oq-streak.png';
+    document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),4000);
+  }catch(e){alert(e.message||'Could not make the card.')}
+  btn.textContent=old;btn.disabled=false;
+}
+async function whatsappStreak(btn){
+  btn.disabled=true;
+  try{const d=await getDaily();window.open('https://wa.me/?text='+encodeURIComponent(shareText(d)),'_blank','noopener')}
+  catch(e){alert(e.message||'Could not load your streak.')}
+  btn.disabled=false;
+}
+/* the Daily window is built by Pack 16; add the buttons under its stats whenever it opens */
+new MutationObserver(()=>{
+  const st=document.querySelector('.oqmod #oqst');
+  if(!st||st.dataset.shr)return;
+  st.dataset.shr='1';
+  const w=document.createElement('div');w.className='oqvote oqshare';
+  w.innerHTML='<button type="button" class="oqbtn pri" data-s="card">📤 Share my streak</button><button type="button" class="oqbtn" data-s="wa">WhatsApp</button>';
+  w.onclick=e=>{const b=e.target.closest('[data-s]');if(!b)return;b.dataset.s==='card'?shareStreak(b):whatsappStreak(b)};
+  st.insertAdjacentElement('afterend',w);
+}).observe(document.body,{childList:true,subtree:true});
+})();
+</script>
+"""
+
+_a17 = PAGE.find('<meta name="theme-color" content="#0A0E2A">')
+if _a17 >= 0:
+    _a17 += len('<meta name="theme-color" content="#0A0E2A">')
+    PAGE = PAGE[:_a17] + _OQ17_HEAD + PAGE[_a17:]
+_i17 = PAGE.rfind("</body>")
+if _i17 > 0:
+    PAGE = PAGE[:_i17] + _OQ17_HTML + PAGE[_i17:]
+PAGE = _brand17(PAGE)     # last step, so it also recolours everything Pack 16 added
+# ==========================================================================
+# PACK 18: remove usage limits (quotas, queues, caps)
+# ==========================================================================
+# daily quotas: 0 means unlimited everywhere
+AI_FREE_DAILY = 0          # AI tools, free users (was 40)
+AI_PRO_DAILY = 0           # AI tools, Pro users (was 1000)
+CHAT_FREE_DAILY = 0
+FREE_DAILY = 0
+DAILY_MAX_LIMIT = 0        # Research (max model) answers per person per day
+
+# answer queue: effectively no waiting line
+CLAUDE_SLOTS = threading.BoundedSemaphore(100000)       # was 100 at once
+CLAUDE_MAX_SLOTS = threading.BoundedSemaphore(100000)   # was 10 for the Research model
+CLAUDE_QUEUE_TIMEOUT = 600                              # was 60 seconds
+
+# memory, pages and files
+MEM_CAP = 1_000_000        # remembered facts per person (was 60)
+OQ_URLS = 25               # links read from one message (was 5)
+OQ_PAGE_CHARS = 200_000    # text kept per page (was 40,000)
+OQ_CTX = 200_000           # text sent to the AI in Research mode (was 48,000)
+AF_MAX_FILES = 50          # Agent uploaded files per task (was 6)
+AF_MAX_BYTES = 2000 * 1024 * 1024
+AF_MAX_CHARS = 1_000_000_000
+AF_SECONDS = 3600
+
+# Agent
+AGENT_MAX_STEPS = 40       # was 10
+AGENT_MAX_SECONDS = 1800   # was 200
+
+# video
+MAX_UPLOAD_MB = 2000       # was 500
+MAX_SECONDS = 7200         # ffmpeg time limit
+MAX_SCENES = 1000
+_video_slot = threading.Semaphore(4)   # was 1 video job at a time
+app.config["MAX_CONTENT_LENGTH"] = (MAX_UPLOAD_MB + 2) * 1024 * 1024
+
+# browser-side limits that matched the old numbers
+PAGE = (PAGE
+        .replace("const VMAX=500*1024*1024;", "const VMAX=2000*1024*1024;")
+        .replace("f.size>500*1048576", "f.size>2000*1048576")
+        .replace("if(agFiles.length>=6){note.textContent='Maximum 6 files.';break}",
+                 "if(agFiles.length>=50){note.textContent='Maximum 50 files.';break}")
+        .replace("if(f.size>100*1048576){note.textContent=f.name+' is over 100 MB.';continue}",
+                 "if(f.size>2000*1048576){note.textContent=f.name+' is over 2 GB.';continue}"))
+# ==========================================================================
+# PACK 19: FREE MODE (no paid AI services)
+# ==========================================================================
+# Turn off every paid provider, even if a key is still set on Render.
+CLAUDE_ON = False
+CLAUDE_KEY = ""
+OPENAI_KEY = ""
+POLLINATIONS_KEY = ""
+for _paid in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "REPLICATE_API_TOKEN", "POLLINATIONS_KEY"):
+    os.environ.pop(_paid, None)
+
+# Pictures: free services only (Cloudflare, Together, Hugging Face, Stable Horde)
+os.environ["DEEP_OQ_IMAGE_PROVIDER"] = "free"
+
+# Free providers have rate limits, so keep a modest cap on parallel work
+_free_gate17 = threading.BoundedSemaphore(30)
+_chat_base19 = chat
+
+
+def chat(messages, temperature=0.3, max_tokens=4096, smart=False, prefer=None):
+    if not _free_gate17.acquire(timeout=120):
+        raise RuntimeError("Deep OQ is busy right now. Please try again in a few seconds.")
+    try:
+        return _chat_base19(messages, temperature, max_tokens, smart, prefer)
+    finally:
+        _free_gate17.release()
+
+
+print("FREE MODE: paid providers off. Groq keys:", len(_groqs), "| backups:", [x[0] for x in EXTRA_PROVIDERS] or "none")
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "ingest":
         ingest(sys.argv[2:])
