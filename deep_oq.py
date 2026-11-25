@@ -16694,7 +16694,172 @@ _cross(_HI, _EV, list(_LEVELS), "{a}_for_{b}", "{a} for {b}",
 _cross(_GE, _GEOT, list(_LEVELS), "{a}_for_{b}", "{a} for {b}",
        "Explain '{a}' in the geography of India in a way suited to a {b} student, with 5 key points and 3 questions with answers." + _IG, "Anything specific")
 print("Pack 14 added: %d India tools; total %d" % (len(AI_TOOLS) - _N14, len(AI_TOOLS)))
+# ---------------------------------------------------------------- PACK 15: 100,000+ advanced tools, built on demand (no memory cost)
+_ADV_SAFE = " Never invent facts, figures, quotes, links or citations; say plainly when you are unsure."
+_ADV_TASKS = {
+    "deep_dive": ("Expert deep dive", "Write an expert-level deep dive on {d}: core ideas, how it really works, edge cases, advanced nuances and open questions."),
+    "first_principles": ("First principles", "Break {d} down to first principles: the basic truths, then rebuild the understanding step by step."),
+    "expert_qa": ("Hard expert Q&A", "Write 15 hard questions an expert would ask about {d}, each with a careful answer."),
+    "case_study": ("Case study", "Write a realistic, clearly labelled hypothetical case study about {d} with a problem, decisions, results and lessons."),
+    "swot": ("SWOT analysis", "Do a detailed SWOT analysis for {d} with 5 points per part and the 3 most important actions."),
+    "risk_register": ("Risk register", "Make a risk register for {d}: risk, likelihood, impact, early warning sign and mitigation."),
+    "roadmap_12m": ("12 month roadmap", "Make a 12 month roadmap for {d} with quarterly goals, monthly milestones and what to measure."),
+    "kpi_dashboard": ("KPIs and metrics", "Design a KPI set for {d}: 10 metrics, how each is measured, good and bad ranges."),
+    "decision_framework": ("Decision framework", "Build a weighted decision framework for choices in {d}, with criteria, weights and a worked example."),
+    "pre_mortem": ("Pre-mortem", "Run a pre-mortem on {d}: imagine it failed, list 12 reasons why, and how to prevent each."),
+    "red_team": ("Red team critique", "Act as a sharp critic of common approaches to {d}: find the 10 weakest assumptions and how to test them."),
+    "steelman": ("Steelman both sides", "Give the strongest fair arguments on the main opposing views about {d}, then what evidence would settle it."),
+    "compare_alternatives": ("Compare alternatives", "Compare the main approaches or options within {d} on cost, effort, risk and fit, and say when each wins."),
+    "advanced_glossary": ("Advanced glossary", "List 25 advanced terms in {d} with precise definitions and a one line example each."),
+    "mental_models": ("Mental models", "List 8 mental models useful in {d}, how to apply each and a common misuse."),
+    "failure_modes": ("Failure modes", "Describe the 12 most common failure modes in {d}, their signs and fixes."),
+    "best_practices": ("Best practices checklist", "Write a best-practices checklist for {d} grouped into basics, intermediate and advanced."),
+    "troubleshooting": ("Troubleshooting guide", "Write a troubleshooting guide for {d}: symptom, likely causes, how to test, how to fix."),
+    "interview_gauntlet": ("Interview gauntlet", "Write 20 progressively harder interview questions on {d} with what a strong answer contains."),
+    "hard_problems": ("Hard practice problems", "Write 10 hard practice problems on {d} with full worked solutions."),
+    "research_questions": ("Research questions", "Suggest 12 original research or project questions about {d} and how each could be studied."),
+    "source_map": ("Where to learn (source types)", "Describe the kinds of sources (books, standards, journals, courses, communities) for mastering {d} and how to judge their quality. Do not invent titles."),
+    "experiment_design": ("Experiment design", "Design 3 small experiments to learn or test something about {d}: hypothesis, steps, measures, pitfalls."),
+    "data_plan": ("Data collection plan", "Plan how to collect and analyse data about {d}: what to track, how, sample size ideas and bias to avoid."),
+    "lesson_90": ("90 minute lesson", "Write a 90 minute lesson plan on {d} with timings, activities, checks for understanding and homework."),
+    "course_8w": ("8 week course", "Design an 8 week course on {d}: weekly goals, topics, exercises and an assessment."),
+    "flashcards_30": ("30 flashcards", "Make 30 question and answer flashcards on {d} from basic to advanced."),
+    "spaced_repetition": ("Spaced repetition plan", "Make a 4 week spaced-repetition study plan for {d} with daily 20 minute sessions."),
+    "mock_test_20": ("20 question mock test", "Write a 20 question mock test on {d} (easy to hard, mixed types) with answers and marking guide."),
+    "teach_back": ("Teach-back script", "Write a script where a learner explains {d} to a friend, then a tutor corrects the gaps."),
+    "analogy_set": ("Analogy set", "Give 6 analogies for the hardest ideas in {d} and where each analogy breaks."),
+    "timeline": ("Timeline", "Make a timeline of the key developments in {d}. Tell the user to verify dates."),
+    "stakeholders": ("Stakeholder map", "Map the stakeholders in {d}: who they are, what they want, their influence and how to engage them."),
+    "sop": ("Process / SOP", "Write a clear step by step standard operating procedure for doing {d} well, with checks and owners."),
+    "automation_ideas": ("Automation ideas", "List 12 tasks in {d} that can be automated or AI-assisted, with the tool type, effort and risk of each."),
+    "prompt_pack": ("AI prompt pack", "Write 10 high quality prompts someone can give an AI assistant to get better results in {d}, each with its goal."),
+    "content_30d": ("30 day content calendar", "Make a 30 day content calendar about {d} with format, hook and call to action per day."),
+    "linkedin_thread": ("LinkedIn post series", "Write 5 LinkedIn posts about {d}: story, lesson, myth, how-to and question."),
+    "youtube_script": ("YouTube script", "Write a 6 minute YouTube script about {d} with a hook, 4 sections and an ending."),
+    "newsletter": ("Newsletter issue", "Write one newsletter issue about {d}: intro, 3 insights, a tip and a closing question."),
+    "sales_pitch": ("Pitch", "Write a 2 minute honest pitch related to {d}: problem, solution, proof placeholders and ask."),
+    "faq_20": ("FAQ (20)", "Write 20 frequently asked questions about {d} with clear answers."),
+    "policy_brief": ("Policy brief", "Write a balanced 1 page brief on {d}: background, options, trade-offs and a neutral summary."),
+    "slides_15": ("15 slide outline", "Write a 15 slide presentation outline on {d}, with a title, 3 bullets and speaker notes per slide."),
+    "one_pager": ("One pager", "Write a crisp one page summary of {d} for a busy reader."),
+    "exec_summary": ("Executive summary", "Write an executive summary on {d}: situation, key findings, options, recommendation placeholders."),
+    "budget_model": ("Budget model", "Outline a budget model for {d}: cost heads, formulas and sensitivity checks. Numbers are placeholders."),
+    "pricing_options": ("Pricing options", "Explain pricing models relevant to {d}, how to choose one and how to test it."),
+    "negotiation": ("Negotiation playbook", "Write a negotiation playbook for situations in {d}: goals, limits, tactics, scripts."),
+    "ethics": ("Ethical dilemmas", "Write 6 realistic ethical dilemmas in {d} with the competing values and a thoughtful way to reason."),
+    "myth_busting": ("Myth busting", "List 12 myths about {d} and the facts, flagging where evidence is mixed."),
+    "novice_to_expert": ("Novice to expert path", "Describe the path from novice to expert in {d}: levels, skills, projects and signs of progress."),
+    "habit_system": ("Weekly habit system", "Design a weekly habit and review system to get better at {d} with tiny daily actions."),
+    "advanced_projects": ("Advanced projects", "Suggest 8 advanced projects in {d} with scope, deliverables and success criteria."),
+    "portfolio_plan": ("Portfolio plan", "Plan a portfolio to show skill in {d}: pieces, order, descriptions and how to present them."),
+    "coding_exercises": ("Coding exercises", "Write 8 programming exercises related to {d} from easy to hard, with hints and a reference solution outline."),
+    "adaptive_quiz": ("Adaptive quiz", "Write a 12 question quiz on {d} that starts easy and gets harder, with answers and what each reveals about the learner."),
+    "debate_motion": ("Debate prep", "Write a debate motion on {d} with 3 arguments each side, rebuttals and cross-examination questions."),
+    "speech_5min": ("5 minute speech", "Write a 5 minute speech on {d} with a story, 3 points and a memorable close."),
+    "essay_outline_adv": ("Advanced essay outline", "Write a detailed essay outline on {d} with thesis, counterargument and evidence types to look for."),
+    "critique_my_work": ("Critique my work", "The user pasted work related to {d}. Critique it like a tough but fair expert: 5 strengths, 5 weaknesses, and the top 3 fixes."),
+    "improve_my_work": ("Improve my work", "The user pasted work related to {d}. Improve it, then list what you changed and why."),
+    "simplify_for_all": ("Explain simply (3 levels)", "Explain {d} three times: for a 10 year old, a beginner adult and a practitioner."),
+    "audit_checklist": ("Audit checklist", "Write an audit checklist for {d}: what to inspect, evidence to ask for and red flags."),
+}
+_ADV_DOMAINS = {}
+for _nm in ("_ROLES _IND _SUBJ _SUBJ2 _TECH _CONCEPT _HOBBY _MONEY _KID _SPORT _DES _HOME _DAT _CIV _LIFE _SIT _HEALTH _WELLT "
+            "_CUIS _DISH _STATES _CITY _ERAS _FIG _EV _POLT _SCH _MIN _INSTN _CULT _THEMES _FUN _EXAMS _EXAMS2 _PLACES _PLACES2 "
+            "_GEOT _RIV _FEAT _PARK _CONC _JC _LAWS _CASES _FORMS _DOCS _LANGS _RECIP _LEVELS _TONES").split():
+    for _d in globals().get(_nm, []):
+        _d = str(_d).strip()
+        _k = _slug(_d)
+        if _d and _k and _k not in _ADV_DOMAINS:
+            _ADV_DOMAINS[_k] = _d
+ADV_TOTAL = len(_ADV_TASKS) * len(_ADV_DOMAINS)
 
+
+def adv_get(name):
+    """'adv~task~domain_slug' -> tool dict, or None. Built only when asked for."""
+    p = str(name).split("~")
+    if len(p) != 3 or p[0] != "adv" or p[1] not in _ADV_TASKS or p[2] not in _ADV_DOMAINS:
+        return None
+    label, prompt = _ADV_TASKS[p[1]]
+    d = _ADV_DOMAINS[p[2]]
+    return {"name": name, "cat": "Advanced", "desc": "%s: %s" % (label, d),
+            "prompt": prompt.replace("{d}", d) + _ADV_SAFE, "ph": "Add your details, level or paste your work"}
+
+
+def adv_search(q, limit=60):
+    words = re.findall(r"[a-z0-9]+", str(q).lower())
+    if not words:
+        return []
+    out, seen = [], set()
+
+    def add(ts, ds):
+        key = (ts, ds)
+        if key in seen or len(out) >= limit:
+            return
+        seen.add(key)
+        t = adv_get("adv~%s~%s" % (ts, ds))
+        out.append({"name": t["name"], "cat": t["cat"], "desc": t["desc"], "ph": t["ph"]})
+    tasks = list(_ADV_TASKS.items())
+    for ts, (tl, _) in tasks:                      # 1) task words + topic words, like "swot plumber"
+        hay = (ts + " " + tl).lower()
+        tw = [w for w in words if w in hay]
+        rem = [w for w in words if w not in hay]
+        if tw and rem:
+            for ds, d in _ADV_DOMAINS.items():
+                if all(w in d.lower() for w in rem):
+                    add(ts, ds)
+                    if len(out) >= limit:
+                        return out
+    dm = [ds for ds, d in _ADV_DOMAINS.items() if all(w in d.lower() for w in words)]
+    for ds in dm[:6]:                              # 2) topic words only: show 10 tasks for each of 6 topics
+        for ts, _ in tasks[:10]:
+            add(ts, ds)
+    if not out:                                    # 3) task words only: that task on a few topics
+        sample = random.sample(list(_ADV_DOMAINS), min(8, len(_ADV_DOMAINS)))
+        for ts, (tl, _) in tasks:
+            if all(w in (ts + " " + tl).lower() for w in words):
+                for ds in sample:
+                    add(ts, ds)
+    return out[:limit]
+
+
+_ai_tool_run_base = ai_tool_run
+
+
+def ai_tool_run(name, text):
+    t = adv_get(name)
+    if not t:
+        return _ai_tool_run_base(name, text)
+    text = str(text or "").strip()[:12000]
+    if not text:
+        raise ValueError("Type the topic details or paste your work first.")
+    out = chat([{"role": "system", "content": AI_TOOLS_SYSTEM + "\n\nTASK: " + t["prompt"]},
+                {"role": "user", "content": text}], 0.4, 3500)
+    return _plain_tool_text(hide_keys(plain_math(collapse_repeats(out))))
+
+
+@app.get("/api/aitools/adv")
+def api_aitools_adv():
+    if denied():
+        return jsonify(error="locked"), 401
+    return jsonify(total=ADV_TOTAL, tools=adv_search(request.args.get("q", "")[:80]))
+
+
+# make the All Tools page also search the advanced tools while you type
+TOOLS_PAGE = TOOLS_PAGE.replace("$('#q').oninput=draw;", r"""let advT=null;
+$('#q').oninput=()=>{draw();clearTimeout(advT);advT=setTimeout(loadAdv,300)};
+async function loadAdv(){
+  const f=$('#q').value.trim();if(f.length<2)return;
+  try{
+    const j=await api('/api/aitools/adv?q='+encodeURIComponent(f)),L=$('#list');
+    if(!j.tools.length)return;
+    const h=document.createElement('div');h.className='muted';h.style.padding='8px 10px';
+    h.textContent='Advanced tools ('+j.total.toLocaleString()+' available, type more words to narrow):';L.appendChild(h);
+    j.tools.forEach(t=>{const b=document.createElement('button');b.className='it';b.textContent=t.desc;
+      b.onclick=()=>{cur=t;stopSpeak();$('#tt').textContent=t.desc;$('#td').textContent='Category: Advanced';$('#in').placeholder=t.ph};
+      L.appendChild(b)});
+  }catch(e){}
+}""", 1)
+print("Pack 15 added: %d advanced tools (built on demand: %d tasks x %d topics)" % (ADV_TOTAL, len(_ADV_TASKS), len(_ADV_DOMAINS)))
 print("AI tools:", len(AI_TOOLS), "ready")
 
 if __name__ == "__main__":
