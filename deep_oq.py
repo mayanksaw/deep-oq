@@ -19097,6 +19097,111 @@ except NameError:
 
 print("Pack 25 added: %d new tools (%d tasks x %d topics x %d audiences)" % (X_TOTAL, len(_X_TASKS), len(_X_DOMS), len(_X_AUD)))
 # ================= END PACK 25 =================
+# ================= PACK 26: PALM CONTROL (open palm = start voice chat, fist = stop) =================
+_OQ26_HTML = r"""
+<style>
+.palmv{position:fixed;left:12px;bottom:12px;width:84px;height:112px;border-radius:14px;object-fit:cover;
+ transform:scaleX(-1);z-index:100000;border:2px solid #7CFFD0;background:#000;display:none}
+.palmv.on{display:block}
+.palmt{position:fixed;left:12px;bottom:130px;max-width:70vw;z-index:100000;display:none;padding:6px 12px;border-radius:99px;
+ background:rgba(10,14,42,.92);color:#EEF0FF;border:1px solid #2A3070;font:600 12.5px var(--ui)}
+.palmt.on{display:block}
+#palmBtn.rec{background:var(--accent);color:var(--accent-ink)}
+</style>
+<script>
+(function(){
+const vc=document.getElementById('vcBtn');
+if(!vc||!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia)return;
+const btn=document.createElement('button');
+btn.type='button';btn.className='mic';btn.id='palmBtn';btn.textContent='✋';
+btn.title='Palm control: open palm starts voice chat, closed fist stops it';
+btn.setAttribute('aria-label','Palm control');
+vc.parentNode.insertBefore(btn,vc);
+
+const vid=document.createElement('video');vid.className='palmv';vid.muted=true;vid.playsInline=true;vid.setAttribute('playsinline','');
+const tag=document.createElement('div');tag.className='palmt';
+document.body.append(vid,tag);
+
+const LIB='https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14';
+const MODEL='https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
+let stream=null,landmarker=null,timer=null,on=false,last='',run=0,coolUntil=0;
+
+const say=t=>{tag.textContent=t;tag.classList.toggle('on',!!t)};
+const voiceOn=()=>!!document.querySelector('.vc');
+
+function shape(lm){
+  const d=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y),w=lm[0];
+  let ext=0,curl=0;
+  [[8,6],[12,10],[16,14],[20,18]].forEach(([t,p])=>{
+    const r=d(w,lm[t])/d(w,lm[p]);
+    if(r>1.15)ext++;
+    if(r<1.05)curl++;
+  });
+  if(ext===4)return 'open';
+  if(ext===0&&curl>=3)return 'fist';
+  return 'other';
+}
+
+function step(){
+  if(!on||!landmarker||vid.readyState<2)return;
+  let res;
+  try{res=landmarker.detectForVideo(vid,performance.now())}catch(e){return}
+  const lm=res&&res.landmarks&&res.landmarks[0];
+  const s=lm?shape(lm):'none';
+  if(s===last)run++;else{last=s;run=1}
+  if(!voiceOn())say(s==='open'?'✋ Hold still…':'Show your open palm ✋ to start');
+  else say(s==='fist'?'✊ Stopping…':'Listening. Close your fist ✊ to stop');
+  if(run<5||Date.now()<coolUntil)return;          // ~0.5 s steady, and no flip-flopping
+  if(s==='open'&&!voiceOn()){coolUntil=Date.now()+2000;vc.click()}
+  else if(s==='fist'&&voiceOn()){
+    coolUntil=Date.now()+2000;
+    const e=document.querySelector('.vc .vc-end');if(e)e.click();
+  }
+}
+
+async function loadModel(){
+  const T=await import(LIB+'/vision_bundle.mjs');
+  const fs=await T.FilesetResolver.forVisionTasks(LIB+'/wasm');
+  const mk=d=>T.HandLandmarker.createFromOptions(fs,{
+    baseOptions:{modelAssetPath:MODEL,delegate:d},runningMode:'VIDEO',numHands:1});
+  try{return await mk('GPU')}catch(e){return await mk('CPU')}   // some phones have no GPU support
+}
+
+async function start(){
+  say('Opening camera…');
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:{ideal:640},height:{ideal:480}},audio:false});
+  }catch(e){say('');alert('Allow the camera for this site (lock icon next to the web address), then try again.');return}
+  vid.srcObject=stream;await vid.play().catch(()=>{});
+  say('Loading hand detector… (first time takes a few seconds)');
+  try{landmarker=landmarker||await loadModel()}
+  catch(e){stop();alert('Could not load the hand detector. Check your internet and try again.');return}
+  on=true;vid.classList.add('on');btn.classList.add('rec');btn.setAttribute('aria-pressed','true');
+  last='';run=0;timer=setInterval(step,100);       // 10 checks a second saves battery
+  say('Show your open palm ✋ to start');
+}
+
+function stop(){
+  on=false;clearInterval(timer);timer=null;
+  if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}
+  vid.srcObject=null;vid.classList.remove('on');say('');
+  btn.classList.remove('rec');btn.setAttribute('aria-pressed','false');
+}
+
+btn.onclick=()=>{on?stop():start()};
+document.addEventListener('visibilitychange',()=>{if(document.hidden&&on)stop()});   // camera off when the tab is hidden
+})();
+</script>
+"""
+
+try:
+    _i26 = PAGE.rfind("</body>")
+    if _i26 > 0:
+        PAGE = PAGE[:_i26] + _brand17(_OQ26_HTML) + PAGE[_i26:]
+    print("Pack 26 ready: palm control")
+except Exception as _e26:
+    print("Pack 26: could not add palm control:", _e26)
+# ================= END PACK 26 =================
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "ingest":
         ingest(sys.argv[2:])
