@@ -3378,14 +3378,13 @@ def require_login():
     p = request.path
     if p == "/" and request.method == "GET" and not login_session.get("user"):
         return welcome_page()
-   if p in ("/login", "/logout", "/favicon.ico", "/health", "/vr", "/terms", "/privacy", "/about", "/about/photo", "/manifest.webmanifest", "/sw.js", "/icon.svg", "/welcome", "/robots.txt", "/sitemap.xml") or p.startswith(("/api/login", "/api/register", "/api/google")):
+    if p in ("/login", "/logout", "/favicon.ico", "/health", "/vr", "/terms", "/privacy", "/about", "/about/photo", "/manifest.webmanifest", "/sw.js", "/icon.svg", "/welcome", "/robots.txt", "/sitemap.xml") or p.startswith(("/api/login", "/api/register", "/api/google")):
         return None
     if login_session.get("user"):
         return None
     if request.method == "GET" and not p.startswith("/api/"):
         return redirect("/login")
     return jsonify(error="Please log in first."), 401
-
 
 @app.get("/login")
 def login_page():
