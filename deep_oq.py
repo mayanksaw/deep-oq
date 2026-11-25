@@ -18501,14 +18501,21 @@ _STUDIO22_HTML = r"""
 (function(){
 const S=window.OQSTU;if(!S)return;
 const {V,TABS,call,E,opt,og,ul,copyBtn,run}=S;
-let synth=window.speechSynthesis,SR=window.SpeechRecognition||window.webkitSpeechRecognition,rec=null;
+let synth=window.speechSynthesis,rec=null,stream=null,tmr=null;
+const CAN=!!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia&&window.MediaRecorder);
 function say(t,lang){
   try{if(!synth)return;synth.cancel();const u=new SpeechSynthesisUtterance(t);u.lang=lang==='Hindi'?'hi-IN':'en-IN';synth.speak(u)}catch(e){}
 }
-function stopAll(){try{synth&&synth.cancel()}catch(e){}try{rec&&rec.stop()}catch(e){}rec=null}
+function stopTracks(){try{stream&&stream.getTracks().forEach(t=>t.stop())}catch(e){}stream=null}
+function stopAll(){
+  try{synth&&synth.cancel()}catch(e){}
+  clearTimeout(tmr);
+  try{if(rec&&rec.state==='recording'){rec.onstop=null;rec.stop()}}catch(e){}
+  stopTracks();rec=null;
+}
 V.interview=function(el){
   stopAll();
-  el.innerHTML='<p class="oqmuted">A mock interview with 6 questions, one at a time. You can listen to each question and answer by voice. Then you get marks and feedback.</p>'
+  el.innerHTML='<p class="oqmuted">A mock interview with 6 questions, one at a time. You can listen to each question and answer by voice (press Speak, talk, press Stop). Then you get marks and feedback.</p>'
    +'<div class="stuf"><div class="stu2"><label>Interview<select id="i1k">'+og('India',['UPSC personality test','Job interview (HR)','Software developer job','Bank PO interview','College or scholarship'])+og('International',['IELTS speaking test','US F-1 student visa interview','MBA admission interview','Study abroad admission interview'])+'</select></label>'
    +'<label>Language<select id="i1l"><option>English</option><option>Hindi</option></select></label></div>'
    +'<label>About you (education, hometown, hobbies, optional subject, job role). This makes the questions personal.<textarea id="i1b" style="min-height:70px" maxlength="1200"></textarea></label>'
@@ -18522,19 +18529,43 @@ V.interview=function(el){
     st.q=j.question;
     out.innerHTML='<div class="stucard"><div class="oqmuted" style="margin:0">Question '+j.n+' of '+j.total+'</div><div class="ivq">'+E(j.question)+'</div>'
       +'<div class="stuf"><textarea id="i1a" style="min-height:110px" placeholder="Type your answer, or press Speak"></textarea></div>'
-      +'<div class="ivrow">'+(SR?'<button type="button" class="oqbtn" id="i1m">🎤 Speak</button>':'')
+      +'<div class="ivrow">'+(CAN?'<button type="button" class="oqbtn" id="i1m">🎤 Speak</button>':'')
       +'<button type="button" class="oqbtn" id="i1r">🔊 Hear again</button>'
-      +'<button type="button" class="oqbtn pri" id="i1n">'+(j.n>=j.total?'Finish and get marks':'Send answer')+'</button></div><div id="i1e"></div></div>';
+      +'<button type="button" class="oqbtn pri" id="i1n">'+(j.n>=j.total?'Finish and get marks':'Send answer')+'</button></div><div class="oqmuted" id="i1st" style="min-height:18px"></div><div id="i1e"></div></div>';
     if(el.querySelector('#i1s').checked)say(j.question,cfg().lang);
     el.querySelector('#i1r').onclick=()=>say(st.q,cfg().lang);
-    const m=el.querySelector('#i1m');
-    if(m)m.onclick=()=>{
-      if(rec){try{rec.stop()}catch(e){}rec=null;m.textContent='🎤 Speak';return}
-      try{synth&&synth.cancel();rec=new SR();rec.lang=cfg().lang==='Hindi'?'hi-IN':'en-IN';rec.continuous=true;rec.interimResults=false;
-        rec.onresult=ev=>{let t='';for(let i=ev.resultIndex;i<ev.results.length;i++)if(ev.results[i].isFinal)t+=ev.results[i][0].transcript+' ';
-          const a=el.querySelector('#i1a');if(a)a.value=(a.value+' '+t).trim()};
-        rec.onend=()=>{rec=null;const b=el.querySelector('#i1m');if(b)b.textContent='🎤 Speak'};
-        rec.start();m.textContent='⏹ Stop'}catch(e){rec=null}
+    const m=el.querySelector('#i1m'),nb=el.querySelector('#i1n'),stt=el.querySelector('#i1st');
+    if(m)m.onclick=async()=>{
+      if(rec&&rec.state==='recording'){rec.stop();return}
+      try{synth&&synth.cancel()}catch(e){}
+      try{stream=await navigator.mediaDevices.getUserMedia({audio:true})}
+      catch(e){stt.textContent='The microphone is blocked. Click the lock icon next to the web address, allow Microphone, then try again.';return}
+      const mt=['audio/webm;codecs=opus','audio/webm','audio/mp4','audio/ogg'].find(t=>MediaRecorder.isTypeSupported(t))||'';
+      const chunks=[];
+      try{rec=new MediaRecorder(stream,mt?{mimeType:mt}:{})}catch(e){stopTracks();stt.textContent='This browser cannot record. Please type your answer.';return}
+      rec.ondataavailable=e=>{if(e.data&&e.data.size)chunks.push(e.data)};
+      rec.onstop=async()=>{
+        clearTimeout(tmr);stopTracks();m.textContent='🎤 Speak';
+        const type=(rec&&rec.mimeType)||mt||'audio/webm';rec=null;
+        const blob=new Blob(chunks,{type});
+        if(blob.size<1500){stt.textContent='I could not hear anything. Speak closer to the microphone and try again.';nb.disabled=false;return}
+        stt.textContent='Writing what you said…';m.disabled=true;
+        try{
+          const fd=new FormData();
+          fd.append('audio',blob,'voice.'+(type.includes('mp4')?'mp4':type.includes('ogg')?'ogg':'webm'));
+          fd.append('lang',cfg().lang==='Hindi'?'hi':'en');
+          let ak='';try{ak=localStorage.ak||''}catch(e){}
+          const r=await fetch('/api/transcribe',{method:'POST',headers:{'X-Access-Key':ak},body:fd});
+          const j=await r.json().catch(()=>({}));
+          if(!r.ok||j.error)throw new Error(j.error||'Could not understand the recording.');
+          const t=(j.text||'').trim(),a=el.querySelector('#i1a');
+          if(!t)stt.textContent='I could not hear anything. Speak closer to the microphone and try again.';
+          else{if(a)a.value=(a.value?a.value.trimEnd()+' ':'')+t;stt.textContent='Done. Edit the text if you want, then send your answer.'}
+        }catch(e){stt.textContent=e.message}
+        m.disabled=false;nb.disabled=false;
+      };
+      rec.start();nb.disabled=true;m.textContent='⏹ Stop';stt.textContent='Listening… press Stop when you finish';
+      tmr=setTimeout(()=>{if(rec&&rec.state==='recording')rec.stop()},90000);
     };
     el.querySelector('#i1n').onclick=async(ev)=>{
       const b=ev.target,a=el.querySelector('#i1a').value.trim();stopAll();
@@ -18768,6 +18799,87 @@ try:
 except Exception as _e23:
     print("Pack 23: could not add the new tabs:", _e23)
 # ================= END PACK 23 =================
+# ================= PACK 24: DATABASE RESILIENCE (paste this block LAST, just ABOVE `if __name__ == "__main__":`) =================
+# Fixes: "Could not get an answer. couldn't get a connection after 30.00 sec"
+# Why it happened: when the database was slow to connect, every request waited up to 93 seconds. The server runs only 4 requests
+# at the same time, so a few stuck requests froze everything. And if loading or saving chat history failed, the whole answer failed.
+# What this block does:
+#   1. A better connection pool: 3 connections always kept ready, dead ones thrown away before use, fails fast (10 sec) instead of 30.
+#   2. Gives up after about 20 seconds instead of 93, so the server stays free for other people.
+#   3. If chat history, memory or saving fails, the AI still answers (without history) instead of showing an error.
+#   4. Shows a friendly message instead of the raw database error.
+# Paste it AFTER every other pack, because it replaces functions that earlier code defined.
+
+if USE_PG:
+    def _pg_open2():
+        from psycopg_pool import ConnectionPool
+        kw = dict(min_size=3, max_size=10, open=False, max_lifetime=1800, max_idle=1800,
+                  reconnect_timeout=20, timeout=10, num_workers=2,
+                  kwargs={"autocommit": True, "connect_timeout": 10, "keepalives": 1, "keepalives_idle": 30,
+                          "keepalives_interval": 10, "keepalives_count": 5})
+        chk = getattr(ConnectionPool, "check_connection", None)   # drops dead connections before they are used (newer psycopg_pool)
+        if chk:
+            kw["check"] = chk
+        pool = ConnectionPool(DATABASE_URL, **kw)
+        pool.open(wait=True, timeout=30)
+        return pool
+
+    try:
+        _old_pool = PG
+        PG = _pg_open2()
+        try:
+            _old_pool.close(timeout=5)
+        except Exception as _e:
+            print("old database pool did not close cleanly:", str(_e)[:100])
+        print("Database pool ready: 3 to 10 connections, checked before use")
+    except Exception as _e:
+        print("Pack 24: could not build the new database pool, keeping the old one:", str(_e)[:150])
+
+    def _pg(sql, params=(), fetch=None):
+        import psycopg
+        import psycopg_pool
+        for attempt in (1, 2):
+            try:
+                with PG.connection() as conn:
+                    cur = conn.execute(sql, params)
+                    if fetch == "one":
+                        return cur.fetchone()
+                    if fetch == "all":
+                        return cur.fetchall()
+                    return None
+            except (psycopg.OperationalError, psycopg.InterfaceError, psycopg_pool.PoolTimeout) as e:
+                if attempt == 2:
+                    raise
+                print("database connection problem, retrying:", str(e)[:120])
+                time.sleep(0.5)
+
+
+def _soft(fn, default, label):
+    """Wrap a database helper so a failure never kills the answer."""
+    def inner(*a, **k):
+        try:
+            return fn(*a, **k)
+        except Exception as e:
+            print("%s failed, carrying on without it: %s" % (label, str(e)[:140]))
+            return default() if callable(default) else default
+    inner.__name__ = getattr(fn, "__name__", label)
+    return inner
+
+
+kb_load_history = _soft(kb_load_history, list, "chat history")
+kb_save_msg = _soft(kb_save_msg, None, "saving chat message")
+kb_drop_last = _soft(kb_drop_last, None, "removing last messages")
+mem_list = _soft(mem_list, list, "memory list")
+
+_hide_ai_pack24 = hide_ai
+
+
+def hide_ai(text):
+    t = _hide_ai_pack24(text)
+    if isinstance(t, str) and re.search(r"get a connection|PoolTimeout|connection problem|server closed the connection|could not connect", t, re.I):
+        return "The database is busy right now. Please try again in a few seconds."
+    return t
+# ================= END PACK 24 =================
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "ingest":
         ingest(sys.argv[2:])
