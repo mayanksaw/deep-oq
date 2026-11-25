@@ -16882,22 +16882,7 @@ def _gsc_meta():
     return ('<meta name="google-site-verification" content="%s">' % _html.escape(GSC_TOKEN, quote=True)) if GSC_TOKEN else ""
 
 
-@app.get("/welcome")
-def welcome_page():
-    html = ("<!doctype html><html lang='en'><head><meta charset='utf-8'>"
-            "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-            "<title>Deep OQ - Free AI Assistant for Chat, Code, Photos, Video and Study</title>"
-            "<meta name='description' content='Deep OQ is a free AI assistant: chat, write code, edit photos and video, "
-            "solve exam questions, translate, and use thousands of AI tools. Made by Mayank Kumar Saw.'>"
-            "<link rel='canonical' href='%s/welcome'>"
-            "<!-- PASTE GOOGLE VERIFICATION META TAG HERE -->"
-            "</head><body style='font:17px system-ui;max-width:720px;margin:40px auto;padding:0 16px;line-height:1.6'>"
-            "<h1>Deep OQ</h1><p>A free AI assistant for chat, code, photo and video editing, exam help, "
-            "translation and thousands of AI tools.</p>"
-            "<p><a href='/login'>Sign in or create a free account</a> &middot; <a href='/about'>About the creator</a></p>"
-            "</body></html>") % SITE_URL
-    html = html.replace("<!-- PASTE GOOGLE VERIFICATION META TAG HERE -->", _gsc_meta())
-    return html, 200, {"Content-Type": "text/html; charset=utf-8"}
+
 WELCOME_HTML = r"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
