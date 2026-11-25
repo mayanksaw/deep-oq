@@ -18047,6 +18047,143 @@ _i20 = PAGE.rfind("</body>")
 if _i20 > 0:
     PAGE = PAGE[:_i20] + _brand17(_OQ20_HTML) + PAGE[_i20:]
 print("Pack 20 v2 ready: smart Exam Coach + Mistake Notebook")
+# ================= AI SECURITY GUARD (paste this block just ABOVE `if __name__ == "__main__":`) =================
+# What it does:
+#   1. Rate limit per user (or IP) on every AI route, so nobody can burn your API credits.
+#   2. Stricter limit on heavy routes (video, 3D, photo, agent).
+#   3. Caps how long one message can be.
+#   4. Blocks attempts to steal your keys / system prompt, and logs prompt-injection tries.
+#   5. Repeat offenders get a 15 minute cool-down.
+#   6. Limits account spam on /api/register.
+#   7. Blocks forms posted from other websites (cross-site request check).
+#   8. OPTIONAL lock: GUARD_ALLOWED = only these people may use the AI (usernames or Google emails, comma separated).
+#   9. OPTIONAL lock: GUARD_GOOGLE_ONLY=1 = only Google-verified accounts may use the AI.
+# Settings (optional, Render > Environment): GUARD_CHAT_PER_MIN, GUARD_HEAVY_PER_MIN, GUARD_MAX_Q, GUARD_OFF=1
+
+_G_CHAT_PER_MIN = int(os.environ.get("GUARD_CHAT_PER_MIN", "20"))
+_G_HEAVY_PER_MIN = int(os.environ.get("GUARD_HEAVY_PER_MIN", "5"))
+_G_PER_HOUR = int(os.environ.get("GUARD_PER_HOUR", "300"))
+_G_MAX_Q = int(os.environ.get("GUARD_MAX_Q", "700000"))   # PDF text can be up to 600000 chars, so keep this above that
+_G_REG_PER_HOUR = int(os.environ.get("GUARD_REGISTER_PER_HOUR", "5"))
+
+_G_CHAT = {"/ask", "/ask_stream", "/askfile", "/lab", "/code", "/edit_ai", "/api/run", "/api/tools/run",
+           "/api/aitools/run", "/api/aitools/improve", "/api/compare", "/api/verify", "/api/coach/quiz",
+           "/news/brief", "/news/affairs", "/vr/send", "/agent/improve", "/api/transcribe", "/readfile", "/teach"}
+_G_HEAVY = {"/video", "/makevideo", "/make3d", "/editphoto", "/thumbnail", "/agent", "/agent/upload"}
+
+# only things that try to steal secrets are blocked; "ignore previous instructions" style tries are just logged
+_G_STEAL = re.compile(
+    r"((show|reveal|print|repeat|leak|tell|give|send|output|dump|share|what\s+is|what'?s)\b[^.\n]{0,30}"
+    r"\b(your|the\s+server'?s?|deep\s*oq'?s?|backend|hidden|secret|internal)\b[^.\n]{0,30}"
+    r"\b(api[\s_-]*keys?|secret[\s_-]*keys?|access[\s_-]*keys?|keys?|tokens?|passwords?|env(ironment)?\s+(vars|variables)|"
+    r"system\s+(prompt|instructions?|message)|instructions?)\b)|"
+    r"((show|reveal|print|repeat|leak|dump|output)\b[^.\n]{0,40}\b(system|hidden|initial)\s+(prompt|instructions?|message))|"
+    r"(your|server)[\s_-]*(os\.environ|printenv|env\s+vars)",
+    re.I)
+_G_INJECT = re.compile(
+    r"(ignore|disregard|forget)\s+(all\s+|any\s+|your\s+)?(previous|prior|above|earlier)\s+(instructions?|rules|prompts?)|"
+    r"you\s+are\s+now\s+(dan|in\s+developer\s+mode)|developer\s+mode|jailbreak|do\s+anything\s+now", re.I)
+
+def _g_allowed_user():
+    """True if this logged-in user may use the AI under the optional locks."""
+    me = (login_session.get("user") or "").lower()
+    if is_admin():
+        return True
+    if os.environ.get("GUARD_GOOGLE_ONLY") and not me.startswith("google:"):
+        return False
+    allow = _name_set("GUARD_ALLOWED")
+    if allow:
+        return me in allow or (me.startswith("google:") and me[7:] in allow)
+    return True
+
+
+_g_lock = threading.Lock()
+_g_hits = {}     # key -> list of request times
+_g_strikes = {}  # key -> list of blocked-message times
+_g_banned = {}   # key -> time when the cool-down ends
+
+
+def _g_key():
+    u = login_session.get("user")
+    return ("u:" + u) if u else ("ip:" + (_client_ip() or "?"))
+
+
+def _g_count(bucket, key, window, now):
+    lst = [t for t in bucket.get(key, []) if now - t < window]
+    bucket[key] = lst
+    return lst
+
+
+def _g_text(data):
+    """All the text a user sent, so it can be checked."""
+    out = []
+    if isinstance(data, dict):
+        for k in ("q", "text", "prompt", "message", "msg", "input", "code"):
+            v = data.get(k)
+            if isinstance(v, str):
+                out.append(v)
+    return "\n".join(out)
+
+
+def _g_strike(key, now, why):
+    lst = _g_count(_g_strikes, key, 600, now)
+    lst.append(now)
+    print("GUARD:", why, key, request.path)
+    if len(lst) >= 5:
+        _g_banned[key] = now + 900
+        _g_strikes[key] = []
+
+
+@app.before_request
+def ai_guard():
+    if os.environ.get("GUARD_OFF") or request.method != "POST":
+        return None
+    p = request.path
+    now = time.time()
+    key = _g_key()
+    origin = request.headers.get("Origin", "")
+    if origin and p != "/whatsapp/webhook":
+        host = urllib.parse.urlparse(origin).netloc.lower()
+        if host and host != (request.host or "").lower():
+            print("GUARD: cross-site post blocked", origin, p)
+            return jsonify(error="Blocked: request came from another website."), 403
+    with _g_lock:
+        if len(_g_hits) > 20000:          # keep memory small
+            _g_hits.clear(); _g_strikes.clear()
+        if _g_banned.get(key, 0) > now:
+            return jsonify(error="Too many blocked requests. Please wait 15 minutes."), 429
+        if p == "/api/register":
+            lst = _g_count(_g_hits, "reg:" + (_client_ip() or "?"), 3600, now)
+            if len(lst) >= _G_REG_PER_HOUR:
+                return jsonify(error="Too many new accounts from this network. Try again later."), 429
+            lst.append(now)
+            return None
+        heavy, chat = p in _G_HEAVY, p in _G_CHAT
+        if not (heavy or chat):
+            return None
+        if not _g_allowed_user():
+            return jsonify(error="This account is not allowed to use the AI. Ask the owner for access."), 403
+        per_min = _G_HEAVY_PER_MIN if heavy else _G_CHAT_PER_MIN
+        mine = _g_count(_g_hits, key + "|" + ("h" if heavy else "c"), 3600, now)
+        if len(mine) >= _G_PER_HOUR or len([t for t in mine if now - t < 60]) >= per_min:
+            return jsonify(error="You are going too fast. Wait a minute and try again."), 429
+        mine.append(now)
+    # check the message itself (JSON only, file uploads are skipped)
+    if request.mimetype == "application/json":
+        data = request.get_json(silent=True)
+        text = _g_text(data)
+        if len(text) > _G_MAX_Q:
+            return jsonify(error="That message is too long."), 413
+        if text:
+            if _G_STEAL.search(text):
+                with _g_lock:
+                    _g_strike(key, now, "secret-steal attempt")
+                return jsonify(error="I can't help with that. Secrets, keys and internal settings are private."), 400
+            if _G_INJECT.search(text):
+                with _g_lock:
+                    print("GUARD: injection try (allowed, logged)", key, request.path)
+    return None
+# ================= END AI SECURITY GUARD =================
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "ingest":
         ingest(sys.argv[2:])
