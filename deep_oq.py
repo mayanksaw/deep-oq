@@ -19356,6 +19356,105 @@ try:
 except Exception as _e30:
     print("Pack 30 failed:", _e30)
 # ================= END PACK 30 =================
+# ================= PACK 31: BETTER PINCH + CLAP DETECTION (replaces Pack 28 and 29) =================
+_GEST31_HTML = r"""
+<style>
+html,body{touch-action:pan-x pan-y}
+#oqmeter{position:fixed;left:8px;bottom:8px;z-index:100002;width:110px;height:26px;border-radius:8px;background:rgba(0,0,0,.55);
+ overflow:hidden;font:600 10px system-ui;color:#fff;pointer-events:none}
+#oqmeter i{position:absolute;left:0;top:0;bottom:0;width:0;background:#33e6a1}
+#oqmeter b{position:absolute;top:0;bottom:0;width:2px;background:#ff5a5f}
+#oqmeter span{position:absolute;left:6px;top:6px}
+#oqmeter.hit{outline:2px solid #F2A02E}
+</style>
+<script>
+(function(){
+var DEBUG=true;                 /* shows a small level meter at the bottom left. Set to false when it works. */
+var MIN_LEVEL=0.07;             /* smallest peak that can count as a clap. Lower = more sensitive (0.04 to 0.15) */
+var RISE=6;                     /* a clap must be this many times louder than the room noise */
+
+function vcOn(){return !!document.querySelector('.vc')}
+function openVC(){if(vcOn())return;var b=document.getElementById('vcBtn');if(b)b.click()}
+function closeVC(){if(!vcOn())return;var x=document.querySelector('.vc-end');if(x)x.click()}
+
+/* ---------- PINCH (touch screens) ---------- */
+try{var mv=document.querySelector('meta[name=viewport]');if(mv&&!/user-scalable/.test(mv.content))mv.content+=',maximum-scale=1,user-scalable=no'}catch(e){}
+var d0=0,fired=false;
+function dist(t){return Math.hypot(t[0].clientX-t[1].clientX,t[0].clientY-t[1].clientY)}
+function skip(e){return e.target&&e.target.closest&&e.target.closest('#gcv,iframe,#t3frame,.camov')}
+document.addEventListener('touchstart',function(e){
+  if(e.touches.length===2&&!skip(e)){d0=dist(e.touches);fired=false}else if(e.touches.length!==2){d0=0}
+},{passive:true});
+document.addEventListener('touchmove',function(e){
+  if(e.touches.length!==2||!d0||fired)return;
+  var r=dist(e.touches)/d0;
+  if(r<0.8){fired=true;openVC()}else if(r>1.25){fired=true;closeVC()}
+},{passive:true});
+document.addEventListener('touchend',function(e){if(e.touches.length<2)d0=0},{passive:true});
+/* iPhone Safari */
+var gDone=false;
+document.addEventListener('gesturestart',function(e){e.preventDefault();gDone=false},{passive:false});
+document.addEventListener('gesturechange',function(e){
+  e.preventDefault();if(gDone)return;
+  if(e.scale<0.8){gDone=true;openVC()}else if(e.scale>1.25){gDone=true;closeVC()}
+},{passive:false});
+/* laptop touchpad pinch (Ctrl + wheel) */
+var wsum=0,wt=0;
+window.addEventListener('wheel',function(e){
+  if(!e.ctrlKey)return;
+  e.preventDefault();
+  var n=Date.now();if(n-wt>400)wsum=0;wt=n;wsum+=e.deltaY;
+  if(wsum>25){wsum=0;openVC()}else if(wsum<-25){wsum=0;closeVC()}
+},{passive:false});
+
+/* ---------- DOUBLE CLAP / SNAP ---------- */
+var ac=null,an=null,buf=null,floor=0.01,lastPeak=0,claps=[],cool=0,started=false,meter=null;
+if(DEBUG){meter=document.createElement('div');meter.id='oqmeter';meter.innerHTML='<i></i><b></b><span>tap page</span>';document.body.appendChild(meter)}
+function tick(){
+  if(!an)return;
+  an.getFloatTimeDomainData(buf);
+  var peak=0,s=0;
+  for(var i=0;i<buf.length;i++){var v=Math.abs(buf[i]);if(v>peak)peak=v;s+=v*v}
+  var rms=Math.sqrt(s/buf.length),now=Date.now();
+  var thr=Math.max(MIN_LEVEL,floor*RISE);
+  if(meter){meter.firstChild.style.width=Math.min(100,peak*100)+'%';meter.children[1].style.left=Math.min(100,thr*100)+'%';meter.children[2].textContent='mic '+Math.round(peak*100)}
+  if(vcOn()){claps=[];lastPeak=peak;return}
+  if(peak>thr&&lastPeak<thr*0.6&&now>cool){            /* sudden loud onset = clap or snap */
+    claps=claps.filter(function(t){return now-t<1000});
+    if(!claps.length||now-claps[claps.length-1]>140){
+      claps.push(now);
+      if(meter){meter.classList.add('hit');setTimeout(function(){meter.classList.remove('hit')},250)}
+    }
+    if(claps.length>=2){claps=[];cool=now+2500;openVC()}
+  }
+  if(peak<thr*0.5)floor=floor*0.97+Math.max(rms,0.002)*0.03;   /* learn the room noise */
+  lastPeak=peak;
+}
+async function start(){
+  if(started)return;started=true;
+  try{
+    var st=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
+    var AC=window.AudioContext||window.webkitAudioContext;
+    ac=new AC();if(ac.state==='suspended')await ac.resume();
+    var src=ac.createMediaStreamSource(st);an=ac.createAnalyser();an.fftSize=2048;an.smoothingTimeConstant=0;src.connect(an);
+    buf=new Float32Array(an.fftSize);
+    setInterval(tick,20);
+  }catch(e){started=false;if(meter)meter.children[2].textContent='mic blocked'}
+}
+var once=function(){document.removeEventListener('pointerdown',once);document.removeEventListener('keydown',once);start()};
+document.addEventListener('pointerdown',once);document.addEventListener('keydown',once);
+document.addEventListener('visibilitychange',function(){if(!document.hidden&&ac&&ac.state==='suspended')ac.resume()});
+})();
+</script>
+"""
+try:
+    _i31 = PAGE.rfind("</body>")
+    if _i31 > 0:
+        PAGE = PAGE[:_i31] + _GEST31_HTML + PAGE[_i31:]
+    print("Pack 31 ready: pinch + clap detection")
+except Exception as _e31:
+    print("Pack 31 failed:", _e31)
+# ================= END PACK 31 =================
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "ingest":
         ingest(sys.argv[2:])
