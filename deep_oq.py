@@ -17024,6 +17024,20 @@ def api_accesskey():
     login_session["key_ok"] = True
     login_session.permanent = True
     return jsonify(ok=True)
+  # The gate already protects the whole site, so the old per-request key check
+# and the in-page "Enter the access key" prompt are switched off.
+def denied():
+    return False
+
+
+_PROMPT = "prompt('Enter the access key')"
+_TO_GATE = "(location.href='/gate',null)"   # a 401 now sends the person to the gate page
+PAGE = PAGE.replace(_PROMPT, _TO_GATE)
+TOOLS_PAGE = TOOLS_PAGE.replace(_PROMPT, _TO_GATE)
+ADMIN_PAGE = ADMIN_PAGE.replace(_PROMPT, _TO_GATE)
+VR_PAGE = VR_PAGE.replace(_PROMPT, _TO_GATE)
+STATS_PAGE = STATS_PAGE.replace(_PROMPT, _TO_GATE)
+OPS_PAGE = OPS_PAGE.replace(_PROMPT, _TO_GATE)
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "ingest":
         ingest(sys.argv[2:])
