@@ -16898,7 +16898,7 @@ def welcome_page():
             "</body></html>") % SITE_URL
     html = html.replace("<!-- PASTE GOOGLE VERIFICATION META TAG HERE -->", _gsc_meta())
     return html, 200, {"Content-Type": "text/html; charset=utf-8"}
-  WELCOME_HTML = r"""<!doctype html>
+WELCOME_HTML = r"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Deep OQ - Free AI Assistant for Chat, Code, Photos, Video and Study</title>
