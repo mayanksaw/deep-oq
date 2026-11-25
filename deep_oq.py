@@ -19256,6 +19256,106 @@ try:
 except Exception as _e28:
     print("Pack 28 failed:", _e28)
 # ================= END PACK 28 =================
+# ================= PACK 29: DOUBLE CLAP / SNAP = VOICE CHAT =================
+_CLAP29_HTML = r"""
+<script>
+(function(){
+var SENS=0.30;            /* lower = more sensitive (0.15 to 0.6). Raise it if it triggers by accident. */
+var ac=null,an=null,buf=null,iv=null,base=0.01,quiet=0,claps=[],cool=0,started=false;
+function vcOn(){return !!document.querySelector('.vc')}
+function tick(){
+  if(!an)return;
+  an.getFloatTimeDomainData(buf);
+  var peak=0,s=0;
+  for(var i=0;i<buf.length;i++){var v=Math.abs(buf[i]);if(v>peak)peak=v;s+=v*v}
+  var rms=Math.sqrt(s/buf.length),now=Date.now();
+  if(vcOn()){quiet=0;claps=[];return}              /* voice chat is open: do nothing */
+  var thr=Math.max(SENS,base*10);
+  if(peak>thr&&quiet>=4&&now>cool){                 /* a sharp sound that came out of quiet = clap or snap */
+    quiet=0;
+    claps=claps.filter(function(t){return now-t<900});
+    if(claps.length&&now-claps[claps.length-1]<130){return}
+    claps.push(now);
+    if(claps.length>=2){
+      claps=[];cool=now+3000;
+      var b=document.getElementById('vcBtn');if(b)b.click();
+    }
+  }else if(rms<thr/3){quiet++;base=base*0.98+rms*0.02}
+  else{quiet=0}
+}
+async function start(){
+  if(started)return;started=true;
+  try{
+    var st=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
+    var AC=window.AudioContext||window.webkitAudioContext;
+    ac=new AC();if(ac.state==='suspended')await ac.resume();
+    var src=ac.createMediaStreamSource(st);an=ac.createAnalyser();an.fftSize=1024;src.connect(an);
+    buf=new Float32Array(an.fftSize);
+    iv=setInterval(tick,25);
+  }catch(e){started=false}
+}
+/* the browser needs one touch before it will use the microphone, so start on the first tap */
+var once=function(){document.removeEventListener('pointerdown',once);document.removeEventListener('keydown',once);start()};
+document.addEventListener('pointerdown',once);document.addEventListener('keydown',once);
+document.addEventListener('visibilitychange',function(){if(!document.hidden&&ac&&ac.state==='suspended')ac.resume()});
+})();
+</script>
+"""
+try:
+    _i29 = PAGE.rfind("</body>")
+    if _i29 > 0:
+        PAGE = PAGE[:_i29] + _CLAP29_HTML + PAGE[_i29:]
+    print("Pack 29 ready: double clap opens voice chat")
+except Exception as _e29:
+    print("Pack 29 failed:", _e29)
+# ================= END PACK 29 =================
+# ================= PACK 30: SOUND FEEDBACK FOR PINCH / CLAP =================
+_SOUND30_HTML = r"""
+<script>
+(function(){
+var ac=null;
+function ctx(){
+  try{
+    var AC=window.AudioContext||window.webkitAudioContext;
+    if(!ac)ac=new AC();
+    if(ac.state==='suspended')ac.resume();
+  }catch(e){}
+  return ac;
+}
+/* a short two-note blip; rising = opened, falling = closed */
+function blip(up){
+  var a=ctx();if(!a)return;
+  var f=up?[520,780]:[780,440],t=a.currentTime;
+  f.forEach(function(hz,i){
+    var o=a.createOscillator(),g=a.createGain();
+    o.type='sine';o.frequency.value=hz;
+    g.gain.setValueAtTime(0.0001,t+i*0.07);
+    g.gain.exponentialRampToValueAtTime(0.07,t+i*0.07+0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001,t+i*0.07+0.09);
+    o.connect(g);g.connect(a.destination);
+    o.start(t+i*0.07);o.stop(t+i*0.07+0.1);
+  });
+  try{if(navigator.vibrate)navigator.vibrate(up?30:[20,30,20])}catch(e){}
+}
+/* unlock audio on the first touch (browsers require this) */
+document.addEventListener('pointerdown',function(){ctx()},{once:true});
+/* play when the voice chat screen appears or disappears */
+var was=false;
+new MutationObserver(function(){
+  var now=!!document.querySelector('.vc');
+  if(now!==was){was=now;blip(now)}
+}).observe(document.body,{childList:true});
+})();
+</script>
+"""
+try:
+    _i30 = PAGE.rfind("</body>")
+    if _i30 > 0:
+        PAGE = PAGE[:_i30] + _SOUND30_HTML + PAGE[_i30:]
+    print("Pack 30 ready: sound feedback")
+except Exception as _e30:
+    print("Pack 30 failed:", _e30)
+# ================= END PACK 30 =================
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "ingest":
         ingest(sys.argv[2:])
