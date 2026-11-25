@@ -16934,6 +16934,96 @@ h1{font-size:clamp(36px,7vw,64px);line-height:1.05;margin:0 0 16px;letter-spacin
 def welcome_page():
     html = WELCOME_HTML.replace("__SITE__", SITE_URL).replace("__GSC__", _gsc_meta())
     return html, 200, {"Content-Type": "text/html; charset=utf-8"}
+  # ==========================================================================
+# ACCESS KEY GATE: every visitor must enter ACCESS_KEY before seeing anything
+# ==========================================================================
+_GATE_OPEN = {"/gate", "/api/accesskey", "/health", "/manifest.webmanifest", "/icon.svg",
+              "/sw.js", "/robots.txt", "/sitemap.xml", "/welcome"}
+
+
+def _key_ok(k):
+    return bool(ACCESS_KEY) and _hmac.compare_digest(str(k or "").encode(), ACCESS_KEY.encode())
+
+
+def _gate():
+    if not ACCESS_KEY or login_session.get("key_ok"):
+        return None
+    p = request.path
+    if p in _GATE_OPEN or p.startswith("/whatsapp/"):
+        return None
+    if _key_ok(request.headers.get("X-Access-Key", "")):
+        return None
+    if request.method == "GET" and not p.startswith("/api/"):
+        return redirect("/gate")
+    return jsonify(error="Access key needed."), 401
+
+
+# run the gate BEFORE the login check
+app.before_request_funcs.setdefault(None, []).insert(0, _gate)
+
+
+# the page's own API calls send X-Access-Key; also accept the gate cookie
+_denied_base = denied
+
+
+def denied():
+    if not ACCESS_KEY or login_session.get("key_ok"):
+        return False
+    return _denied_base()
+
+
+# logging in clears the session, so keep the gate pass
+def _start_login(name, remember):
+    passed = login_session.get("key_ok")
+    login_session.clear()
+    if passed:
+        login_session["key_ok"] = True
+    login_session["user"] = name
+    login_session.permanent = bool(remember)
+
+
+GATE_PAGE = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Deep OQ - Access key</title>
+<style>*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0A0E2A;color:#EEF0FF;font:16px system-ui,sans-serif}
+.c{width:min(380px,92vw);padding:30px;border:1px solid #2A3070;border-radius:22px;background:#151A45;text-align:center}
+h1{margin:0 0 6px;font-size:26px}p{color:#A3A9D1;margin:0 0 20px}
+input{width:100%;padding:13px 14px;border-radius:12px;border:1px solid #2A3070;background:#0E1233;color:#fff;font:inherit;margin-bottom:12px}
+button{width:100%;padding:13px;border:0;border-radius:99px;background:linear-gradient(135deg,#33E6A1,#2F8CFF);color:#04122b;font:700 16px system-ui;cursor:pointer}
+#m{color:#ff7a90;min-height:20px;margin-top:12px;font-size:14px}</style></head><body>
+<form class="c" id="f"><h1>Deep OQ</h1><p>Enter the access key to continue</p>
+<input id="k" type="password" placeholder="Access key" autocomplete="off" autofocus>
+<button type="submit">Enter</button><div id="m"></div></form>
+<script>
+document.getElementById('f').onsubmit=async e=>{
+  e.preventDefault();const m=document.getElementById('m'),k=document.getElementById('k').value;m.textContent='';
+  try{
+    const r=await fetch('/api/accesskey',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key:k})});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok)throw new Error(j.error||'Wrong access key.');
+    localStorage.ak=k;location.href='/';
+  }catch(err){m.textContent=err.message}
+};
+</script></body></html>"""
+
+
+@app.get("/gate")
+def gate_page():
+    if not ACCESS_KEY or login_session.get("key_ok"):
+        return redirect("/")
+    return GATE_PAGE, 200, {"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store"}
+
+
+@app.post("/api/accesskey")
+def api_accesskey():
+    if _too_many_fails():
+        return jsonify(error="Too many tries. Wait 10 minutes and try again."), 429
+    k = str((request.get_json(silent=True) or {}).get("key", ""))
+    if not _key_ok(k):
+        _login_fails.setdefault(_client_ip(), []).append(time.time())
+        return jsonify(error="Wrong access key."), 401
+    login_session["key_ok"] = True
+    login_session.permanent = True
+    return jsonify(ok=True)
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "ingest":
         ingest(sys.argv[2:])
