@@ -17665,6 +17665,373 @@ def chat(messages, temperature=0.3, max_tokens=4096, smart=False, prefer=None):
 
 
 print("FREE MODE: paid providers off. Groq keys:", len(_groqs), "| backups:", [x[0] for x in EXTRA_PROVIDERS] or "none")
+# ==========================================================================
+# PACK 20 (v2, smarter): Exam Coach + Mistake Notebook
+# PASTE this whole block into deep_oq.py just BEFORE the line:
+#     if __name__ == "__main__":
+# (after Pack 19). If you pasted v1 earlier, DELETE v1 first and paste this instead.
+#
+# Smarter detection:
+#  1. Every mistake is classified: topic + sub-topic + error type
+#     (concept gap / calculation / careless misread / fact to memorise).
+#  2. Repeat failures ("lapses") count extra, recent mistakes count extra,
+#     things you have mastered reduce the score.
+#  3. It also watches the exam/maths questions you ask in normal chat:
+#     asking about the same topic again and again is treated as a weakness hint.
+#  4. Each weak topic gets a priority (High / Medium / Low) and a plain-words reason,
+#     and the practice quiz is shaped by the kind of mistake you make.
+# ==========================================================================
+_BOX20 = [1, 3, 7, 14, 30]          # days until the next review, by box number
+_KINDS20 = {
+    "concept": "concept gap (the idea itself is not clear)",
+    "calculation": "calculation slip (the method is right, the working goes wrong)",
+    "careless": "careless misreading (the question was not read carefully)",
+    "fact": "fact to memorise (a name, date, number or rule to remember)",
+}
+_KIND_TIP20 = {
+    "concept": "Re-read the idea in simple words and try one worked example before more questions.",
+    "calculation": "Write every step and re-check each line; speed comes after accuracy.",
+    "careless": "Underline what is asked and the key numbers before choosing an answer.",
+    "fact": "Use flashcards and short daily recall; repeat after 1, 3 and 7 days.",
+}
+
+if USE_PG:
+    _pg("CREATE TABLE IF NOT EXISTS oq_mistakes(id BIGSERIAL PRIMARY KEY, username TEXT NOT NULL, q TEXT NOT NULL, "
+        "opts TEXT, ans INTEGER, why TEXT, topic TEXT, box INTEGER NOT NULL DEFAULT 0, due TEXT NOT NULL, "
+        "ts DOUBLE PRECISION)")
+    for _c in ("sub TEXT", "kind TEXT", "lapses INTEGER NOT NULL DEFAULT 0"):
+        _pg("ALTER TABLE oq_mistakes ADD COLUMN IF NOT EXISTS " + _c)
+    _pg("CREATE TABLE IF NOT EXISTS oq_signals(id BIGSERIAL PRIMARY KEY, username TEXT NOT NULL, topic TEXT NOT NULL, "
+        "ts DOUBLE PRECISION)")
+else:
+    with DB:
+        DB.execute("CREATE TABLE IF NOT EXISTS mistakes(id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL, "
+                   "q TEXT NOT NULL, opts TEXT, ans INTEGER, why TEXT, topic TEXT, box INTEGER NOT NULL DEFAULT 0, "
+                   "due TEXT NOT NULL, ts REAL)")
+        DB.execute("CREATE TABLE IF NOT EXISTS signals(id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL, "
+                   "topic TEXT NOT NULL, ts REAL)")
+    for _c in ("sub TEXT", "kind TEXT", "lapses INTEGER NOT NULL DEFAULT 0"):
+        try:
+            with DB:
+                DB.execute("ALTER TABLE mistakes ADD COLUMN " + _c)
+        except sqlite3.OperationalError:
+            pass   # column already there
+
+
+def _classify20(q, opts=None, ans=-1, why=""):
+    """Returns (topic, subtopic, kind). Falls back to ('General', '', 'concept')."""
+    ctx = q[:500]
+    if opts and 0 <= ans < len(opts):
+        ctx += "\nOptions: " + " | ".join(opts) + "\nCorrect: " + opts[ans] + ("\nReason: " + why if why else "")
+    try:
+        raw = chat([{"role": "user", "content":
+                     "A student got this question wrong. Classify it. Reply ONLY JSON: {\"topic\": \"1 to 3 word school or exam "
+                     "topic like 'Indian Polity' or 'Algebra'\", \"subtopic\": \"1 to 4 word specific area like 'Article 21' or "
+                     "'Quadratic equations'\", \"kind\": one of concept, calculation, careless, fact}. kind meaning: concept = "
+                     "needs understanding an idea; calculation = a numeric method or working; careless = a tricky wording or "
+                     "easy to misread; fact = a name, date, number or rule to memorise.\n\n" + ctx}], 0.0, 120, prefer=FAST_MODEL)
+        j = _json_from(raw)
+        topic = re.sub(r"[^\w \-&]", "", str(j.get("topic", "")))[:40].strip() or "General"
+        sub = re.sub(r"[^\w \-&]", "", str(j.get("subtopic", "")))[:50].strip()
+        kind = str(j.get("kind", "concept")).lower()
+        return topic, sub, (kind if kind in _KINDS20 else "concept")
+    except Exception:
+        return "General", "", "concept"
+
+
+def _rows20(u, where, params):
+    return _q16("SELECT id,q,opts,ans,why,topic,box,sub,kind,lapses,ts FROM mistakes WHERE username=? " + where,
+                "SELECT id,q,opts,ans,why,topic,box,sub,kind,lapses,ts FROM oq_mistakes WHERE username=%s "
+                + where.replace("?", "%s"), (u,) + params, True)
+
+
+def _item20(r):
+    try:
+        opts = json.loads(r[2] or "[]")
+    except Exception:
+        opts = []
+    return {"id": r[0], "q": r[1], "options": opts, "answer": r[3], "why": r[4] or "", "topic": r[5] or "General",
+            "box": r[6], "sub": r[7] or "", "kind": r[8] or "concept"}
+
+
+def _signal20(u, question):
+    """Background: a chat question that looks like exam work. Same topic asked again and again = weak hint."""
+    try:
+        topic = _classify20(question)[0]
+        _q16("INSERT INTO signals(username,topic,ts) VALUES(?,?,?)",
+             "INSERT INTO oq_signals(username,topic,ts) VALUES(%s,%s,%s)", (u, topic, time.time()))
+    except Exception as e:
+        print("signal failed:", str(e)[:100])
+
+
+_mem_learn_base20 = mem_learn
+
+
+def mem_learn(username, question):
+    _mem_learn_base20(username, question)
+    if not username or username == "guest" or len(question) < 15 or "```" in question:
+        return
+    if is_exam(question) or is_math(question):
+        threading.Thread(target=_signal20, args=(username, question), daemon=True).start()
+
+
+def _weakness20(u):
+    """Scores every topic. Returns a list of dicts, weakest first."""
+    now = time.time()
+    open_ = _rows20(u, "AND box<99", ())
+    mastered = _rows20(u, "AND box>=99", ())
+    sig_rows = _q16("SELECT topic,ts FROM signals WHERE username=? AND ts>?",
+                    "SELECT topic,ts FROM oq_signals WHERE username=%s AND ts>%s", (u, now - 14 * 86400), True)
+    T = {}
+
+    def slot(t):
+        return T.setdefault(t, {"topic": t, "score": 0.0, "n": 0, "kinds": collections.Counter(),
+                                "subs": collections.Counter(), "repeat": 0, "asked": 0, "mastered": 0})
+    for r in open_:
+        t = slot(r[5] or "General")
+        lapses = int(r[9] or 0)
+        recent = 0.6 if now - (r[10] or 0) < 7 * 86400 else 0.0
+        t["score"] += (1.0 + 1.5 * lapses + recent) * (1 - 0.15 * min(r[6], 4))
+        t["n"] += 1
+        t["repeat"] += 1 if lapses else 0
+        t["kinds"][r[8] or "concept"] += 1
+        if r[7]:
+            t["subs"][r[7]] += 1
+    for r in mastered:
+        t = slot(r[5] or "General")
+        t["mastered"] += 1
+        t["score"] -= 0.3
+    for topic, _ts in sig_rows:
+        t = slot(topic)
+        t["asked"] += 1
+        t["score"] += 0.7
+    out = []
+    for t in T.values():
+        if t["score"] <= 0.4 or (t["n"] == 0 and t["asked"] < 2):
+            continue
+        kind = t["kinds"].most_common(1)[0][0] if t["kinds"] else "concept"
+        reasons = []
+        if t["n"]:
+            reasons.append("%d open mistake%s" % (t["n"], "" if t["n"] == 1 else "s"))
+        if t["repeat"]:
+            reasons.append("%d you got wrong again after reviewing" % t["repeat"])
+        if t["asked"] >= 2:
+            reasons.append("you asked about it %d times in chat" % t["asked"])
+        out.append({"topic": t["topic"], "score": round(t["score"], 1),
+                    "level": "High" if t["score"] >= 4 else "Medium" if t["score"] >= 2 else "Low",
+                    "kind": kind, "kind_text": _KINDS20[kind], "tip": _KIND_TIP20[kind],
+                    "subs": [s for s, _ in t["subs"].most_common(3)], "why": ", ".join(reasons),
+                    "count": t["n"]})
+    out.sort(key=lambda x: -x["score"])
+    return out[:8]
+
+
+@app.post("/api/mistakes/add")
+def api_mistakes_add20():
+    u = login_session.get("user") or "guest"
+    d = request.get_json(silent=True) or {}
+    q = str(d.get("q", "")).strip()[:600]
+    opts = [str(o)[:120] for o in (d.get("options") or [])][:4]
+    try:
+        ans = int(d.get("answer"))
+    except (TypeError, ValueError):
+        ans = -1
+    if not q or len(opts) < 2 or not (0 <= ans < len(opts)):
+        return jsonify(error="Bad question."), 400
+    if _rows20(u, "AND q=?", (q,)):
+        return jsonify(ok=True, duplicate=True)
+    why = str(d.get("why", ""))[:300]
+    topic, sub, kind = _classify20(q, opts, ans, why)
+    due = (_today16() + datetime.timedelta(days=1)).isoformat()
+    _q16("INSERT INTO mistakes(username,q,opts,ans,why,topic,box,due,ts,sub,kind,lapses) VALUES(?,?,?,?,?,?,0,?,?,?,?,0)",
+         "INSERT INTO oq_mistakes(username,q,opts,ans,why,topic,box,due,ts,sub,kind,lapses) "
+         "VALUES(%s,%s,%s,%s,%s,%s,0,%s,%s,%s,%s,0)",
+         (u, q, json.dumps(opts), ans, why, topic, due, time.time(), sub, kind))
+    return jsonify(ok=True, topic=topic, kind=kind)
+
+
+@app.get("/api/coach")
+def api_coach20():
+    u = login_session.get("user") or "guest"
+    today = _today16().isoformat()
+    return jsonify(due=len(_rows20(u, "AND box<99 AND due<=?", (today,))),
+                   open=len(_rows20(u, "AND box<99", ())),
+                   mastered=len(_rows20(u, "AND box>=99", ())),
+                   weak=_weakness20(u))
+
+
+@app.get("/api/mistakes/due")
+def api_mistakes_due20():
+    u = login_session.get("user") or "guest"
+    rows = _rows20(u, "AND box<99 AND due<=? ORDER BY due LIMIT 10", (_today16().isoformat(),))
+    return jsonify(items=[_item20(r) for r in rows])
+
+
+@app.post("/api/mistakes/review")
+def api_mistakes_review20():
+    u = login_session.get("user") or "guest"
+    d = request.get_json(silent=True) or {}
+    try:
+        mid = int(d.get("id"))
+    except (TypeError, ValueError):
+        return jsonify(error="Bad id."), 400
+    rows = _rows20(u, "AND id=?", (mid,))
+    if not rows:
+        return jsonify(error="Not found."), 404
+    box, lapses = rows[0][6], int(rows[0][9] or 0)
+    if d.get("correct"):
+        box += 1
+    else:
+        box, lapses = 0, lapses + 1       # a repeat failure counts extra in the weakness score
+    if box >= len(_BOX20):
+        _q16("UPDATE mistakes SET box=99, due=? WHERE id=? AND username=?",
+             "UPDATE oq_mistakes SET box=99, due=%s WHERE id=%s AND username=%s", ("9999-12-31", mid, u))
+        return jsonify(ok=True, mastered=True)
+    due = (_today16() + datetime.timedelta(days=_BOX20[box])).isoformat()
+    _q16("UPDATE mistakes SET box=?, due=?, lapses=? WHERE id=? AND username=?",
+         "UPDATE oq_mistakes SET box=%s, due=%s, lapses=%s WHERE id=%s AND username=%s", (box, due, lapses, mid, u))
+    return jsonify(ok=True, next_in_days=_BOX20[box])
+
+
+@app.post("/api/coach/quiz")
+def api_coach_quiz20():
+    u = login_session.get("user") or "guest"
+    topic = str((request.get_json(silent=True) or {}).get("topic", "")).strip()[:60]
+    if not topic:
+        return jsonify(error="Pick a topic."), 400
+    rows = _rows20(u, "AND topic=? AND box<99 ORDER BY ts DESC LIMIT 6", (topic,))
+    seen = [r[1][:150] for r in rows]
+    subs = [s for s, _ in collections.Counter(r[7] for r in rows if r[7]).most_common(3)]
+    kind = collections.Counter((r[8] or "concept") for r in rows).most_common(1)[0][0] if rows else "concept"
+    style = {"concept": "Make them test understanding of the idea, not just recall.",
+             "calculation": "Make them short numerical or step-based problems where a slip is easy.",
+             "careless": "Make them carefully worded so a rushed reader could pick the wrong option.",
+             "fact": "Make them test exact recall of facts, names, numbers or rules."}[kind]
+    try:
+        raw = chat([{"role": "user", "content":
+                     "Make 5 NEW multiple choice practice questions on '%s' for an Indian student, easy to medium. Focus on: %s. "
+                     "%s The student got these wrong before, so test the same ideas with different questions: %s. "
+                     "Use only well-established facts. Reply ONLY JSON: {\"quiz\": [{\"q\": \"...\", \"options\": [4 short "
+                     "strings], \"answer\": index 0 to 3, \"why\": \"one short line\"}]}"
+                     % (topic, ", ".join(subs) or "the whole topic", style, "; ".join(seen) or "none")}],
+                   0.5, 2500, smart=True)
+        quiz = []
+        for x in _json_from(raw).get("quiz", []):
+            o = [str(v)[:90] for v in x.get("options", [])][:4]
+            a = int(x.get("answer"))
+            if len(o) == 4 and 0 <= a < 4 and x.get("q"):
+                quiz.append({"q": str(x["q"])[:220], "options": o, "answer": a, "why": str(x.get("why", ""))[:200]})
+    except Exception as e:
+        print("coach quiz failed:", str(e)[:150])
+        return jsonify(error="Could not make the quiz right now. Try again."), 500
+    if len(quiz) < 3:
+        return jsonify(error="Could not make a good quiz. Try again."), 500
+    return jsonify(quiz=quiz[:5], topic=topic)
+
+
+_OQ20_HTML = r"""
+<style>
+header.top #coachBtn{order:4;justify-content:center;width:100%;border-radius:10px;padding:6px 8px;font-size:13px}
+.oqdot{display:inline-block;min-width:20px;padding:1px 6px;margin-left:6px;border-radius:99px;background:#ff5a5f;color:#fff;font:700 11px var(--ui);text-align:center}
+.oqtopic{padding:11px 13px;margin:8px 0;border:1px solid var(--line);border-radius:14px;font:500 14.5px/1.45 var(--ui)}
+.oqtopic .top{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.oqtopic .meta{color:var(--ink-2);font-size:13px;margin-top:4px}
+.oqtopic .tip{margin-top:6px;font-size:13.5px}
+.oqlvl{display:inline-block;padding:1px 9px;border-radius:99px;font:700 11px var(--ui);color:#04122b;margin-left:6px}
+.oqlvl.High{background:#ff7a90}.oqlvl.Medium{background:#F2A02E}.oqlvl.Low{background:#33e6a1}
+</style>
+<script>
+(function(){
+const Q=s=>document.querySelector(s);
+const E=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+async function call(u,b){
+  const o=b===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)};
+  const r=await fetch(u,o),j=await r.json().catch(()=>({}));
+  if(!r.ok||j.error)throw new Error(j.error||'Something went wrong. Try again.');
+  return j;
+}
+function modal(){
+  const o=document.createElement('div');o.className='oqmod';
+  o.innerHTML='<div class="oqbox" role="dialog"><button type="button" class="oqx" aria-label="Close">×</button><div id="oqcb"></div></div>';
+  document.body.appendChild(o);
+  const k=e=>{if(e.key==='Escape')close()},close=()=>{o.remove();document.removeEventListener('keydown',k);badge()};
+  document.addEventListener('keydown',k);
+  o.addEventListener('click',e=>{if(e.target===o||e.target.closest('.oqx'))close()});
+  return o.querySelector('#oqcb');
+}
+const btn=document.createElement('button');btn.type='button';btn.className='btn';btn.id='coachBtn';btn.innerHTML='🧠 Coach<span id="oqdue"></span>';
+Q('#chatTools').appendChild(btn);
+async function badge(){
+  try{const d=await call('/api/coach');Q('#oqdue').innerHTML=d.due?'<span class="oqdot">'+d.due+'</span>':''}catch(e){}
+}
+badge();
+function runQuiz(box,items,onAnswer,done){
+  let i=0,score=0;
+  function show(){
+    const q=items[i];
+    box.innerHTML='<div class="oqmuted">Question '+(i+1)+' of '+items.length+(q.topic?' · '+E(q.topic):'')+'</div><div class="oqqt">'+E(q.q)+'</div>'
+      +q.options.map((o,k)=>'<button type="button" class="oqopt" data-k="'+k+'">'+E(o)+'</button>').join('')+'<div class="oqwhy"></div><div class="oqnext"></div>';
+    let lock=false;
+    box.querySelectorAll('.oqopt').forEach(b=>b.onclick=()=>{
+      if(lock)return;lock=true;
+      const k=+b.dataset.k,ok=k===q.answer,opts=box.querySelectorAll('.oqopt');
+      opts[q.answer].classList.add('ok');if(!ok)b.classList.add('bad');else score++;
+      box.querySelector('.oqwhy').textContent=q.why||'';
+      Promise.resolve(onAnswer(q,ok)).catch(()=>{});
+      const n=document.createElement('button');n.type='button';n.className='oqbtn pri';n.textContent=i+1<items.length?'Next':'Finish';
+      n.onclick=()=>{i++;i<items.length?show():done(score,items.length)};box.querySelector('.oqnext').appendChild(n);
+    });
+  }
+  show();
+}
+async function home(box){
+  box.innerHTML='<h3>Exam Coach</h3><p class="oqmuted">Loading…</p>';
+  let d;try{d=await call('/api/coach')}catch(e){box.innerHTML='<h3>Exam Coach</h3><p>'+E(e.message)+'</p>';return}
+  box.innerHTML='<h3>Exam Coach</h3>'
+    +'<div class="oqstats"><div><b>'+d.due+'</b><small>due today</small></div><div><b>'+d.open+'</b><small>in notebook</small></div><div><b>'+d.mastered+'</b><small>mastered</small></div></div>'
+    +'<div class="oqvote"><button type="button" class="oqbtn pri" id="oqrev"'+(d.due?'':' disabled')+'>Review mistakes ('+d.due+')</button></div>'
+    +'<h3 style="margin-top:18px">What I found about you</h3>'
+    +(d.weak.length?d.weak.map(w=>'<div class="oqtopic"><div class="top"><span><b>'+E(w.topic)+'</b><span class="oqlvl '+w.level+'">'+w.level+' priority</span></span>'
+        +'<button type="button" class="oqbtn" data-t="'+E(w.topic)+'">Practice</button></div>'
+        +'<div class="meta">'+E(w.why)+(w.subs.length?' · weak spots: '+E(w.subs.join(', ')):'')+'</div>'
+        +'<div class="meta">Usual mistake: '+E(w.kind_text)+'</div><div class="tip">💡 '+E(w.tip)+'</div></div>').join('')
+      :'<p class="oqmuted">Nothing found yet. Take the Daily quiz or ask exam questions in chat. Wrong answers are saved and come back after 1, 3, 7, 14 and 30 days, and Deep OQ also notices topics you keep asking about.</p>');
+  const rv=box.querySelector('#oqrev');
+  if(rv)rv.onclick=async()=>{
+    try{const j=await call('/api/mistakes/due');
+      if(!j.items.length){home(box);return}
+      runQuiz(box,j.items,(q,ok)=>call('/api/mistakes/review',{id:q.id,correct:ok}),(s,n)=>{
+        box.innerHTML='<div class="oqqt">You got '+s+' of '+n+' right</div><p class="oqmuted">Ones you missed come back tomorrow and count as a repeat weakness. Ones you got right move to a longer gap.</p><div class="oqvote"><button type="button" class="oqbtn pri" id="oqback">Back</button></div>';
+        box.querySelector('#oqback').onclick=()=>home(box)})
+    }catch(e){alert(e.message)}
+  };
+  box.querySelectorAll('[data-t]').forEach(b=>b.onclick=async()=>{
+    b.disabled=true;b.textContent='Making quiz…';
+    try{const j=await call('/api/coach/quiz',{topic:b.dataset.t});
+      runQuiz(box,j.quiz.map(x=>Object.assign({topic:j.topic},x)),
+        (q,ok)=>ok?null:call('/api/mistakes/add',{q:q.q,options:q.options,answer:q.answer,why:q.why,topic:j.topic}),
+        (s,n)=>{box.innerHTML='<div class="oqqt">You got '+s+' of '+n+' right on '+E(j.topic)+'</div><p class="oqmuted">Wrong answers were added to your notebook.</p><div class="oqvote"><button type="button" class="oqbtn pri" id="oqback">Back</button></div>';
+          box.querySelector('#oqback').onclick=()=>home(box)})
+    }catch(e){alert(e.message);b.disabled=false;b.textContent='Practice'}
+  });
+}
+btn.onclick=()=>home(modal());
+})();
+</script>
+"""
+
+# the Daily quiz (Pack 16) saves every wrong answer into the notebook
+_old20 = "if(k!==q.answer)b.classList.add('bad');else score++;"
+_new20 = ("if(k!==q.answer){b.classList.add('bad');fetch('/api/mistakes/add',{method:'POST',headers:{'Content-Type':'application/json'},"
+          "body:JSON.stringify({q:q.q,options:q.options,answer:q.answer,why:q.why,topic:'Daily quiz'})}).catch(function(){})}else score++;")
+if _old20 in PAGE:
+    PAGE = PAGE.replace(_old20, _new20)
+else:
+    print("Pack 20: could not hook the Daily quiz (Pack 16 missing?)")
+_i20 = PAGE.rfind("</body>")
+if _i20 > 0:
+    PAGE = PAGE[:_i20] + _brand17(_OQ20_HTML) + PAGE[_i20:]
+print("Pack 20 v2 ready: smart Exam Coach + Mistake Notebook")
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "ingest":
         ingest(sys.argv[2:])
