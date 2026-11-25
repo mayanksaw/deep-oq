@@ -3376,6 +3376,8 @@ def _start_login(name, remember):
 def require_login():
     _tl.max = False
     p = request.path
+    if p == "/" and request.method == "GET" and not login_session.get("user"):
+        return welcome_page()
     if p in ("/login", "/logout", "/favicon.ico", "/health", "/vr", "/terms", "/privacy", "/about", "/about/photo", "/manifest.webmanifest", "/sw.js", "/icon.svg") or p.startswith(("/api/login", "/api/register", "/api/google")):
         return None
     if login_session.get("user"):
@@ -16875,6 +16877,11 @@ def sitemap_xml():
     return Response(xml, mimetype="application/xml")
 
 @app.get("/welcome")
+GSC_TOKEN = os.environ.get("GOOGLE_SITE_VERIFICATION", "").strip()
+
+
+def _gsc_meta():
+    return ('<meta name="google-site-verification" content="%s">' % _html.escape(GSC_TOKEN, quote=True)) if GSC_TOKEN else ""
 def welcome_page():
     html = ("<!doctype html><html lang='en'><head><meta charset='utf-8'>"
             "<meta name='viewport' content='width=device-width,initial-scale=1'>"
@@ -16888,6 +16895,7 @@ def welcome_page():
             "translation and thousands of AI tools.</p>"
             "<p><a href='/login'>Sign in or create a free account</a> &middot; <a href='/about'>About the creator</a></p>"
             "</body></html>") % SITE_URL
+    html = html.replace("<!-- PASTE GOOGLE VERIFICATION META TAG HERE -->", _gsc_meta())
     return html, 200, {"Content-Type": "text/html; charset=utf-8"}
   
 if __name__ == "__main__":
