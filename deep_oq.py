@@ -3378,7 +3378,7 @@ def require_login():
     p = request.path
     if p == "/" and request.method == "GET" and not login_session.get("user"):
         return welcome_page()
-    if p in ("/login", "/logout", "/favicon.ico", "/health", "/vr", "/terms", "/privacy", "/about", "/about/photo", "/manifest.webmanifest", "/sw.js", "/icon.svg") or p.startswith(("/api/login", "/api/register", "/api/google")):
+   if p in ("/login", "/logout", "/favicon.ico", "/health", "/vr", "/terms", "/privacy", "/about", "/about/photo", "/manifest.webmanifest", "/sw.js", "/icon.svg", "/welcome", "/robots.txt", "/sitemap.xml") or p.startswith(("/api/login", "/api/register", "/api/google")):
         return None
     if login_session.get("user"):
         return None
@@ -16876,12 +16876,14 @@ def sitemap_xml():
            '<url><loc>%s/welcome</loc></url><url><loc>%s/about</loc></url></urlset>' % (SITE_URL, SITE_URL))
     return Response(xml, mimetype="application/xml")
 
-@app.get("/welcome")
 GSC_TOKEN = os.environ.get("GOOGLE_SITE_VERIFICATION", "").strip()
 
 
 def _gsc_meta():
     return ('<meta name="google-site-verification" content="%s">' % _html.escape(GSC_TOKEN, quote=True)) if GSC_TOKEN else ""
+
+
+@app.get("/welcome")
 def welcome_page():
     html = ("<!doctype html><html lang='en'><head><meta charset='utf-8'>"
             "<meta name='viewport' content='width=device-width,initial-scale=1'>"
@@ -16897,7 +16899,6 @@ def welcome_page():
             "</body></html>") % SITE_URL
     html = html.replace("<!-- PASTE GOOGLE VERIFICATION META TAG HERE -->", _gsc_meta())
     return html, 200, {"Content-Type": "text/html; charset=utf-8"}
-  
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "ingest":
         ingest(sys.argv[2:])
