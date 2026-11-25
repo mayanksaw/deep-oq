@@ -17038,6 +17038,16 @@ ADMIN_PAGE = ADMIN_PAGE.replace(_PROMPT, _TO_GATE)
 VR_PAGE = VR_PAGE.replace(_PROMPT, _TO_GATE)
 STATS_PAGE = STATS_PAGE.replace(_PROMPT, _TO_GATE)
 OPS_PAGE = OPS_PAGE.replace(_PROMPT, _TO_GATE)
+# Always use the blue theme, whatever the device theme is
+_BLUE_CSS = """<style>
+:root{
+  color-scheme:dark;
+  --bg:#0E1233; --surface:#151A45; --ink:#EEF0FF; --ink-2:#A3A9D1; --line:#2A3070;
+  --bubble:#2A3192; --bubble-ink:#FFFFFF;
+  --code-bg:#090C26; --code-line:#222962; --err:#FF8D78;
+}
+</style>"""
+PAGE = PAGE.replace("</head>", _BLUE_CSS + "</head>", 1)
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "ingest":
         ingest(sys.argv[2:])
