@@ -16898,6 +16898,57 @@ def welcome_page():
             "</body></html>") % SITE_URL
     html = html.replace("<!-- PASTE GOOGLE VERIFICATION META TAG HERE -->", _gsc_meta())
     return html, 200, {"Content-Type": "text/html; charset=utf-8"}
+  WELCOME_HTML = r"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Deep OQ - Free AI Assistant for Chat, Code, Photos, Video and Study</title>
+<meta name="description" content="Deep OQ is a free AI assistant: chat, write code, edit photos and video, solve exam questions, translate, and use thousands of AI tools. Made by Mayank Kumar Saw.">
+<link rel="canonical" href="__SITE__/welcome">
+__GSC__
+<style>
+*{box-sizing:border-box}
+body{margin:0;font:17px/1.6 system-ui,-apple-system,Segoe UI,sans-serif;color:#EEF0FF;
+ background:radial-gradient(800px 500px at 15% -10%,rgba(124,92,255,.35),transparent 60%),
+ radial-gradient(700px 480px at 95% 0%,rgba(47,140,255,.28),transparent 55%),#0A0E2A;min-height:100vh}
+.wrap{max-width:960px;margin:0 auto;padding:28px 20px 50px}
+.brand{font-weight:800;font-size:22px;letter-spacing:-.02em}
+.hero{text-align:center;padding:60px 0 40px}
+h1{font-size:clamp(36px,7vw,64px);line-height:1.05;margin:0 0 16px;letter-spacing:-.03em;
+ background:linear-gradient(90deg,#fff,#9fb0ff,#7CFFD0);-webkit-background-clip:text;background-clip:text;color:transparent}
+.lead{color:#C9CDEE;max-width:620px;margin:0 auto 28px;font-size:19px}
+.btn{display:inline-block;padding:14px 30px;border-radius:999px;font-weight:700;text-decoration:none;margin:6px}
+.pri{background:linear-gradient(135deg,#33E6A1,#2F8CFF);color:#04122b}
+.ghost{border:1px solid #2A3070;color:#EEF0FF}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px;margin-top:30px}
+.card{padding:20px;border:1px solid #2A3070;border-radius:18px;background:rgba(255,255,255,.05)}
+.card b{display:block;font-size:18px;margin-bottom:6px}
+.card span{color:#A3A9D1;font-size:15px}
+.foot{text-align:center;color:#A3A9D1;font-size:14px;margin-top:44px}
+.foot a{color:#7CFFD0}
+</style></head><body><div class="wrap">
+<div class="brand">Deep OQ</div>
+<section class="hero">
+<h1>Your free AI assistant</h1>
+<p class="lead">Chat, write and fix code, edit photos and videos, solve exam questions, translate, and use thousands of AI tools, all in one place.</p>
+<a class="btn pri" href="/login">Get started free</a>
+<a class="btn ghost" href="/about">About the creator</a>
+</section>
+<section class="grid">
+<div class="card"><b>Smart chat</b><span>Ask anything. Get clear, step by step answers.</span></div>
+<div class="card"><b>Code help</b><span>Write, debug and explain code in 16 languages.</span></div>
+<div class="card"><b>Photo and video</b><span>Edit pictures and clips right in your browser.</span></div>
+<div class="card"><b>Exam help</b><span>Maths, science, UPSC and more, solved with steps.</span></div>
+<div class="card"><b>Thousands of tools</b><span>Writing, study, career, travel and business tools.</span></div>
+<div class="card"><b>Voice and VR</b><span>Talk to Deep OQ, or use it in a VR headset.</span></div>
+</section>
+<p class="foot">Made by Mayank Kumar Saw &middot; <a href="/terms">Terms</a> &middot; <a href="/privacy">Privacy</a></p>
+</div></body></html>"""
+
+
+@app.get("/welcome")
+def welcome_page():
+    html = WELCOME_HTML.replace("__SITE__", SITE_URL).replace("__GSC__", _gsc_meta())
+    return html, 200, {"Content-Type": "text/html; charset=utf-8"}
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "ingest":
         ingest(sys.argv[2:])
