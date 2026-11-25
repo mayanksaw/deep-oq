@@ -19533,6 +19533,35 @@ try:
 except Exception as _e34:
     print("Pack 34 failed:", _e34)
 # ================= END PACK 34 =================
+# ================= PACK 35: REMOVE ALL GESTURES =================
+try:
+    # remove the scripts added by packs 26 to 33, and the palm button styles
+    for _n in range(26, 34):
+        pass  # (the blocks are removed below by their unique markers)
+    _markers = [
+        "const btn=document.createElement('button');\nbtn.type='button';btn.className='mic';btn.id='palmBtn'",  # pack 26
+        "navigator.wakeLock.request('screen')",                                                               # packs 27, 33
+        "d0=dist(e.touches)",                                                                                 # packs 28, 31
+        "var SENS=0.30;",                                                                                     # pack 29
+        "function blip(up)",                                                                                  # pack 30
+        "var WINDOW_MS=20000;",                                                                               # pack 32
+        "oqflash",                                                                                            # pack 33
+    ]
+    def _strip_gesture_blocks(html):
+        out, pos = [], 0
+        for m in re.finditer(r"(?:<style>(?:(?!</style>).)*</style>\s*)?<script>(?:(?!</script>).)*</script>", html, re.S):
+            block = m.group(0)
+            if any(k in block for k in _markers) or "palmBtn" in block or "oqmeter" in block:
+                out.append(html[pos:m.start()])
+                pos = m.end()
+        out.append(html[pos:])
+        return "".join(out)
+    PAGE = _strip_gesture_blocks(PAGE)
+    PAGE = PAGE.replace("html,body{touch-action:pan-x pan-y}", "")
+    print("Pack 35 ready: gestures removed")
+except Exception as _e35:
+    print("Pack 35 failed:", _e35)
+# ================= END PACK 35 =================
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "ingest":
         ingest(sys.argv[2:])
