@@ -19202,6 +19202,28 @@ try:
 except Exception as _e26:
     print("Pack 26: could not add palm control:", _e26)
 # ================= END PACK 26 =================
+# ================= PACK 27: keep screen awake so palm gesture keeps working =================
+_WAKE27_HTML = r"""
+<script>
+(function(){
+var lock=null;
+async function keep(){
+  try{if('wakeLock' in navigator&&!document.hidden){lock=await navigator.wakeLock.request('screen');lock.addEventListener('release',function(){lock=null})}}catch(e){}
+}
+keep();
+document.addEventListener('visibilitychange',function(){if(!document.hidden&&!lock)keep()});
+document.addEventListener('pointerdown',function(){if(!lock)keep()});
+})();
+</script>
+"""
+try:
+    _i27 = PAGE.rfind("</body>")
+    if _i27 > 0:
+        PAGE = PAGE[:_i27] + _WAKE27_HTML + PAGE[_i27:]
+    print("Pack 27 ready: screen stays awake")
+except Exception as _e27:
+    print("Pack 27 failed:", _e27)
+# ================= END PACK 27 =================
 # ================= PACK 28: PINCH ON SCREEN = VOICE CHAT (no camera) =================
 _PINCH28_HTML = r"""
 <style>
