@@ -18880,6 +18880,223 @@ def hide_ai(text):
         return "The database is busy right now. Please try again in a few seconds."
     return t
 # ================= END PACK 24 =================
+# ================= PACK 25: 100,000+ NEW AI TOOLS (built on demand, no memory cost) =================
+# Tool name format:  x~<task>~<topic>~<audience>   e.g.  x~roadmap~tractor~student
+# 64 tasks x ~650 new topics x 4 audience levels = 160,000+ tools. Paste LAST, above `if __name__ == "__main__":`
+
+_X_SAFE = (" Never invent facts, figures, quotes, links or citations; say plainly when you are unsure. "
+           "For health, legal, money or safety topics, give general information only and add one short line to consult a qualified professional.")
+
+_X_AUD = {"beginner": "complete beginners", "student": "school or college students",
+          "pro": "working professionals", "expert": "experts who want depth and nuance"}
+
+_X_TASKS = {
+    "snapshot": ("Quick snapshot", "Give a clear one-screen snapshot: what it is, why it matters, 5 key points and one surprising fact."),
+    "ten_facts": ("10 key facts", "List 10 important, accurate facts, each in one or two lines."),
+    "roadmap": ("Learning roadmap", "Make a step-by-step learning roadmap with stages, what to practise at each stage and how to know you are ready to move on."),
+    "glossary": ("Glossary (12 terms)", "Write a glossary of the 12 most useful terms with simple definitions and one example each."),
+    "faq": ("FAQ (10)", "Write the 10 questions people ask most, each with a clear short answer."),
+    "quiz8": ("Quiz (8 questions)", "Write an 8 question multiple-choice quiz, easy to hard, with four options, the answer and a one line reason each."),
+    "flashcards": ("Flashcards (12)", "Make 12 question-and-answer flashcards, from basic to advanced."),
+    "mistakes": ("Common mistakes", "List the 8 most common mistakes or misunderstandings and how to avoid each."),
+    "myths": ("Myths vs facts", "List 6 popular myths and the facts, saying where evidence is mixed."),
+    "checklist": ("Practical checklist", "Make a practical checklist of things to know, prepare or check, grouped into before, during and after."),
+    "cheatsheet": ("Cheat sheet", "Make a compact cheat sheet of the most useful points to keep on one page."),
+    "history": ("Short history", "Tell the short history in clear stages. Tell the user to verify dates."),
+    "pros_cons": ("Pros and cons", "Give balanced pros and cons and when each side matters most."),
+    "compare3": ("Compare 3 options", "Compare 3 realistic options or approaches within this topic on cost, effort, risk and fit, and say when each wins."),
+    "case_story": ("Case story", "Write a short, clearly labelled hypothetical case story that teaches the main ideas, then 3 discussion questions."),
+    "day_in_life": ("A day in the life", "Describe a realistic day in the life connected to this topic, including the good and the hard parts."),
+    "careers": ("Career angles", "Describe 8 jobs or career paths connected to this topic, what each person does and how to start. Verify details locally."),
+    "projects5": ("5 project ideas", "Suggest 5 projects from easy to hard with scope, steps and what each teaches."),
+    "group_activity": ("Group activity", "Design a 30 minute group activity or game around this topic with rules, materials and a debrief."),
+    "lesson30": ("30 minute lesson", "Write a 30 minute lesson plan with hook, explanation, activity, check for understanding and homework."),
+    "homework": ("Homework set", "Write 10 practice questions of mixed difficulty with an answer key."),
+    "debate": ("Debate motion", "Write a debate motion with 3 arguments for each side, rebuttals and cross-examination questions."),
+    "speech3": ("3 minute speech", "Write a 3 minute speech with a hook, 3 points and a memorable close."),
+    "poem": ("Poem", "Write an original poem about this topic."),
+    "story": ("Short story", "Write an original short story involving this topic, in simple language."),
+    "riddles": ("Riddles (6)", "Write 6 clean riddles with answers."),
+    "posts3": ("3 social posts", "Write 3 social media posts in different styles, with a hook and a call to action."),
+    "explainer": ("Shareable explainer", "Write a short, accurate, shareable explainer that is easy to forward and does not exaggerate."),
+    "video60": ("60 second video script", "Write a 60 second video script with a hook, 3 beats and an ending, plus visuals to show."),
+    "podcast": ("Podcast outline", "Write a 20 minute podcast episode outline with segments, talking points and listener questions."),
+    "infographic": ("Infographic text", "Write the headings, key numbers (marked as placeholders if unsure) and captions for a one-page infographic."),
+    "mindmap": ("Mind map outline", "Make a hierarchical mind-map outline with branches and sub-branches."),
+    "analogies": ("3 analogies", "Give 3 analogies from everyday life and say where each analogy breaks down."),
+    "expert_questions": ("Questions for an expert", "List 12 smart questions to ask an expert, grouped by theme."),
+    "survey": ("Survey questions", "Write a 10 question survey about this topic with a mix of question types."),
+    "risks": ("Risks and how to reduce them", "List the main risks or downsides and a practical way to reduce each."),
+    "safety": ("Safety notes", "Give practical safety and good-practice notes, especially for children and beginners."),
+    "ethics": ("Ethical questions", "Raise 6 real ethical questions around this topic and a thoughtful way to reason about them."),
+    "sustain": ("Sustainability angle", "Explain the environmental and social sustainability angle with practical actions."),
+    "costs": ("Cost breakdown", "Outline the typical cost heads with rough low, medium and high ranges. All numbers are estimates to verify."),
+    "resources": ("Where to learn", "Describe the kinds of sources (books, courses, communities, official bodies) and how to judge quality. Do not invent titles."),
+    "trends": ("Trends to watch", "Describe 5 trends or changes to watch and what could change them. Say these are not predictions."),
+    "hindi": ("Explain in Hindi", "Explain it in simple Hindi (Devanagari)."),
+    "bengali": ("Explain in Bengali", "Explain it in simple Bengali."),
+    "tamil": ("Explain in Tamil", "Explain it in simple Tamil."),
+    "telugu": ("Explain in Telugu", "Explain it in simple Telugu."),
+    "marathi": ("Explain in Marathi", "Explain it in simple Marathi."),
+    "gujarati": ("Explain in Gujarati", "Explain it in simple Gujarati."),
+    "exam_notes": ("Exam notes", "Write crisp exam revision notes with headings and key points."),
+    "mcq10": ("10 MCQs", "Write 10 multiple choice questions with answers."),
+    "one_mark": ("One-mark answers", "Write 15 one-line questions with one-line answers."),
+    "assertion": ("Assertion-reason (5)", "Write 5 assertion-reason questions with the correct option and a one line reason."),
+    "essay": ("Essay outline", "Write a detailed essay outline with thesis, three arguments, a counter-argument and a conclusion."),
+    "viva": ("Viva questions", "Write 10 viva questions with short model answers."),
+    "plan7": ("7 day plan", "Make a 7 day plan to learn or try this, with 30 to 60 minutes per day."),
+    "plan30": ("30 day practice plan", "Make a 30 day plan in four weekly stages with a small daily task and a weekly review."),
+    "weekend": ("Weekend project", "Design a weekend project with a goal, materials, steps and a way to share the result."),
+    "startup": ("Startup ideas (5)", "Suggest 5 realistic small business ideas related to this, with customer, income source and first test. No guarantees."),
+    "side_income": ("Side income ideas", "Suggest honest ways to earn a little from this skill or topic, with the effort needed and realistic expectations."),
+    "volunteer": ("Volunteer ideas", "Suggest 8 ways to volunteer or help others related to this topic."),
+    "gifts": ("Gift ideas", "Suggest 12 thoughtful gift ideas in three price ranges. Prices are rough."),
+    "red_flags": ("Red flags", "List red flags, scams or warning signs to watch for and what to do."),
+    "decision": ("Decision guide", "Give a short decision guide: the questions to ask yourself, how to weigh the options, and when to wait."),
+    "jargon": ("Jargon buster", "Translate the common jargon into plain words, with a sentence showing how it is used."),
+    "grandparent": ("Explain to a grandparent", "Explain it patiently to an older relative with no technical background, using familiar examples."),
+    "kids_activity": ("Kids activity", "Design a safe, fun 20 minute activity for children with adult supervision."),
+    "bedtime": ("Bedtime story", "Write a gentle bedtime story that teaches something about this topic."),
+    "rhyme": ("Rhyme for kids", "Write a short rhyme that helps children remember the main idea."),
+}
+
+_X_RAW = {
+ "Crops and plants": "Rice,Wheat,Maize,Sugarcane,Cotton,Jute,Tea,Coffee,Rubber,Coconut,Arecanut,Banana,Mango,Guava,Papaya,Pomegranate,Grapes,Apple,Orange,Litchi,Pineapple,Watermelon,Muskmelon,Tomato,Potato,Onion,Garlic,Ginger,Turmeric,Chilli,Brinjal,Cauliflower,Cabbage,Okra,Green peas,Spinach,Carrot,Radish,Cucumber,Pumpkin,Bottle gourd,Bitter gourd,Mustard,Groundnut,Soybean,Sunflower,Sesame,Chickpea,Pigeon pea,Lentil,Moong bean,Urad dal,Barley,Sorghum,Pearl millet,Finger millet,Cardamom,Black pepper,Cashew,Saffron,Makhana,Lemon,Strawberry,Dragon fruit,Button mushroom,Aloe vera,Tulsi,Neem,Bamboo,Banyan tree,Peepal tree,Rose,Marigold,Lotus,Bonsai",
+ "Animals": "Dog,Cat,Rabbit,Hamster,Guinea pig,Parrot,Budgerigar,Goldfish,Betta fish,Tortoise,Cow,Buffalo,Goat,Sheep,Horse,Camel,Hen,Duck,Quail,Pigeon,Honey bee,Elephant,Tiger,Lion,Leopard,Rhinoceros,Bear,Wolf,Fox,Deer,Monkey,Peacock,Eagle,Owl,Crocodile,Snake,Dolphin,Whale,Shark,Octopus,Butterfly,Ant,Spider,Frog,Penguin,Giraffe,Zebra,Kangaroo,Panda,Gorilla,Bats,Crows,Sparrows,Earthworms,Silkworm",
+ "Vehicles": "Electric car,Hybrid car,Petrol car,Diesel car,CNG car,Motorcycle,Scooter,Electric scooter,Bicycle,E-bike,Auto rickshaw,City bus,Truck,Tractor,Train,Metro rail,Bullet train,Aeroplane,Helicopter,Drone,Cargo ship,Submarine,Rocket,Hot air balloon,Ambulance,Fire engine,Forklift,Crane,Excavator,Go-kart,Electric bus,Hydrogen vehicle,Self-driving car,Used car buying,Car insurance,Bike servicing,Tyre care,Car battery,Engine oil,Car brakes,Car AC,Wheel alignment,Driving test,Traffic rules,Road safety,Parking,Fuel economy,EV charging,Vehicle registration",
+ "Gadgets and software": "Smartphone,Laptop,Tablet,Smartwatch,Wireless earbuds,Headphones,Smart TV,Wi-Fi router,Power bank,DSLR camera,Printer,Mechanical keyboard,Monitor,SSD storage,Graphics card,Processor,RAM,Bluetooth,5G network,USB-C,Smart speaker,CCTV camera,Fitness band,E-reader,VR headset,3D printer,Inverter,UPS,Solar panel,Microsoft Word,Microsoft Excel,PowerPoint,Google Docs,Google Sheets,Google Forms,Gmail,Google Drive,Zoom,Google Meet,Canva,Photoshop,Premiere Pro,DaVinci Resolve,CapCut,Figma,Notion,Trello,Slack,WhatsApp Business,Telegram,Linux,Windows,Android settings,iPhone settings,Chrome browser,VS Code,GitHub,Docker,Postman,Jupyter notebooks,WordPress,Shopify,Tally accounting",
+ "Games and puzzles": "Chess openings,Ludo,Carrom,Sudoku,Crosswords,Scrabble,Board games,Card games for families,Quiz games,Escape rooms,Word games,Tabletop role-playing,Mobile games,Game design,Level design,Game art,Game music,Esports,Speedcubing,Treasure hunts,Antakshari,Dumb charades,Kabaddi strategy,Jigsaw puzzles,Logic puzzles,Brain teasers,Minecraft-style building,Coding games,Trivia nights,Memory games",
+ "Music and arts": "Raga basics,Tabla,Harmonium,Flute,Sitar,Music theory,Songwriting,Music production,Podcast editing,Sound design,Voice acting,Beatboxing,Choir singing,Film scoring,Stage lighting,Theatre acting,Mime,Street play,Poetry slam,Calligraphy,Sketching,Watercolour,Oil painting,Digital art,Clay modelling,Stop-motion animation,Short film making,Screenwriting,Stand-up comedy writing,Dance choreography",
+ "Mind and philosophy": "Growth mindset,Cognitive dissonance,Confirmation bias,Procrastination science,Flow state,Habit loop,Emotional regulation,Attachment styles,Maslow hierarchy,Stoicism,Existentialism,Utilitarianism,Buddhist philosophy,Vedanta,Nyaya philosophy,Sankhya philosophy,Jain philosophy,Socratic method,Plato,Aristotle,Immanuel Kant,Nietzsche,Confucius,Taoism,Sufism,Bhakti philosophy,Gandhian thought,Ambedkar's thought,Tagore's thought,Ethics of AI,Free will,Meaning of life,Critical thinking,Logical reasoning,Argument mapping,Memory palace,Active recall,Deep work,Time blocking,Pomodoro technique,Minimalism,Gratitude practice,Resilience,Empathy,Assertiveness,Impostor syndrome",
+ "World mythology": "Greek mythology,Norse mythology,Egyptian mythology,Roman mythology,Celtic folklore,Japanese folklore,African folktales,Native American stories,Arabian Nights,Aesop's fables,Chinese mythology,Mesopotamian myths,Mayan civilisation,Aztec civilisation,Inca civilisation,Viking age,Ancient Egypt,Ancient Greece,Ancient Rome,Silk Road,Ottoman Empire,Mongol Empire,Renaissance,Industrial Revolution in Europe,French Revolution",
+ "Countries": "Afghanistan,Argentina,Australia,Austria,Bangladesh,Belgium,Bhutan,Brazil,Canada,Chile,China,Colombia,Cuba,Czech Republic,Denmark,Egypt,Ethiopia,Finland,France,Germany,Ghana,Greece,Hungary,Iceland,Indonesia,Iran,Iraq,Ireland,Israel,Italy,Japan,Jordan,Kenya,Malaysia,Maldives,Mexico,Mongolia,Morocco,Myanmar,Nepal,Netherlands,New Zealand,Nigeria,Norway,Oman,Pakistan,Peru,Philippines,Poland,Portugal,Qatar,Romania,Russia,Saudi Arabia,Singapore,South Africa,South Korea,Spain,Sri Lanka,Sweden,Switzerland,Syria,Thailand,Turkey,Uganda,Ukraine,United Arab Emirates,United Kingdom,United States,Uruguay,Vietnam,Zimbabwe",
+ "Space and science": "Solar system,Mars,The Moon,Black holes,Exoplanets,Galaxies,Comets,Solar eclipse,Telescopes,Space stations,Satellites,Astronauts,Big Bang,Dark matter,Gravitational waves,Neutron stars,Volcanoes,Earthquakes,Glaciers,Oceans,Coral reefs,Rainforests,Deserts,Weather forecasting,Clouds,Lightning,Rainbows,Tides,Seasons,Auroras,Fossils,Dinosaurs,Minerals,Gemstones,Plastics,Glass,Cement,Steel,Paper making,Batteries,Magnets,Lasers,Semiconductors,Robotics,Nanotechnology,Genetic engineering,CRISPR,Stem cells,Microbes,Viruses,Bacteria,Fungi,Renewable energy,Nuclear power,Hydrogen energy,Water purification,Recycling,Biodiversity,Pollination",
+ "Business and work": "Supply chain,Logistics,Warehousing,E-commerce,Dropshipping,Affiliate marketing,Email marketing,Influencer marketing,Brand strategy,Customer retention,Sales funnel,CRM systems,Product management,Agile,Scrum,Kanban,Lean manufacturing,Six Sigma,Procurement,Inventory control,Quality control,Cybersecurity awareness,Remote team management,Meeting culture,OKRs,Crowdfunding,Venture capital basics,Franchising,Import and export,Customs duty,Microfinance,Self-help groups,Cooperative societies,Farmer producer organisations,NGO management,CSR,Grant writing,Volunteer management,Impact measurement,Negotiation skills,Time management for managers",
+ "Home and property": "Buying a flat,Rent agreement,Home layout planning,Interior lighting,Modular kitchen,Bathroom design,Solar rooftop,Rainwater tank,Borewell,Waterproofing,Termite control,Home security,Smart home,Plumbing basics,Electrical safety at home,Painting walls,Flooring options,False ceiling,Garden landscaping,Balcony design,Farmhouse,Co-living,Property tax,Society maintenance,Home insurance",
+ "Fashion and lifestyle": "Wedding outfits,Office wear,Ethnic wear,Sneakers,Watches,Perfumes,Skincare ingredients,Hair styles,Beard grooming,Nail art,Saree draping,Colour theory for clothes,Capsule wardrobe,Thrift shopping,Sustainable fashion,Jewellery care,Sunglasses",
+ "Events": "Birthday party,Baby shower,Sangeet night,Mehndi function,Engagement ceremony,Corporate event,Conference,Webinar,Workshop,Hackathon,College fest,Cultural programme,Sports day,Annual day,Farewell party,School reunion,Pooja ceremony,Housewarming,Exhibition stall,Trade fair,Charity drive,Blood donation camp,Marathon event,Open mic night",
+}
+
+
+def _x_slug(s):
+    return re.sub(r"[^a-z0-9]+", "_", str(s).lower()).strip("_")
+
+
+_X_DOMS = {}
+for _grp, _csv in _X_RAW.items():
+    for _d in _csv.split(","):
+        _d = _d.strip()
+        _k = _x_slug(_d)
+        if _d and _k and _k not in _X_DOMS:
+            _X_DOMS[_k] = (_d, _grp)
+X_TOTAL = len(_X_TASKS) * len(_X_DOMS) * len(_X_AUD)
+
+
+def x_get(name):
+    p = str(name).split("~")
+    if len(p) != 4 or p[0] != "x" or p[1] not in _X_TASKS or p[2] not in _X_DOMS or p[3] not in _X_AUD:
+        return None
+    label, instr = _X_TASKS[p[1]]
+    dom, grp = _X_DOMS[p[2]]
+    aud = _X_AUD[p[3]]
+    return {"name": name, "cat": grp, "desc": "%s: %s (%s)" % (label, dom, p[3]),
+            "prompt": "Audience: %s. Topic: %s. %s%s" % (aud, dom, instr, _X_SAFE),
+            "ph": "Add your details, level, or paste your own text (optional)"}
+
+
+def x_search(q, limit=60):
+    words = re.findall(r"[a-z0-9]+", str(q).lower())
+    if not words:
+        return []
+    aud = "beginner"
+    for k in _X_AUD:
+        if k in words:
+            aud = k
+            words = [w for w in words if w != k]
+    out, seen = [], set()
+
+    def add(ts, ds):
+        key = (ts, ds)
+        if key in seen or len(out) >= limit:
+            return
+        seen.add(key)
+        t = x_get("x~%s~%s~%s" % (ts, ds, aud))
+        out.append({"name": t["name"], "cat": t["cat"], "desc": t["desc"], "ph": t["ph"]})
+    tasks = list(_X_TASKS.items())
+    if words:
+        for ts, (tl, _) in tasks:
+            hay = (ts + " " + tl).lower()
+            tw = [w for w in words if w in hay]
+            rem = [w for w in words if w not in hay]
+            if tw and rem:
+                for ds, (d, g) in _X_DOMS.items():
+                    if all(w in (d + " " + g).lower() for w in rem):
+                        add(ts, ds)
+                        if len(out) >= limit:
+                            return out
+        dm = [ds for ds, (d, g) in _X_DOMS.items() if all(w in (d + " " + g).lower() for w in words)]
+        for ds in dm[:6]:
+            for ts, _ in tasks[:10]:
+                add(ts, ds)
+        if not out:
+            sample = random.sample(list(_X_DOMS), min(8, len(_X_DOMS)))
+            for ts, (tl, _) in tasks:
+                if all(w in (ts + " " + tl).lower() for w in words):
+                    for ds in sample:
+                        add(ts, ds)
+    return out[:limit]
+
+
+_ai_tool_run_base25 = ai_tool_run
+
+
+def ai_tool_run(name, text):
+    t = x_get(name)
+    if not t:
+        return _ai_tool_run_base25(name, text)
+    text = str(text or "").strip()[:12000] or "Use the topic above and give the best general result."
+    out = chat([{"role": "system", "content": AI_TOOLS_SYSTEM + "\n\nTASK: " + t["prompt"]},
+                {"role": "user", "content": text}], 0.4, 3500)
+    return _plain_tool_text(hide_keys(plain_math(collapse_repeats(out))))
+
+
+@app.get("/api/aitools/x")
+def api_aitools_x25():
+    if denied():
+        return jsonify(error="locked"), 401
+    return jsonify(total=X_TOTAL, tools=x_search(request.args.get("q", "")[:80]))
+
+
+try:
+    TOOLS_PAGE = TOOLS_PAGE.replace("</body></html>", r"""<script>
+(function(){
+  let t=null;const q=document.querySelector('#q');
+  q.addEventListener('input',()=>{clearTimeout(t);t=setTimeout(go,500)});
+  async function go(){
+    const f=q.value.trim();if(f.length<2)return;
+    try{
+      const j=await api('/api/aitools/x?q='+encodeURIComponent(f)),L=document.querySelector('#list');
+      if(!j.tools.length)return;
+      const h=document.createElement('div');h.className='muted';h.style.padding='8px 10px';
+      h.textContent='More tools ('+j.total.toLocaleString()+' available). Add beginner, student, pro or expert to pick the level:';L.appendChild(h);
+      j.tools.forEach(x=>{const b=document.createElement('button');b.className='it';b.textContent=x.desc;
+        b.onclick=()=>{cur=x;stopSpeak();document.querySelector('#tt').textContent=x.desc;document.querySelector('#td').textContent='Category: '+x.cat;document.querySelector('#in').placeholder=x.ph};
+        L.appendChild(b)});
+    }catch(e){}
+  }
+})();
+</script></body></html>""", 1)
+except Exception as _e25:
+    print("Pack 25: could not extend the tools page:", _e25)
+
+try:
+    _G_CHAT.update({"/api/aitools/x"})
+except NameError:
+    pass
+
+print("Pack 25 added: %d new tools (%d tasks x %d topics x %d audiences)" % (X_TOTAL, len(_X_TASKS), len(_X_DOMS), len(_X_AUD)))
+# ================= END PACK 25 =================
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "ingest":
         ingest(sys.argv[2:])
