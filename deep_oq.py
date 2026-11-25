@@ -19455,6 +19455,72 @@ try:
 except Exception as _e31:
     print("Pack 31 failed:", _e31)
 # ================= END PACK 31 =================
+# ================= PACK 33: MOBILE HARDENING FOR PINCH SOUND + WAKE =================
+_MOBILE33_HTML = r"""
+<style>
+#oqflash{position:fixed;inset:0;z-index:100003;pointer-events:none;opacity:0;
+ box-shadow:inset 0 0 0 6px #33E6A1,inset 0 0 60px rgba(51,230,161,.55);transition:opacity .35s}
+#oqflash.on{opacity:1;transition:none}
+#oqflash.close{box-shadow:inset 0 0 0 6px #F2A02E,inset 0 0 60px rgba(242,160,46,.55)}
+</style>
+<script>
+(function(){
+/* 1. unlock audio on every kind of first touch (iPhone and Android need this) */
+var unlocked=false,sil=null;
+function unlock(){
+  try{
+    var AC=window.AudioContext||window.webkitAudioContext;
+    if(AC){
+      window.__oqAC=window.__oqAC||new AC();
+      if(window.__oqAC.state==='suspended')window.__oqAC.resume();
+      var b=window.__oqAC.createBuffer(1,1,22050),s=window.__oqAC.createBufferSource();
+      s.buffer=b;s.connect(window.__oqAC.destination);s.start(0);
+    }
+    /* iPhone: a silent media element moves web sounds to the media channel, so the silent switch does not mute them */
+    if(!sil){
+      sil=document.createElement('audio');
+      sil.src='data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=';
+      sil.loop=true;sil.setAttribute('playsinline','');sil.volume=0.01;
+      sil.play().catch(function(){});
+    }
+    unlocked=true;
+  }catch(e){}
+}
+['touchstart','touchend','pointerdown','click','keydown'].forEach(function(ev){
+  document.addEventListener(ev,function(){if(!unlocked)unlock()},{passive:true});
+});
+document.addEventListener('visibilitychange',function(){
+  if(!document.hidden){try{if(window.__oqAC&&window.__oqAC.state==='suspended')window.__oqAC.resume()}catch(e){}}
+});
+
+/* 2. visual flash + vibration, for phones where vibration is not available (iPhone) */
+var fl=document.createElement('div');fl.id='oqflash';document.body.appendChild(fl);
+function flash(open){
+  fl.className=(open?'':'close ')+'on';
+  setTimeout(function(){fl.classList.remove('on')},180);
+  try{if(navigator.vibrate)navigator.vibrate(open?[25]:[15,30,15])}catch(e){}
+}
+var was=false;
+new MutationObserver(function(){
+  var now=!!document.querySelector('.vc');
+  if(now!==was){was=now;flash(now)}
+}).observe(document.body,{childList:true});
+
+/* 3. keep the screen awake on phones while voice chat is open */
+var lock=null;
+async function keep(){try{if('wakeLock' in navigator&&!lock){lock=await navigator.wakeLock.request('screen');lock.addEventListener('release',function(){lock=null})}}catch(e){}}
+new MutationObserver(function(){if(document.querySelector('.vc'))keep()}).observe(document.body,{childList:true});
+})();
+</script>
+"""
+try:
+    _i33 = PAGE.rfind("</body>")
+    if _i33 > 0:
+        PAGE = PAGE[:_i33] + _MOBILE33_HTML + PAGE[_i33:]
+    print("Pack 33 ready: mobile hardening")
+except Exception as _e33:
+    print("Pack 33 failed:", _e33)
+# ================= END PACK 33 =================
 # ================= PACK 34: HIDE THE MIC LEVEL METER =================
 _HIDE34_HTML = r"""
 <style>#oqmeter{display:none !important}</style>
