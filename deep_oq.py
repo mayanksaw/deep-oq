@@ -14890,8 +14890,14 @@ def _limit_hit(kind, limit):
 def api_aitools():
     if denied():
         return jsonify(error="locked"), 401
-    return jsonify(total=len(AI_TOOLS), categories=dict(collections.Counter(v["cat"] for v in AI_TOOLS.values())),
-                   tools=[{"name": k, "cat": v["cat"], "desc": v["desc"], "ph": v["ph"]} for k, v in AI_TOOLS.items()])
+    body = json.dumps({"total": len(AI_TOOLS), "categories": dict(collections.Counter(v["cat"] for v in AI_TOOLS.values())),
+                       "tools": [{"name": k, "cat": v["cat"], "desc": v["desc"], "ph": v["ph"]} for k, v in AI_TOOLS.items()]}).encode()
+    hd = {"Content-Type": "application/json"}
+    if "gzip" in request.headers.get("Accept-Encoding", ""):
+        import gzip
+        body = gzip.compress(body, 5)
+        hd["Content-Encoding"] = "gzip"
+    return Response(body, 200, hd)
 
 
 @app.post("/api/aitools/run")
@@ -15517,6 +15523,1178 @@ for _tc5 in _TECH:
 print("Pack 5 added; AI tools now:", len(AI_TOOLS))
 
 print("Pack 4 added; AI tools now:", len(AI_TOOLS))
+# ---------------------------------------------------------------- PACK 6: 3,000+ NEW and different AI tools
+_HOBBY = ("Guitar,Piano,Violin,Drawing,Painting,Calligraphy,Photography,Videography,Video editing,Singing,Dancing,Chess,Carrom,Cricket,"
+          "Football,Badminton,Table tennis,Swimming,Cycling,Trekking,Camping,Gardening,Cooking,Baking,Knitting,Embroidery,Pottery,"
+          "Origami,Magic tricks,Stand-up comedy,Public speaking,Debating,Creative writing,Poetry,Blogging,Podcasting,Vlogging,Bird watching,"
+          "Astronomy,Meditation,Journaling,Reading,Speed reading,Memory training,Rubik's cube,Sudoku,Board games,Fishing,Skating,Martial arts,"
+          "Boxing,Archery,Horse riding,Surfing,Scuba diving,Home brewing,Tea tasting,Coffee brewing,Woodworking,3D printing,Electronics,"
+          "Robotics,Drone flying,Ham radio,Coin collecting,Stamp collecting,Interior decorating,Fashion styling,Makeup,Mehndi design,Rangoli").split(",")
+for _h in _HOBBY:
+    _ad("beginner_guide_to_" + _h, "Hobbies", "Beginner guide: " + _h, "Write a friendly beginner guide to %s: what it is, what to buy first (budget options), the first 5 things to learn and a first mini goal." % _h, "Your situation or budget")
+    _ad("thirty_day_plan_for_" + _h, "Hobbies", "30 day plan: " + _h, "Make a 30 day practice plan for %s with a small task for every week and a way to measure progress." % _h, "Your level and time per day")
+    _ad("equipment_list_for_" + _h, "Hobbies", "Equipment: " + _h, "List the equipment for %s in three budgets (low, medium, premium) with what to skip as a beginner. Prices are rough estimates." % _h, "Your budget")
+    _ad("practice_drills_for_" + _h, "Hobbies", "Practice drills: " + _h, "Give 10 focused practice drills for %s from easy to hard, with how long and what to watch for in each." % _h, "Your level")
+    _ad("myths_about_" + _h, "Hobbies", "Myths: " + _h, "List 8 common myths about %s and the truth behind each." % _h)
+    _ad("plateau_breaker_for_" + _h, "Hobbies", "Break a plateau: " + _h, "The user feels stuck while learning %s. Diagnose likely reasons and give 7 specific things to try." % _h, "Describe where you are stuck")
+    _ad("community_ideas_for_" + _h, "Hobbies", "Find community: " + _h, "Suggest ways to find friends, groups, events and online communities for %s, and a safe way to join them." % _h, "Your city or online")
+
+_CONCEPT = ("Gravity,Photosynthesis,Evolution,DNA,Atoms,Electricity,Magnetism,Light,Sound,Black holes,Climate change,Ecosystems,Vaccines,"
+            "Immune system,Blood circulation,Digestion,Neurons,Inflation,Supply and demand,Compound interest,Stock market,Mutual funds,Taxes,"
+            "Democracy,Constitution,Federalism,Globalization,Colonialism,Industrial revolution,World wars,Cold war,Recursion,Algorithms,"
+            "Data structures,Big O notation,Databases,Encryption,Blockchain,Machine learning,Neural networks,Large language models,Internet,"
+            "Cloud computing,APIs,Operating systems,Compilers,Quantum computing,Relativity,Thermodynamics,Entropy,Chemical bonding,Acids and bases,"
+            "Periodic table,Organic chemistry,Probability,Statistics,Calculus,Linear algebra,Geometry,Trigonometry,Logarithms,Prime numbers,"
+            "Game theory,Opportunity cost,GDP,Budgeting,Insurance,Credit scores,Cognitive bias,Habits,Memory,Sleep,Stress,Emotional intelligence,"
+            "Critical thinking,Logical fallacies,Scientific method,Philosophy of ethics,Time management,Negotiation,Leadership,Marketing funnel").split(",")
+for _c in _CONCEPT:
+    _ad("eli5_" + _c, "Explain", "Explain like I'm 5: " + _c, "Explain %s as if to a curious 5 year old. Use one everyday analogy and very short sentences." % _c, "Anything specific you want to know")
+    _ad("analogy_for_" + _c, "Explain", "Analogies: " + _c, "Give 5 different analogies that explain %s, each from a different area of life, and say where each analogy breaks down." % _c)
+    _ad("history_of_" + _c, "Explain", "History: " + _c, "Tell the short history of %s: who and what shaped it, key turning points in order, and why it matters today. Mention that dates should be double-checked." % _c)
+    _ad("misconceptions_about_" + _c, "Explain", "Misconceptions: " + _c, "List the 8 most common misconceptions about %s and the correct understanding for each." % _c)
+    _ad("exam_questions_on_" + _c, "Explain", "Exam questions: " + _c, "Write 8 exam style questions on %s (3 short, 3 medium, 2 long) with model answers." % _c, "Class or level")
+    _ad("one_page_notes_on_" + _c, "Explain", "One page notes: " + _c, "Make crisp one-page revision notes on %s: definition, key points, a simple example and 3 things to remember." % _c, "Class or level")
+    _ad("debate_on_" + _c, "Explain", "Debate points: " + _c, "Give balanced arguments for and against the main debated question around %s, then a fair summary. Do not push one side." % _c)
+    _ad("project_ideas_on_" + _c, "Explain", "Project ideas: " + _c, "Suggest 6 school or college project ideas on %s with what to build, materials, and what the student will learn." % _c, "Class or level")
+
+for _r in _ROLES:
+    _ad("resume_bullets_for_" + _r, "Career", "Resume bullets: " + _r, "Write 10 strong, measurable resume bullet points for a %s using the details given. Use placeholders for numbers you do not know." % _r, "Your work and achievements")
+    _ad("interview_prep_for_" + _r, "Career", "Interview prep: " + _r, "Give 12 interview questions a %s may face, with what the interviewer is really testing and a model answer outline." % _r, "Company or level")
+    _ad("cover_letter_for_" + _r, "Career", "Cover letter: " + _r, "Write a concise, honest cover letter for a %s position using the details given. Use [placeholders] for missing facts." % _r, "Company, your background")
+    _ad("linkedin_headline_for_" + _r, "Career", "LinkedIn headline: " + _r, "Write 8 LinkedIn headline options and a 3 line About section for a %s." % _r, "Your strengths")
+    _ad("skills_to_learn_as_" + _r, "Career", "Skills to learn: " + _r, "List the technical skills, soft skills and free ways to learn each for a %s in the next 12 months." % _r, "Your level")
+    _ad("cold_dm_to_hire_" + _r, "Career", "Hire a: " + _r, "Write a short job post and 3 outreach messages to find a good %s." % _r, "Company, pay, place")
+    _ad("first_90_days_as_" + _r, "Career", "First 90 days: " + _r, "Make a first 90 day plan for a new %s: what to learn, whom to meet and what to deliver by day 30, 60 and 90." % _r, "Company type")
+    _ad("work_life_balance_for_" + _r, "Career", "Work-life balance: " + _r, "Give practical, realistic tips for a %s to avoid burnout and protect time for family and health." % _r, "Your schedule")
+
+for _i in _IND:
+    _ad("swot_for_" + _i, "Business", "SWOT: " + _i, "Do a SWOT analysis for a %s with 4 points in each part and 3 actions to take." % _i, "City, size")
+    _ad("instagram_ideas_for_" + _i, "Business", "Instagram ideas: " + _i, "Give 20 Instagram post and reel ideas for a %s with a caption idea and hashtag set for each." % _i, "Your brand style")
+    _ad("whatsapp_broadcast_for_" + _i, "Business", "WhatsApp broadcast: " + _i, "Write 5 short WhatsApp broadcast messages for a %s: offer, new arrival, festival, reminder and thank you. No spammy words." % _i, "Offer or news")
+    _ad("review_replies_for_" + _i, "Business", "Review replies: " + _i, "The user pasted a customer review for a %s. Write a polite reply for positive, mixed and negative versions." % _i, "Paste the review")
+    _ad("budget_sheet_for_" + _i, "Business", "Starting budget: " + _i, "List the start-up and monthly cost heads for a %s as a plain table with rough ranges and where to save. Ranges are estimates." % _i, "City, size")
+    _ad("supplier_checklist_for_" + _i, "Business", "Supplier checklist: " + _i, "Make a checklist to choose and negotiate with suppliers for a %s." % _i)
+    _ad("slogans_for_" + _i, "Business", "Slogans: " + _i, "Write 25 catchy slogans for a %s in English and simple Hindi." % _i, "Shop name, speciality")
+    _ad("offers_for_" + _i, "Business", "Offer ideas: " + _i, "Suggest 12 customer offers and loyalty ideas for a %s that do not destroy profit, with the logic for each." % _i, "Margins, season")
+
+for _e in _EXAMS:
+    _ad("ninety_day_plan_" + _e, "Exams", "90 day plan: " + _e, "Make a 90 day study plan for %s in phases (learn, practise, revise, test) using the details given." % _e, "Subjects, hours per day")
+    _ad("flashcards_for_" + _e, "Exams", "Flashcards: " + _e, "Make 15 Q and A flashcards for %s on the topic given. Only include facts you are sure of." % _e, "Subject or topic")
+    _ad("revision_notes_for_" + _e, "Exams", "Revision notes: " + _e, "Write quick revision notes for %s on the topic given in short bullet lines." % _e, "Subject or topic")
+    _ad("exam_day_checklist_" + _e, "Exams", "Exam day: " + _e, "Give an exam day checklist for %s: night before, morning, hall tips and what to do after the paper. Say to confirm rules on the official notice." % _e)
+    _ad("stress_relief_for_" + _e, "Exams", "Stress relief: " + _e, "Give kind, practical ways to handle pressure while preparing for %s. Include talking to someone trusted if it feels heavy." % _e, "How you feel")
+    _ad("parents_guide_for_" + _e, "Exams", "Parents guide: " + _e, "Write a short guide for parents on supporting a child preparing for %s without adding pressure." % _e)
+
+for _p in _PLACES:
+    _ad("weekend_plan_" + _p, "Travel", "Weekend plan: " + _p, "Plan a 2 day weekend in %s with morning, afternoon and evening ideas. Costs and timings are estimates to verify." % _p, "Budget, interests")
+    _ad("food_guide_" + _p, "Travel", "Food guide: " + _p, "List the must-try local foods and drinks in %s, what they are, and how to choose safe, hygienic places." % _p)
+    _ad("packing_list_for_" + _p, "Travel", "Packing list: " + _p, "Make a packing list for a trip to %s for the season and days given, grouped by category." % _p, "Month, days")
+    _ad("photo_spots_in_" + _p, "Travel", "Photo spots: " + _p, "Suggest photogenic places in %s with the best time of day for each and simple photo tips. Verify access rules locally." % _p)
+    _ad("safety_tips_for_" + _p, "Travel", "Safety tips: " + _p, "Give practical, non-alarmist safety and scam-avoidance tips for visitors to %s." % _p, "Solo, family, night travel...")
+    _ad("kids_trip_in_" + _p, "Travel", "Trip with kids: " + _p, "Plan a family trip to %s that works for kids: places, rest breaks, food tips." % _p, "Kids' ages, days")
+    _ad("festivals_in_" + _p, "Travel", "Festivals: " + _p, "Tell the main festivals and cultural events of %s, roughly when they happen and how to enjoy them respectfully. Check exact dates." % _p)
+
+for _hl in _HEALTH:
+    _ad("four_week_plan_for_" + _hl, "Health", "4 week plan: " + _hl, "Make a gentle 4 week beginner plan for %s with weekly steps. General wellness only, not medical advice." % _hl, "Your level and time")
+    _ad("warmup_and_recovery_for_" + _hl, "Health", "Warm-up and recovery: " + _hl, "Describe a simple warm-up and recovery routine for %s. General wellness only; stop if there is pain and see a doctor." % _hl)
+    _ad("snack_ideas_for_" + _hl, "Health", "Snacks: " + _hl, "Give 12 simple Indian-friendly snack ideas that fit a %s routine. General wellness only." % _hl, "Diet type")
+    _ad("motivation_for_" + _hl, "Health", "Motivation: " + _hl, "Write a short honest pep talk and 7 habits that help someone keep going with %s." % _hl)
+    _ad("home_setup_for_" + _hl, "Health", "Home setup: " + _hl, "Suggest how to set up space and a low-cost kit at home for %s." % _hl, "Space and budget")
+
+_TASKS6 = (("interview_questions_in_", "Code", "Interview questions", "Write 15 interview questions on %s from basic to advanced with concise model answers."),
+           ("cheatsheet_for_", "Code", "Cheat sheet", "Make a compact cheat sheet for %s: syntax, common patterns, gotchas and handy snippets."),
+           ("project_ideas_in_", "Code", "Project ideas", "Suggest 10 portfolio project ideas in %s from beginner to advanced, with features and what each teaches."),
+           ("unit_tests_in_", "Code", "Write tests", "Write unit tests in %s for the code pasted, covering normal, edge and error cases."),
+           ("refactor_in_", "Code", "Refactor", "Refactor the %s code pasted for clarity and maintainability. Keep behaviour the same and list what you changed."),
+           ("explain_code_in_", "Code", "Explain code", "Explain the %s code pasted line by line for a beginner, then summarize what it does."),
+           ("optimize_in_", "Code", "Optimize", "Find performance problems in the %s code pasted and give an optimized version with the reasoning."),
+           ("review_security_in_", "Code", "Security review", "Review the %s code pasted for security problems (injection, secrets, unsafe input) and show fixes."),
+           ("convert_to_", "Code", "Convert code to", "Convert the code pasted into idiomatic %s. Keep behaviour the same and note any differences."))
+for _t in _TECH:
+    for _pre, _cat, _lab, _pr in _TASKS6:
+        _ad(_pre + _t, _cat, "%s: %s" % (_lab, _t), _pr % _t, "Paste code or describe the task")
+
+for _s in _SUBJ + _SUBJ2:
+    _ad("one_page_summary_of_" + _s, "Study", "One page summary: " + _s, "Summarize the %s topic given on one page with headings, key points and one example." % _s, "Topic or chapter")
+    _ad("exam_tips_for_" + _s, "Study", "Exam tips: " + _s, "Give practical tips to score well in %s: how to study, how to write answers, common traps." % _s, "Class or exam")
+    _ad("doubt_faq_for_" + _s, "Study", "Doubt FAQ: " + _s, "List 12 questions students commonly ask in %s on the topic given, with clear short answers." % _s, "Topic")
+    _ad("project_ideas_for_" + _s, "Study", "Project ideas: " + _s, "Suggest 6 simple project or model ideas for %s with steps and materials." % _s, "Class")
+    _ad("assignment_helper_for_" + _s, "Study", "Assignment helper: " + _s, "Help plan an assignment in %s: structure, key points to cover, sources to look for. Do not write the whole assignment; teach the approach." % _s, "Assignment question")
+
+for _th in _THEMES:
+    _ad("quotes_about_" + _th, "Fun", "Quotes: " + _th, "Write 10 original short quotes about %s (not copied from anyone)." % _th)
+    _ad("kids_story_about_" + _th, "Fun", "Kids story: " + _th, "Write a short gentle bedtime story for children about %s with a clear moral." % _th, "Child's name or age")
+    _ad("caption_ideas_for_" + _th, "Fun", "Captions: " + _th, "Write 15 social media captions about %s in different moods, some with emojis." % _th)
+    _ad("essay_on_" + _th, "Fun", "Essay: " + _th, "Write a clear essay on %s with an introduction, three body paragraphs and a conclusion, at the length asked." % _th, "Word count and level")
+
+for _l in _LANGS:
+    _ad("proverbs_in_" + _l, "Languages", "Proverbs: " + _l, "Share 8 well-known %s proverbs or sayings with the literal meaning, the real meaning in English and when to use each." % _l)
+    _ad("travel_phrases_in_" + _l, "Languages", "Travel phrases: " + _l, "Give 20 travel phrases in %s with easy pronunciation in English letters and the English meaning." % _l)
+    _ad("business_phrases_in_" + _l, "Languages", "Business phrases: " + _l, "Give 15 polite business and email phrases in %s with English meanings." % _l)
+    _ad("write_email_in_" + _l, "Languages", "Write email in " + _l, "Write the email described in %s, with a subject line and polite tone, then an English translation." % _l, "What the email should say")
+    _ad("correct_my_" + _l, "Languages", "Correct my " + _l, "Correct the %s text pasted, explain each mistake simply in English and show the improved version." % _l, "Paste your text")
+
+for _x in _SIT:
+    _ad("poem_for_" + _x, "Messages", "Poem: " + _x, "Write a short, heartfelt original poem for this occasion: %s, using the names and details given." % _x, "Names and details")
+    _ad("social_post_for_" + _x, "Messages", "Social post: " + _x, "Write 3 social media posts for this occasion: %s, one sweet, one funny, one short." % _x, "Names and details")
+    _ad("long_message_for_" + _x, "Messages", "Long message: " + _x, "Write a warm, personal, longer message for this occasion: %s, from the details given." % _x, "Names and details")
+
+for _f in _FORMS:
+    _ad("ideas_for_" + _f, "Writing", "Ideas: " + _f, "Give 15 fresh topic ideas for a %s, each with an angle and a hook." % _f, "Your niche and audience")
+    _ad("hooks_for_" + _f, "Writing", "Hooks: " + _f, "Write 10 different opening hooks for a %s on the topic given." % _f, "Topic")
+    _ad("cta_for_" + _f, "Writing", "Call to action: " + _f, "Write 10 call-to-action endings for a %s that feel natural, not pushy." % _f, "Goal of the post")
+    _ad("proofread_my_" + _f, "Writing", "Proofread: " + _f, "Proofread the %s pasted: fix spelling, grammar and clarity, keep the voice, and list the fixes." % _f, "Paste your draft")
+
+for _lv in _LEVELS:
+    _ad("explain_for_" + _lv, "Study", "Explain for " + _lv, "Explain the topic given in a way a %s student understands, with an example and one check question." % _lv, "Topic")
+    _ad("quiz_for_" + _lv, "Study", "Quiz for " + _lv, "Make a 10 question quiz for %s level on the topic given with answers." % _lv, "Topic")
+    _ad("homework_plan_for_" + _lv, "Study", "Homework plan: " + _lv, "Make a calm daily homework and revision plan for a %s student using the subjects and time given." % _lv, "Subjects, hours free")
+    _ad("parent_note_for_" + _lv, "Study", "Parent tips: " + _lv, "Give a parent practical tips to support a %s student's study at home." % _lv)
+
+for _t in _TONES:
+    _ad("sms_in_" + _t + "_tone", "Rewrite", "SMS in %s tone" % _t, "Turn the message into a short SMS (under 160 characters) in a %s tone." % _t)
+    _ad("subject_lines_" + _t, "Rewrite", "Subject lines (%s)" % _t, "Write 10 email subject lines in a %s tone for the email described." % _t, "What the email is about")
+    _ad("reply_in_" + _t + "_tone", "Rewrite", "Reply in %s tone" % _t, "Write a reply to the message pasted in a %s tone." % _t, "Paste the message")
+
+for _c in _CUIS:
+    _ad("weekly_menu_" + _c, "Food", "Weekly menu: " + _c, "Plan a 7 day %s home menu (breakfast, lunch, dinner) with a shopping list. Respect any diet limits given." % _c, "Diet needs, family size")
+    _ad("tiffin_ideas_" + _c, "Food", "Tiffin ideas: " + _c, "Give 10 %s lunchbox ideas that stay good for hours and that kids or office-goers enjoy." % _c)
+    _ad("leftover_ideas_" + _c, "Food", "Leftovers: " + _c, "Suggest %s ways to turn the leftovers given into a new meal." % _c, "What you have")
+    _ad("beginner_recipes_" + _c, "Food", "Beginner recipes: " + _c, "Give 5 easy %s recipes for beginners with ingredients and short steps." % _c)
+print("Pack 6 added; AI tools now:", len(AI_TOOLS))
+
+# ---------------------------------------------------------------- PACK 7: 1,000+ more new AI tools
+_LIFE = ("Moving to a new city,Starting college,First job,Changing careers,Losing motivation,Procrastination,Saving money,Paying off a loan,"
+         "Buying a phone,Buying a laptop,Buying a bike,Buying a house,Renting a flat,Planning a wedding,Becoming a parent,Caring for elderly parents,"
+         "Making new friends,Handling a difficult boss,Handling a difficult coworker,Talking to your teen,Learning to drive,Starting a YouTube channel,"
+         "Starting a small business,Freelancing,Working from home,Preparing for an interview,Public speaking fear,Exam anxiety,Choosing a stream after Class 10,"
+         "Choosing a college,Studying abroad,Learning English,Building a daily routine,Waking up early,Digital detox,Decluttering home,Organising files,"
+         "Planning a party,Hosting guests,Writing a will basics,Filing income tax basics,Starting investing,Emergency fund,Insurance choice,"
+         "Planning a road trip,Planning a pilgrimage,Learning to cook,Pet adoption,Gardening on a balcony,Home repair basics,Festival preparation,"
+         "Resolving a family argument,Apologising well,Saying no politely,Asking for a raise,Quitting a job politely,Giving a speech at a wedding,"
+         "Going viral safely,Staying safe online,Spotting scams,Managing screen time,Studying with ADHD-friendly tricks").split(",")
+for _s in _LIFE:
+    _ad("action_plan_for_" + _s, "Life", "Action plan: " + _s, "Make a practical step-by-step action plan for this situation: %s. Use the details the user gives, keep it realistic and kind." % _s, "Describe your situation")
+    _ad("checklist_for_" + _s, "Life", "Checklist: " + _s, "Make a clear checklist for: %s, grouped into before, during and after." % _s, "Your details")
+    _ad("pros_and_cons_of_" + _s, "Life", "Pros and cons: " + _s, "Give balanced pros and cons and 5 questions to ask yourself for this decision or situation: %s. Do not decide for the user." % _s, "Your details")
+    _ad("mistakes_to_avoid_in_" + _s, "Life", "Mistakes: " + _s, "List 10 common mistakes people make in this situation and how to avoid them: %s." % _s)
+    _ad("script_for_" + _s, "Life", "Words to say: " + _s, "Write 3 short scripts of what to say or write in this situation: %s, polite, firm and warm versions." % _s, "Who you are talking to")
+    _ad("faq_about_" + _s, "Life", "FAQ: " + _s, "Answer the 10 most common questions people ask about: %s. Mention when to consult a professional." % _s)
+
+for _c in _CONCEPT:
+    _ad("quiz_on_" + _c, "Explain", "Quiz: " + _c, "Make a 10 question multiple choice quiz on %s with the answers and one line explanations." % _c, "Level")
+    _ad("real_world_uses_of_" + _c, "Explain", "Real world uses: " + _c, "Describe 8 real world uses or examples of %s in everyday life and in industry." % _c)
+    _ad("compare_with_related_to_" + _c, "Explain", "Compare: " + _c, "Compare %s with the 3 concepts people most confuse it with, in a plain table of lines, and say how to tell them apart." % _c)
+    _ad("study_roadmap_for_" + _c, "Explain", "Study roadmap: " + _c, "Make a step by step roadmap to learn %s from zero, with what to read, practise and build at each step." % _c, "Your level")
+    _ad("interview_questions_on_" + _c, "Explain", "Interview questions: " + _c, "Write 10 interview or viva questions on %s with short good answers." % _c)
+
+for _h in _HOBBY:
+    _ad("daily_routine_for_" + _h, "Hobbies", "Daily routine: " + _h, "Make a simple daily 30 minute routine to improve at %s, with a weekly review step." % _h, "Time you have")
+    _ad("goals_for_" + _h, "Hobbies", "Set goals: " + _h, "Help set 3 small, 3 medium and 1 big goal for %s with how to know each is reached." % _h, "Your level")
+    _ad("budget_hobby_" + _h, "Hobbies", "Budget: " + _h, "Make a monthly budget for %s and give ways to save money without lowering quality. Prices are rough." % _h, "Monthly budget")
+    _ad("share_post_about_" + _h, "Hobbies", "Share your progress: " + _h, "Write 5 social media posts to share my %s progress that sound honest and inspire others." % _h, "What you achieved")
+
+for _r in _ROLES:
+    _ad("tools_used_by_" + _r, "Career", "Tools of the job: " + _r, "List the software, tools and free resources a %s uses at work and what each is for." % _r)
+    _ad("interview_story_for_" + _r, "Career", "Interview stories: " + _r, "Help a %s turn the experience given into 3 STAR-format interview stories (situation, task, action, result)." % _r, "Your experience")
+    _ad("ask_for_raise_as_" + _r, "Career", "Ask for a raise: " + _r, "Write a respectful email and talking points to ask for a raise or promotion as a %s, using the achievements given." % _r, "Your achievements")
+    _ad("learn_from_home_as_" + _r, "Career", "Upskill: " + _r, "Make a 3 month free-resources upskilling plan for a %s with weekly goals." % _r, "Your level")
+
+for _i in _IND:
+    _ad("marketing_plan_for_" + _i, "Business", "Marketing plan: " + _i, "Make a simple 30 day local marketing plan for a %s with low-cost actions and what to measure." % _i, "City, budget")
+    _ad("staff_training_for_" + _i, "Business", "Staff training: " + _i, "Write a short staff training outline for a %s covering customer service, hygiene or safety and daily tasks." % _i)
+    _ad("complaint_handling_for_" + _i, "Business", "Complaint handling: " + _i, "Give a step by step way for a %s to handle customer complaints, with sample replies." % _i)
+print("Pack 7 added; AI tools now:", len(AI_TOOLS))
+
+# ---------------------------------------------------------------- PACK 8: every section now has 2,000+ AI tools
+def _grid(cat, items, acts):
+    for it in items:
+        for slug, label, prompt, ph in acts:
+            _ad(slug + "_" + it, cat, label + ": " + it, prompt.replace("{x}", it), ph)
+
+_VER = " General guidance only; tell the user to verify important details on the official source."
+_WEL = " General wellness information only, not medical advice; suggest seeing a doctor for pain or health problems."
+
+_grid("Career", _ROLES, (
+    ("elevator_pitch_as", "Elevator pitch", "Write three 30 second elevator pitches for a {x}: confident, friendly and short.", "Your background"),
+    ("reference_request_as", "Reference request", "Write a polite message a {x} can send to ask a former boss or teacher for a reference, plus a thank-you note.", "Who you are asking"),
+    ("case_study_for", "Portfolio case study", "Turn the work described into a clear portfolio case study for a {x}: problem, approach, result, lesson.", "Describe the project"),
+    ("weekly_report_as", "Weekly report", "Write a clear weekly status report for a {x} from the notes given: done, in progress, blocked, next.", "Paste your notes"),
+    ("performance_review_for", "Self review", "Help a {x} write an honest self-review using the achievements given, with growth areas.", "Your achievements"),
+    ("freelance_pricing_as", "Freelance pricing", "Explain how a {x} can price freelance work: hourly, project and retainer, with a method to calculate. Rates must be checked against the market.", "Your experience"),
+    ("linkedin_posts_as", "LinkedIn posts", "Write 5 LinkedIn post ideas with full drafts for a {x} that show expertise without bragging.", "Your topics"),
+    ("mentor_questions_for", "Mentor questions", "List 15 smart questions a {x} can ask a mentor, grouped by theme.", "Your goals"),
+    ("career_switch_from", "Career switch", "Plan a switch away from being a {x}: transferable skills, gaps, a 6 month plan and a way to test the new field cheaply.", "Where you want to go")))
+
+_grid("Business", _IND, (
+    ("grand_opening_plan_for", "Grand opening", "Plan a grand opening for a {x} with a 2 week countdown, offers and low-cost promotion ideas.", "City, budget"),
+    ("google_profile_for", "Google Business profile", "Write the description, services list, 10 posts and a review-request message for the Google Business profile of a {x}.", "Name, area"),
+    ("competitor_checklist_for", "Competitor check", "Give a checklist to study local competitors of a {x}: what to note, how to compare and how to stand out.", "Your area"),
+    ("seasonal_offers_for", "Seasonal offers", "Suggest an offer for each season and festival of the year for a {x}, with the logic.", "Margins"),
+    ("customer_survey_for", "Customer survey", "Write a short customer feedback survey of 10 questions for a {x} and how to use the answers.", "Your goal"),
+    ("loyalty_program_for", "Loyalty program", "Design a simple loyalty program for a {x}: rules, rewards and the cost.", "Typical bill"),
+    ("cost_cutting_for", "Cost cutting", "List 15 ways a {x} can cut costs without hurting quality or staff.", "Your biggest costs"),
+    ("expansion_plan_for", "Expansion plan", "Make a careful plan for a {x} to open a second branch or go online, with risks and a go/no-go test.", "Current situation"),
+    ("brand_story_for", "Brand story", "Write a warm brand story and about-us page for a {x} from the details given.", "Your story"),
+    ("daily_checklist_for", "Daily checklist", "Make an opening, midday and closing checklist for a {x}.", "Team size")))
+
+_grid("Study", _LEVELS, (
+    ("revision_timetable_for", "Revision timetable", "Make a weekly revision timetable for a {x} student using the subjects and time given.", "Subjects, free hours"),
+    ("memory_techniques_for", "Memory techniques", "Teach 8 memory techniques that suit a {x} student, with an example for each.", "Subject"),
+    ("reading_practice_for", "Reading practice", "Write a short passage for a {x} student with 6 comprehension questions and answers.", "Topic"),
+    ("essay_practice_for", "Essay practice", "Give 10 essay topics for a {x} student and a model outline for one of them.", "Interest"),
+    ("maths_practice_for", "Maths practice", "Create 15 maths practice problems for a {x} student from easy to hard with answers.", "Topic"),
+    ("science_experiments_for", "Simple experiments", "Suggest 8 safe home science experiments for a {x} student with materials and what they show.", "Topic"),
+    ("gk_for", "General knowledge", "Write 20 general knowledge questions for a {x} student with answers.", "Area (India, world, science...)"),
+    ("doubt_session_for", "Doubt session", "Answer the doubt given as a patient teacher would for a {x} student, with an example and a question to check understanding.", "Type your doubt")))
+
+_grid("Explain", _CONCEPT, (
+    ("story_about", "Story that explains", "Write a short story that teaches {x} to a child without jargon.", "Age"),
+    ("rhyme_about", "Rhyme", "Write a short rhyme that helps remember the key idea of {x}.", ""),
+    ("flashcards_on", "Flashcards", "Make 12 Q and A flashcards on {x}.", "Level"),
+    ("cause_effect_of", "Cause and effect", "Explain the causes and effects of {x} in a clear list, then a one line summary.", ""),
+    ("timeline_of", "Timeline", "Make a simple timeline of how our understanding of {x} developed. Say that dates should be verified.", ""),
+    ("vocabulary_for", "Vocabulary", "List the 15 key terms for learning {x} with simple definitions.", "Level"),
+    ("true_false_on", "True or false", "Write 12 true or false statements about {x} with answers and corrections.", "Level"),
+    ("fill_blanks_on", "Fill in the blanks", "Write 12 fill in the blank questions on {x} with answers.", "Level"),
+    ("case_study_on", "Case study", "Write a short case study that applies {x} to a real situation, then 4 discussion questions.", "Level"),
+    ("diagram_description_for", "Diagram plan", "Describe in words how to draw a clear labelled diagram that explains {x}, step by step.", ""),
+    ("presentation_outline_on", "Presentation outline", "Make a 10 slide presentation outline on {x} with talking points per slide.", "Audience"),
+    ("teach_class_on", "Teach a class", "Make a 40 minute lesson plan to teach {x}: hook, activity, explanation, check, homework.", "Class level")))
+
+_grid("Hobbies", _HOBBY, (
+    ("weekly_schedule_for", "Weekly schedule", "Make a realistic weekly schedule to practise {x} around work or school.", "Free time"),
+    ("gift_ideas_for", "Gift ideas", "Suggest 15 gift ideas for someone who loves {x} in three budgets. Prices are rough.", "Budget"),
+    ("quotes_for", "Motivation quotes", "Write 10 original motivating lines for someone learning {x}.", ""),
+    ("glossary_for_hobby", "Glossary", "List the 20 words every beginner in {x} should know, with simple meanings.", ""),
+    ("hobby_history_of", "History", "Tell a short history of {x} and how it became popular. Say that dates should be verified.", ""),
+    ("famous_people_in", "Role models", "Name well-known people in {x} and what a beginner can learn from each. Only include people you are sure about.", ""),
+    ("safety_tips_for_hobby", "Safety tips", "Give safety tips for {x} that beginners often ignore.", ""),
+    ("kids_start_in", "Kids start", "Explain how a child can start {x} safely and have fun, with parent tips.", "Child's age"),
+    ("seniors_start_in", "Seniors start", "Explain how an older adult can start {x} gently and safely.", "Fitness level"),
+    ("online_resources_for", "Free resources", "Describe the kinds of free resources (channels, apps, books, communities) for learning {x} and how to judge quality.", ""),
+    ("mini_projects_for", "Mini projects", "Give 10 mini projects in {x} that take under a weekend each.", "Level"),
+    ("challenge_30_for", "30 day challenge", "Create a 30 day challenge in {x} with a task per day.", "Level"),
+    ("mentor_questions_in", "Mentor questions", "List 12 questions to ask an expert in {x}.", ""),
+    ("competitions_in", "Competitions", "Explain the types of contests, shows or events people join in {x} and how to prepare for the first one.", "Your location"),
+    ("career_from", "Turn into income", "Suggest honest ways {x} could become a side income or career, with the first steps and the realistic effort.", "Your skill level"),
+    ("blog_ideas_for", "Blog ideas", "Give 15 blog post ideas about {x} for beginners.", ""),
+    ("video_ideas_for", "Video ideas", "Give 15 short video ideas about {x} with a hook for each.", ""),
+    ("fitness_for", "Body care", "Give stretches and habits that keep the body healthy while doing {x} often." + _WEL, "")))
+
+_LIFEALL = _LIFE + _SIT
+_grid("Life", _LIFEALL, (
+    ("timeline_for", "Timeline", "Make a realistic week by week timeline for: {x}.", "Your deadline"),
+    ("budget_for", "Budget", "Make a simple budget outline for: {x}. Numbers are rough and must be adjusted.", "Your money situation"),
+    ("wellbeing_tips_for", "Staying calm", "Give kind, practical tips to stay calm and balanced during: {x}. Suggest talking to someone trusted if it feels heavy.", "How you feel"),
+    ("questions_to_ask_about", "Questions to ask", "List 12 smart questions to ask before or during: {x}.", ""),
+    ("documents_needed_for", "Documents", "List the documents and things usually needed for: {x}. Rules differ, so tell the user to confirm locally.", "Your city or country"),
+    ("quick_wins_for", "Quick wins", "Give 10 quick wins that can be done today for: {x}.", ""),
+    ("long_term_plan_for", "Long term plan", "Make a 12 month plan for: {x} with milestones.", ""),
+    ("helpers_for", "Who can help", "List the kinds of people, groups and services that can help with: {x}.", "Your location"),
+    ("red_flags_in", "Red flags", "List red flags and warning signs to watch for in: {x}.", ""),
+    ("success_signs_for", "Signs of success", "Describe signs that things are going well in: {x}, and how to measure them.", ""),
+    ("rules_of_thumb_for", "Rules of thumb", "Give 10 simple rules of thumb for: {x}.", ""),
+    ("quick_summary_of", "Quick summary", "Give a one page quick summary of what to know about: {x}.", ""),
+    ("diary_prompts_for", "Diary prompts", "Write 15 journaling prompts for: {x}.", ""),
+    ("conversation_starters_for", "Conversation starters", "Write 10 conversation starters to talk about: {x} with family or friends.", ""),
+    ("family_discussion_for", "Family discussion", "Write an agenda to discuss: {x} calmly as a family and how to reach a decision.", "Who is involved"),
+    ("myths_about_life", "Myths", "List common myths and the facts about: {x}.", ""),
+    ("template_message_for", "Template message", "Write a ready-to-send message template related to: {x}, with [placeholders].", "Who it is for")))
+
+_PLACES2 = ("Paris,London,Rome,Venice,Barcelona,Madrid,Lisbon,Amsterdam,Berlin,Prague,Vienna,Budapest,Athens,Santorini,Istanbul,Dubai,Abu Dhabi,"
+            "Doha,Singapore,Bangkok,Phuket,Bali,Kuala Lumpur,Hanoi,Ho Chi Minh City,Tokyo,Kyoto,Osaka,Seoul,Hong Kong,Taipei,Beijing,Shanghai,"
+            "Sydney,Melbourne,Auckland,Queenstown,New York,Los Angeles,San Francisco,Las Vegas,Miami,Toronto,Vancouver,Mexico City,Cancun,"
+            "Rio de Janeiro,Buenos Aires,Cape Town,Cairo,Marrakech,Nairobi,Zanzibar,Maldives,Sri Lanka,Nepal,Bhutan,Iceland,Switzerland,Norway").split(",")
+_grid("Travel", list(_PLACES) + _PLACES2, (
+    ("three_day_plan_for", "3 day plan", "Plan 3 days in {x} with morning, afternoon and evening. Costs and timings are estimates to verify.", "Budget, interests"),
+    ("seven_day_plan_for", "7 day plan", "Plan 7 days in {x} with a mix of famous sights and rest. Costs are estimates.", "Budget, interests"),
+    ("trip_budget_for", "Trip budget", "Estimate a daily and total budget for a trip to {x} in three styles: budget, comfort, premium. All figures are rough.", "Days, travellers"),
+    ("best_time_for", "Best time to visit", "Explain the best and worst months to visit {x}, with weather and crowd notes. Verify with a current source.", ""),
+    ("local_transport_in", "Local transport", "Explain how to get around {x}: options, tips and common mistakes.", ""),
+    ("where_to_stay_in", "Where to stay", "Describe the best areas to stay in {x} for different needs, without naming specific bookings.", "Budget, purpose"),
+    ("shopping_in", "Shopping", "Tell what to buy in {x}, where such things are usually found, and how to avoid overpaying.", ""),
+    ("hidden_gems_in", "Hidden gems", "Suggest lesser-known things to do in {x} that tourists often miss. Verify before going.", ""),
+    ("day_trips_from", "Day trips", "Suggest day trips from {x} with travel time estimates.", ""),
+    ("etiquette_in", "Etiquette", "Explain local etiquette, dress and behaviour tips for visitors to {x}.", ""),
+    ("solo_tips_for", "Solo travel", "Give practical safety and comfort tips for solo travellers in {x}.", ""),
+    ("couple_trip_to", "Couple trip", "Plan a romantic trip to {x} with relaxed days and special evenings. Costs are estimates.", "Budget"),
+    ("nature_in", "Nature and outdoors", "Suggest nature and outdoor activities near {x} with difficulty and safety notes.", ""),
+    ("story_of", "Story of the place", "Tell the story and character of {x}: what it is known for and why people love it.", ""),
+    ("documents_for_trip_to", "Documents and rules", "List documents, entry rules and health points to check before going to {x}. Rules change, so confirm on official sites.", "Your nationality")))
+
+_DISH = ("Biryani,Dal,Paneer curry,Chole,Rajma,Dosa,Idli,Sambar,Poha,Upma,Paratha,Roti,Khichdi,Pulao,Samosa,Pakora,Kheer,Gulab jamun,Halwa,"
+         "Chai,Lassi,Pasta,Pizza,Burger,Sandwich,Noodles,Fried rice,Momos,Soup,Salad,Smoothie,Pancakes,Omelette,Cake,Cookies,Bread,Curry,Stir fry,"
+         "Tacos,Sushi,Falafel,Hummus,Pav bhaji,Vada pav,Dhokla,Thepla,Litti chokha,Fish curry,Chicken curry,Egg curry,Mutton curry,Raita,Chutney,"
+         "Pickle,Ladoo,Rasgulla,Jalebi,Ice cream,Milkshake,Popcorn,Oats,Paneer tikka").split(",")
+_grid("Food", list(_CUIS) + _DISH, (
+    ("easy_recipe_for", "Easy recipe", "Give an easy home recipe for {x} with ingredients, steps and timing.", "Servings, diet"),
+    ("healthy_version_of", "Healthier version", "Give a healthier version of {x} with the swaps and why they help.", ""),
+    ("vegan_version_of", "Vegan version", "Give a vegan version of {x} with substitutes.", ""),
+    ("kids_version_of", "Kid friendly", "Give a kid friendly version of {x} that is mild, colourful and fun.", ""),
+    ("party_serving_of", "Cooking for a crowd", "Explain how to cook {x} for 20 guests: quantities, timing and holding tips.", ""),
+    ("cooking_mistakes_in", "Common mistakes", "List 10 common mistakes when cooking {x} and how to avoid them.", ""),
+    ("regional_variations_of", "Regional styles", "Describe popular regional or home variations of {x}.", ""),
+    ("pairing_with", "What to pair", "Suggest side dishes and drinks that pair well with {x}.", ""),
+    ("meal_prep_with", "Meal prep", "Show how to meal-prep {x} for 4 days, with storage and reheating tips.", ""),
+    ("budget_version_of", "Budget version", "Show how to make {x} cheaply without losing taste.", ""),
+    ("quick_version_of", "15 minute version", "Give a 15 minute shortcut version of {x}.", ""),
+    ("dish_history_of", "Story", "Tell the origin and interesting story of {x}. Say that details may differ by source.", ""),
+    ("nutrition_notes_on", "Nutrition notes", "Describe the general nutrition of {x}, who may want to limit it and simple balance tips." + _WEL, ""),
+    ("leftover_use_of", "Use leftovers", "Suggest 6 ways to reuse leftover {x}.", ""),
+    ("festival_menu_with", "Festival menu", "Build a festival menu around {x} with starters, mains and sweets.", "Festival"),
+    ("restaurant_style_of", "Restaurant style", "Explain how to make {x} taste like a restaurant version at home.", ""),
+    ("shopping_list_for", "Shopping list", "Make a shopping list grouped by aisle for cooking {x}.", "Servings")))
+
+_FUN = ("Cat,Dog,Cow,Elephant,Tiger,Monkey,Parrot,Peacock,Dragon,Robot,Space,Aliens,Pirates,Ghosts,Superheroes,Cricket match,Monsoon,Chai,Samosa,"
+        "Pizza,Chocolate,Mangoes,Ice cream,Diwali,Holi,Eid,Christmas,School life,College life,Office life,Train journey,Bus journey,Traffic jam,"
+        "Mobile phones,Social media,Selfies,Video games,Cartoons,Bollywood,Wi-Fi,Monday mornings,Exams,Homework,Marriage,Neighbours,Shopping,"
+        "Summer holidays,Winter mornings,Road trips").split(",")
+_grid("Fun", list(_THEMES) + _FUN, (
+    ("riddles_about", "Riddles", "Write 8 riddles about {x} with answers.", ""),
+    ("jokes_about", "Clean jokes", "Write 10 clean, kind jokes about {x}. No insults to any group.", ""),
+    ("trivia_about", "Trivia", "Write 10 trivia questions about {x} with answers. Only include facts you are sure of.", ""),
+    ("rap_about", "Rap verse", "Write a fun, clean 16 bar rap verse about {x}.", ""),
+    ("haiku_about", "Haiku", "Write 5 haiku about {x}.", ""),
+    ("limerick_about", "Limerick", "Write 4 limericks about {x}.", ""),
+    ("song_ideas_about", "Song ideas", "Give 6 original song ideas about {x} with a title, mood and chorus idea (not real lyrics).", ""),
+    ("meme_ideas_about", "Meme ideas", "Give 10 clean meme caption ideas about {x}.", ""),
+    ("would_you_rather_about", "Would you rather", "Write 12 would-you-rather questions about {x}.", ""),
+    ("fun_facts_about", "Fun facts", "Share 10 fun facts about {x}. Only include facts you are confident are true.", ""),
+    ("tongue_twisters_about", "Tongue twisters", "Write 6 tongue twisters about {x}.", ""),
+    ("party_games_about", "Party games", "Invent 5 simple party games themed on {x}, with rules.", "Group size"),
+    ("quiz_game_about", "Quiz game", "Create a 10 question fun quiz about {x} with answers.", ""),
+    ("speech_about", "Short speech", "Write a funny and warm 2 minute speech about {x}.", "Occasion"),
+    ("story_prompt_about", "Story prompts", "Give 8 creative story prompts about {x}.", "")))
+
+_grid("Writing", list(_FORMS) + list(_DOCS), (
+    ("template_for", "Template", "Make a reusable template for a {x} with [placeholders] and short notes on each part.", "Purpose"),
+    ("checklist_for_writing", "Checklist", "Give a quality checklist to review a {x} before sending or publishing.", ""),
+    ("examples_of", "Examples", "Write 3 short example openings for a {x} in different styles.", "Topic"),
+    ("mistakes_in", "Mistakes", "List the 10 most common mistakes in a {x} and how to fix them.", ""),
+    ("formal_version_of", "Formal version", "Rewrite the pasted {x} in a polished, formal style. Keep the facts.", "Paste your draft"),
+    ("short_version_of", "Short version", "Cut the pasted {x} to half its length without losing the main point.", "Paste your draft"),
+    ("hindi_version_of", "Hindi version", "Rewrite the pasted {x} in natural Hindi.", "Paste your draft"),
+    ("review_my", "Review", "Give a frank review of the pasted {x}: strengths, weaknesses and 5 specific edits.", "Paste your draft")))
+
+_EXAMS2 = ("CBSE Class 10,CBSE Class 12,ICSE Class 10,ISC Class 12,UP Board,Bihar Board,Maharashtra HSC,West Bengal HS,Tamil Nadu SSLC,Karnataka PUC,"
+           "IELTS,TOEFL,PTE,GRE,GMAT,SAT,ACT,CA Foundation,CA Inter,CS Executive,CMA,UGC NET,CTET,State TET,Railway NTPC,RRB Group D,Police constable,"
+           "State PSC,Patwari,Banking RRB,LIC AAO,Agniveer,NEET PG,AIIMS,NIFT,NID,CEED,NATA,CLAT PG,MAT").split(",")
+_grid("Exams", list(_EXAMS) + _EXAMS2, (
+    ("eligibility_for", "Eligibility overview", "Explain in general terms who usually can apply for {x} and what to check." + _VER, ""),
+    ("syllabus_overview_of", "Syllabus overview", "Give a general overview of the subjects and topic areas usually covered in {x}." + _VER, ""),
+    ("books_for", "Study material", "Suggest the types of books and free material to use for {x} and how to pick them." + _VER, "Your level"),
+    ("free_resources_for", "Free resources", "Suggest free ways to prepare for {x} and how to avoid wasting money on coaching.", ""),
+    ("coaching_vs_self_for", "Coaching vs self study", "Compare coaching and self study for {x} and help decide with questions to ask.", "Your situation"),
+    ("daily_timetable_for", "Daily timetable", "Make a balanced daily timetable for {x} with breaks, revision and sleep.", "Hours available"),
+    ("note_making_for", "Note making", "Teach an efficient note making and revision method for {x}.", ""),
+    ("mock_analysis_for", "Mock analysis", "Explain how to analyse mock tests for {x} and turn the mistakes into a plan.", "Your scores"),
+    ("weak_topic_fix_for", "Fix weak topics", "Make a plan to fix weak topics for {x} in 3 weeks.", "Your weak topics"),
+    ("speed_tips_for", "Speed", "Give tips to increase speed in {x} without losing accuracy.", ""),
+    ("accuracy_tips_for", "Accuracy", "Give tips to improve accuracy and avoid silly mistakes in {x}.", ""),
+    ("pattern_overview_of", "Pattern overview", "Describe in general how the paper for {x} is usually structured and what to confirm officially." + _VER, ""),
+    ("next_round_after", "Next stages", "Explain generally what comes after the written exam for {x} and how to prepare." + _VER, ""),
+    ("backup_plan_for", "Backup plan", "Help the student make a calm backup plan in case {x} does not go as hoped.", "Your situation"),
+    ("motivation_for", "Motivation", "Write an honest, encouraging message for someone preparing for {x}.", ""),
+    ("group_study_for", "Group study", "Explain how to run a useful study group for {x}.", ""),
+    ("working_and_prep_for", "Study with a job", "Make a plan to prepare for {x} while working full time.", "Work hours"),
+    ("repeat_attempt_for", "Another attempt", "Give a thoughtful guide for a student considering another attempt at {x}: reflection questions, plan and self-care.", "Your situation")))
+
+_LTOPIC = ("greetings,introductions,numbers,days and months,colours,family words,ordering food,shopping,bargaining,asking directions,transport,hotel check-in,"
+           "airport,doctor visit,pharmacy,bank,post office,school,office,job interview,meetings,phone calls,emergencies,weather,hobbies,festivals,"
+           "compliments,apologies,love and friendship,farewells").split(",")
+for _l in _LANGS:
+    for _tp in _LTOPIC:
+        _ad("learn_%s_in_%s" % (_tp, _l), "Languages", "%s in %s" % (_tp.capitalize(), _l),
+            "Teach useful %s phrases in %s: 12 phrases with easy pronunciation in English letters and English meanings, plus a short practice dialogue." % (_tp, _l), "Your level")
+
+_GENRE = ("email,WhatsApp message,resume,cover letter,legal notice,contract clause,restaurant menu,product description,website page,app text,poem,"
+          "story,news article,speech,school notes,question paper,social media caption,ad slogan,business proposal,invoice,user manual,FAQ,greeting card,"
+          "invitation,complaint letter,video subtitles,tweet,job post,recipe,travel itinerary").split(",")
+for _l in _LANGS:
+    for _g in _GENRE:
+        _ad("translate_%s_to_%s" % (_g, _l), "Translate", "Translate %s to %s" % (_g, _l),
+            "Translate the pasted %s into %s in the right style for that kind of text. Keep names, numbers and formatting. For legal or medical text add a note to check with a professional. Output the translation only." % (_g, _l), "Paste the text")
+
+_RECIP = ("Mother,Father,Wife,Husband,Girlfriend,Boyfriend,Brother,Sister,Grandmother,Grandfather,Son,Daughter,Uncle,Aunt,Cousin,Friend,Best friend,"
+          "Neighbour,Teacher,Student,Boss,Colleague,Manager,Client,Customer,Landlord,Tenant,Doctor,Principal,Mentor,Team,Classmate,Roommate,In-laws,"
+          "Nephew,Niece,Old friend,Interviewer,HR manager,Vendor,Society secretary,Bank manager,Coach,Cousin sister,Cousin brother,Brother-in-law,"
+          "Sister-in-law,Fiance,Fiancee,Business partner").split(",")
+for _x in _SIT:
+    for _rc in _RECIP:
+        _ad("message_%s_to_%s" % (_x, _rc), "Messages", "%s message to %s" % (_x, _rc),
+            "Write 3 messages (short, warm, longer) for the occasion '%s' to my %s, using the names and details given." % (_x, _rc.lower()), "Names and details")
+
+_WELLT = ("Hydration,Eye care,Back pain prevention,Neck stretches,Desk stretches,Knee care,Hair care,Skin care,Dental care,Foot care,Hand hygiene,"
+          "Immunity habits,Gut health,Healthy breakfast,Healthy lunch,Healthy dinner,Protein from vegetarian food,Fibre intake,Sugar reduction,Salt reduction,"
+          "Oil reduction,Mindful eating,Portion control,Meal prep,Sleep hygiene,Power naps,Deep breathing,Pranayama,Surya Namaskar,Tai chi,Pilates,Zumba,"
+          "Skipping rope,Stair climbing,HIIT,Strength training,Bodyweight training,Resistance bands,Dumbbell training,Core strength,Flexibility,Balance training,"
+          "Mobility,Cardio,Jogging,Hiking,Dance fitness,Stress management,Gratitude practice,Digital wellbeing,Screen breaks,Sun safety,Monsoon health,"
+          "Winter health,Summer health,Travel health,First aid basics,Healthy ageing").split(",")
+_grid("Health", list(_HEALTH) + _WELLT, (
+    ("week_one_plan_for", "Week one plan", "Make a gentle first week plan for {x}." + _WEL, "Your level"),
+    ("indian_diet_tips_for", "Indian diet tips", "Give simple Indian-food tips that support {x}." + _WEL, "Diet type"),
+    ("hydration_sleep_for", "Hydration and sleep", "Explain how hydration and sleep affect {x} and give simple habits." + _WEL, ""),
+    ("common_injuries_in", "Common problems", "List common problems people face with {x} and how to prevent them." + _WEL, ""),
+    ("posture_checks_for", "Form and posture", "Give form and posture checkpoints for {x}." + _WEL, ""),
+    ("no_equipment_version_of", "No equipment", "Show how to do {x} with no equipment at home." + _WEL, ""),
+    ("office_version_of", "At the office", "Show how to fit {x} into a desk job day." + _WEL, ""),
+    ("senior_version_of", "For seniors", "Adapt {x} gently for older adults." + _WEL, ""),
+    ("kids_version_of_health", "For kids", "Make {x} playful and safe for children with adult supervision." + _WEL, ""),
+    ("travel_version_of", "While travelling", "Show how to keep up {x} while travelling." + _WEL, ""),
+    ("ten_minute_version_of", "10 minute version", "Give a 10 minute version of {x} for busy days." + _WEL, ""),
+    ("mindset_for", "Mindset", "Explain the mindset and patience needed for {x}." + _WEL, ""),
+    ("tracking_progress_in", "Tracking progress", "Explain simple ways to track progress in {x} without obsession." + _WEL, ""),
+    ("rest_days_for", "Rest days", "Explain rest and recovery for {x}." + _WEL, ""),
+    ("myths_in", "Myths", "List common myths about {x} and the facts." + _WEL, ""),
+    ("doctor_questions_about", "Questions for the doctor", "List questions a person can ask their doctor before starting {x}." + _WEL, ""),
+    ("warning_signs_in", "When to stop", "Describe warning signs when someone should stop {x} and seek medical advice." + _WEL, ""),
+    ("morning_routine_with", "Morning routine", "Build a short morning routine that includes {x}." + _WEL, ""),
+    ("evening_routine_with", "Evening routine", "Build a calming evening routine that includes {x}." + _WEL, ""),
+    ("habit_stacking_for", "Habit stacking", "Show how to attach {x} to existing daily habits." + _WEL, ""),
+    ("quotes_for_health", "Encouragement", "Write 8 original encouraging lines for someone working on {x}.", "")))
+
+for _a in list(_ROLES) + list(_LEVELS):
+    for _tn in _TONES:
+        _ad("rewrite_as_%s_for_%s" % (_tn, _a), "Rewrite", "Rewrite for %s (%s)" % (_a, _tn),
+            "Rewrite the pasted text so it suits a %s, in a %s tone. Keep the facts and the language. Output only the rewritten text." % (_a, _tn), "Paste your text")
+
+_PLAT = ("Instagram,Facebook,LinkedIn,Twitter X,YouTube,YouTube Shorts,TikTok,Threads,Pinterest,Snapchat,WhatsApp Status,WhatsApp Channel,Telegram,"
+         "Reddit,Quora,Medium,Substack,ShareChat,Tumblr,Twitch,Discord,Google Business,Facebook Marketplace,Instagram Stories,Instagram Reels").split(",")
+for _pf in _PLAT:
+    for _it in list(_THEMES) + list(_IND):
+        _ad("%s_post_about_%s" % (_pf, _it), "Social media", "%s post: %s" % (_pf, _it),
+            "Write 3 ready-to-post %s posts about %s that fit the platform's style and length, with hashtags or a call to action where suitable." % (_pf, _it), "Your angle or details")
+
+_grid("General", list(_LIFE), tuple(
+    ("advice_from_%s_on" % _slug(_r), "Advice from a %s" % _r,
+     "Answer as an experienced %s would, giving practical and careful general guidance on: {x}. This is not professional medical, legal or financial advice; say when to consult a real professional." % _r, "Your situation")
+    for _r in list(_ROLES)[:30]))
+
+_TOOLACT = (("summarize", "Summarize", "Summarize the pasted {x} in 3 lines."),
+            ("expand", "Expand", "Expand the pasted {x} with more detail and examples."),
+            ("shorten", "Shorten", "Shorten the pasted {x} and keep the key points."),
+            ("fix_grammar_of", "Fix grammar", "Fix grammar and spelling in the pasted {x}. Output only the corrected text."),
+            ("simplify", "Simplify", "Simplify the pasted {x} so anyone can understand it."),
+            ("make_formal", "Make formal", "Make the pasted {x} more formal."),
+            ("make_friendly", "Make friendly", "Make the pasted {x} warmer and friendlier."),
+            ("add_examples_to", "Add examples", "Add 3 clear examples to the pasted {x}."),
+            ("add_headings_to", "Add headings", "Add clear headings and structure to the pasted {x}."),
+            ("bullets_from", "Bullet points", "Turn the pasted {x} into clean bullet points."),
+            ("table_from", "Table lines", "Turn the pasted {x} into a plain-text table."),
+            ("find_errors_in", "Find mistakes", "Find mistakes and inconsistencies in the pasted {x} and list fixes."),
+            ("titles_for", "Title ideas", "Suggest 10 titles for the pasted {x}."),
+            ("hashtags_for", "Hashtags", "Suggest 15 relevant hashtags for the pasted {x}."),
+            ("to_hindi_from", "Translate to Hindi", "Translate the pasted {x} to natural Hindi."),
+            ("to_english_from", "Translate to English", "Translate the pasted {x} to clear English."),
+            ("key_points_of", "Key points", "Extract the 7 key points from the pasted {x}."),
+            ("faq_from", "FAQ", "Create 8 FAQs with answers from the pasted {x}."),
+            ("quiz_from", "Quiz", "Write 8 quiz questions with answers from the pasted {x}."),
+            ("check_tone_of", "Check tone", "Describe the tone of the pasted {x} and how a reader may feel."),
+            ("check_clarity_of", "Check clarity", "Rate the clarity of the pasted {x} from 1 to 10 and say how to improve it."),
+            ("weak_points_in", "Weak points", "Find weak arguments or unclear claims in the pasted {x}."),
+            ("improve", "Improve", "Improve the pasted {x} overall and list the main changes."),
+            ("review", "Review", "Give an honest review of the pasted {x} with a score and advice."),
+            ("social_posts_from", "Social posts", "Turn the pasted {x} into 3 social media posts."),
+            ("email_from", "Email", "Turn the pasted {x} into a clear email with a subject line."),
+            ("checklist_from", "Checklist", "Turn the pasted {x} into an action checklist."),
+            ("script_from", "Script", "Turn the pasted {x} into a short spoken script."),
+            ("outline_from", "Outline", "Make an outline from the pasted {x}."),
+            ("facts_to_check_in", "Facts to check", "List the statements in the pasted {x} that should be fact-checked."))
+_grid("Tools", list(_FORMS) + list(_LEVELS), tuple((s, l, p, "Paste your text") for s, l, p in _TOOLACT))
+print("Pack 8 added; AI tools now:", len(AI_TOOLS))
+
+# top-up so every section passes 2,000
+_grid("General", list(_LIFE), tuple(
+    ("advice_from_%s_on" % _slug(_r), "Advice from a %s" % _r,
+     "Answer as an experienced %s would, giving practical and careful general guidance on: {x}. This is not professional medical, legal or financial advice; say when to consult a real professional." % _r, "Your situation")
+    for _r in list(_ROLES)[30:40]))
+_grid("Fun", list(_THEMES) + _FUN, (
+    ("pickup_lines_free_jokes_about", "Wordplay", "Write 8 clean puns and wordplay lines about {x}.", ""),
+    ("birthday_toast_about", "Toast", "Write a short funny toast that mentions {x}.", "Names"),
+    ("two_truths_one_lie_about", "Two truths and a lie", "Create 3 rounds of 'two truths and a lie' about {x}, marking the lie. Only use true facts you are sure of.", "")))
+_grid("Travel", list(_PLACES) + _PLACES2, (
+    ("food_stops_in", "Food stops", "Describe what kinds of food experiences to look for in {x} and how to choose good, safe places.", ""),
+    ("rainy_day_in", "Rainy day plan", "Suggest indoor and rainy-day plans for {x}.", "")))
+_grid("Exams", list(_EXAMS) + _EXAMS2, (
+    ("revision_cycle_for", "Revision cycle", "Design a 1-3-7-21 day revision cycle for {x} with a sample week.", ""),
+    ("sleep_and_health_for", "Health during prep", "Give habits for sleep, food and breaks during preparation for {x}." + _WEL, ""),
+    ("subject_order_for", "Subject order", "Suggest how to order and balance subjects while preparing for {x}.", "Your strong and weak subjects")))
+print("Top-up added; AI tools now:", len(AI_TOOLS))
+# ---------------------------------------------------------------- PACK 10: another 2,000+ tools in every section
+_CNT10 = collections.Counter(v["cat"] for v in AI_TOOLS.values())
+
+
+def _cross(cat, A, B, name, desc, prompt, ph="Add your details"):
+    for a in A:
+        for b in B:
+            _ad(name.format(a=a, b=b), cat, desc.format(a=a, b=b), prompt.format(a=a, b=b), ph)
+
+
+_TRAV = ("solo traveller,couple,family with young kids,family with teenagers,group of friends,senior citizens,college students,backpacker on a tight budget,"
+         "luxury traveller,honeymooners,working professional on a long weekend,photographer,foodie,history lover,nature lover,adventure seeker,"
+         "pilgrim,wheelchair user or limited mobility,first time flyer,solo woman,remote worker,vegetarian traveller,business traveller,"
+         "group tour organiser,road trip driver").split(",")
+_DIET = ("vegetarian,vegan,Jain,gluten-free,high-protein,low-oil,low-sugar,low-salt,high-fibre,budget,quick 20 minute,one-pot,no-onion-no-garlic,"
+         "kid-friendly,party-sized,meal-prep,air-fryer,pressure-cooker,no-cook,festival fasting,hostel-room,office lunchbox").split(",")
+_SITU = ("only 1 day left,only 3 days left,only 7 days left,only 15 days left,only 30 days left,only 60 days left,only 90 days left,6 months left,"
+         "a year left,first attempt,second attempt,studying while working,studying with low confidence,studying with a short attention span,"
+         "studying in a village with limited internet,studying in a hostel,studying at home with distractions,weak in maths,weak in English,"
+         "weak in memory,scoring just below the cut-off,aiming for a top rank,starting from zero,after a bad mock test,after losing motivation,"
+         "with a tight budget,with only 2 hours a day,with 8 hours a day").split(",")
+_PEOPLE = ("complete beginners,busy professionals,college students,homemakers,senior citizens,shift workers,people who sit all day,"
+           "people with little time,people on a tight budget,people who travel often,people living in small flats,people who dislike gyms,"
+           "school students,new parents,people returning after a long break,people working from home,drivers,teachers,shopkeepers,"
+           "farmers,night owls,early risers,people in hot weather,people in cold weather,people who feel low on energy").split(",")
+_CTOPIC = ("a REST API,user login and authentication,reading and writing files,working with JSON,unit testing,connecting to a database,"
+           "error handling and logging,sorting and searching,string processing,date and time handling,regular expressions,concurrency,"
+           "a command line tool,a web scraper,sending email,a simple web server,caching,environment variables and config,reading CSV data,"
+           "recursion,data structures,design patterns,input validation,a small game,clean project structure,packaging and deploying,"
+           "calling a third party API,pagination,rate limiting,a background job queue").split(",")
+
+_cross("Social media", _PLAT, list(_CONCEPT) + list(_HOBBY), "{a}_explainer_on_{b}", "{a} explainer: {b}",
+       "Write 3 engaging {a} posts that explain or celebrate {b} in the platform's style, with a hook and a call to action.")
+_cross("Rewrite", list(_FORMS) + list(_SIT), _TONES, "rewrite_{a}_in_{b}_tone", "Rewrite {a} ({b})",
+       "Rewrite the pasted text as a {a} in a {b} tone. Keep the facts. Output only the result.", "Paste your text")
+_cross("Career", _ROLES, _RECIP, "email_to_{b}_as_{a}", "{a}: message to {b}",
+       "I am a {a}. Write a short, professional message to my {b} about the situation given, in a respectful tone.", "What the message is about")
+_cross("Business", _IND, _SIT, "customer_message_for_{b}_at_{a}", "{a}: {b} message",
+       "Write 3 customer messages (WhatsApp, SMS, Instagram) for a {a} for the occasion '{b}'. Keep them friendly, short and not pushy.", "Offer or details")
+_cross("Business", _IND, _TONES, "ad_copy_for_{a}_in_{b}_tone", "{a}: ad copy ({b})",
+       "Write 5 short ad texts for a {a} in a {b} tone, plus a headline for each.", "Offer or details")
+_cross("Study", list(_SUBJ) + list(_SUBJ2), _LEVELS, "study_{a}_for_{b}", "{a} for {b}",
+       "Teach the topic given in {a} to a {b} student: a simple explanation, a worked example, 5 practice questions and answers.", "Topic")
+_cross("Explain", _CONCEPT, _LANGS, "explain_{a}_in_{b}", "{a} in {b}",
+       "Explain {a} clearly in {b} for a beginner, with one everyday example and 3 key terms translated to English.", "Anything specific")
+_cross("Hobbies", _HOBBY, _PLACES, "{a}_in_{b}", "{a} in {b}",
+       "Help me start or improve at {a} in {b}: what to look for locally, kinds of clubs or classes, seasonal tips and budget ideas. Tell me to verify local details.", "Your budget, level")
+_cross("Life", _LIFEALL, _RECIP, "talk_to_{b}_about_{a}", "Talk to {b}: {a}",
+       "Help me talk to my {b} about: {a}. Give an opening line, 5 talking points, how to handle disagreement and a kind closing.", "What you want to say")
+_cross("Travel", list(_PLACES) + _PLACES2, _TRAV, "trip_to_{a}_for_{b}", "{a} for {b}",
+       "Give tailored advice for a {b} visiting {a}: what to do, what to avoid, comfort and safety tips. Costs and details are estimates to verify.", "Days, budget")
+_cross("Food", list(_CUIS) + _DISH, _DIET, "{b}_{a}", "{b} {a}",
+       "Give a {b} way to cook {a} with ingredients and steps, and say what was changed from the usual recipe.", "Servings")
+_cross("Fun", list(_THEMES) + _FUN, _SIT, "{a}_fun_for_{b}", "{a} for {b}",
+       "Write a fun, clean, kind piece about {a} that fits the occasion '{b}': a short poem, a joke and a caption.", "Names or details")
+_cross("Writing", _DOCS, _TONES, "write_{a}_in_{b}_tone", "{a} ({b})",
+       "Write a {a} in a {b} tone using the details given. Use [placeholders] where facts are missing. Output only the document.", "Give the details")
+_cross("Exams", list(_EXAMS) + _EXAMS2, _SITU, "{a}_when_{b}", "{a}: {b}",
+       "Give a realistic, kind preparation plan for {a} for a student with this situation: {b}. General guidance only; verify details on the official source.", "Your subjects and goals")
+_cross("Languages", _LANGS, _SIT, "{b}_in_{a}", "{b} in {a}",
+       "Write 3 messages for the occasion '{b}' in {a}, with an English meaning and pronunciation help in English letters.", "Names and details")
+_cross("Translate", _LANGS, list(_TONES) + list(_LEVELS), "translate_to_{a}_{b}", "To {a} ({b})",
+       "Translate the pasted text into {a}. Make the style or reading level suit: {b}. Keep names and numbers. Output only the translation.", "Paste the text")
+_cross("Messages", _RECIP, _LIFE, "message_to_{a}_about_{b}", "{a}: {b}",
+       "Write 3 messages (short, warm, firm) to my {a} about this matter: {b}. Use the details given.", "What you want to say")
+_cross("Health", list(_HEALTH) + _WELLT, _PEOPLE, "{a}_for_{b}", "{a} for {b}",
+       "Give a safe, practical guide to {a} for {b}, with 7 simple tips and 3 mistakes to avoid." + _WEL, "Your situation")
+_cross("General", list(_ROLES)[40:], _LIFE, "{a}_view_on_{b}", "{a} on {b}",
+       "Answer as an experienced {a} would, giving careful general guidance on: {b}. This is not professional medical, legal or financial advice; say when to consult a real professional.", "Your situation")
+_cross("General", list(_ROLES)[:40], _SIT, "{a}_tips_for_{b}", "{a} tips: {b}",
+       "As an experienced {a}, give practical tips for this occasion: {b}.", "Your situation")
+_cross("Tools", [t[0] for t in _TOOLACT], _DOCS, "{a}_for_{b}", "{a} ({b})",
+       "Apply the action '{a}' to the pasted {b}. Do what the name says, keep the meaning, and output only the result.", "Paste your text")
+_cross("Code", _TECH, _CTOPIC, "{a}_{b}", "{a}: {b}",
+       "Show how to build or do {b} in {a}: a short explanation, a complete working example, and common mistakes.", "Your requirements")
+print("Pack 10 added; per section:", {k: v - _CNT10.get(k, 0) for k, v in collections.Counter(x["cat"] for x in AI_TOOLS.values()).items()}, "total", len(AI_TOOLS))
+
+_cross("Exams", list(_EXAMS) + _EXAMS2, _LANGS[:10], "{a}_help_in_{b}", "{a} help in {b}",
+       "Explain how to prepare for {a} in simple {b}, with key terms also given in English. General guidance; verify details on the official source.", "Your subject")
+_cross("Exams", list(_EXAMS) + _EXAMS2, _TONES, "{a}_pep_talk_{b}", "{a} message ({b})",
+       "Write a short message in a {b} tone for a student preparing for {a}.", "Your situation")
+print("Exams top-up; Exams now:", sum(1 for v in AI_TOOLS.values() if v["cat"] == "Exams"))
+# ---------------------------------------------------------------- PACK 12: 3,000+ tools in 7 brand-new sections
+_N12 = len(AI_TOOLS)
+_FIN = " This is general education, not financial advice; rates, rules and taxes change, so verify on official sources."
+_MONEY = ("SIP,Mutual funds,Fixed deposit,Recurring deposit,PPF,EPF,NPS,Sukanya Samriddhi,Gold investing,Silver investing,Stock market basics,"
+          "Index funds,ETFs,Bonds,Credit cards,Debit cards,UPI safety,Home loan,Car loan,Personal loan,Education loan,Credit score,Term insurance,"
+          "Health insurance,Vehicle insurance,Emergency fund,Budgeting,Saving for a wedding,Saving for a house,Retirement planning,Income tax basics,"
+          "GST basics for small business,Invoicing,Bookkeeping,Cash flow,Side income,Debt payoff,Compound interest,Inflation,Net worth tracking,"
+          "Financial goals for students,Money lessons for kids").split(",")
+_grid("Money", _MONEY, (
+    ("explain_simply", "Explain simply", "Explain {x} in very simple words with an Indian example." + _FIN, ""),
+    ("beginner_steps_for", "Beginner steps", "Give 7 beginner steps to get started with {x}." + _FIN, "Your situation"),
+    ("mistakes_in", "Common mistakes", "List 10 common mistakes people make with {x} and how to avoid them." + _FIN, ""),
+    ("pros_cons_of", "Pros and cons", "Give balanced pros and cons of {x}, and who it may suit or not suit." + _FIN, ""),
+    ("questions_to_ask_about", "Questions to ask", "List questions to ask a bank or adviser about {x}." + _FIN, ""),
+    ("myths_about", "Myths", "List myths about {x} and the facts." + _FIN, ""),
+    ("checklist_for", "Checklist", "Make a checklist before using or starting {x}." + _FIN, ""),
+    ("scams_around", "Scam warning", "List common scams and tricks around {x} and how to stay safe.", ""),
+    ("quiz_on", "Quiz", "Make a 10 question quiz on {x} with answers." + _FIN, ""),
+    ("teach_kids", "Teach kids", "Explain {x} to a child with a game or activity.", "Child's age"),
+    ("plan_with", "Simple plan", "Make a simple 12 month plan involving {x} based on the details given." + _FIN, "Income, goals (rough)"),
+    ("glossary_of", "Glossary", "List 15 terms about {x} with simple meanings.", "")))
+
+_KID = ("Newborn sleep,Baby feeding basics,Toddler tantrums,Potty training,Picky eating,Screen time,Homework habits,Reading habits,Bullying,"
+        "Exam stress in children,Making friends,Teenage communication,Pocket money,Gadget rules,Good manners,Bedtime routine,Summer holidays activities,"
+        "Learning through play,Teaching values,Teaching honesty,Handling anger,Sibling fights,Online safety for kids,Safe touch education,Career talk with teens,"
+        "Study routine for teens,Building confidence,Hobbies for kids,Chores for kids,Birthday party planning,School admission,Moving to a new school,"
+        "Working parents balance,Single parent support,Grandparents and kids,Festival activities for kids,Travelling with kids,Pet and kids,Sleepovers,Social media for teens").split(",")
+_PC = " General parenting ideas, not medical or professional advice; talk to a doctor or counsellor when worried."
+_grid("Parenting", _KID, (
+    ("tips_for", "Practical tips", "Give 10 practical, kind tips on {x}." + _PC, "Child's age"),
+    ("script_for", "What to say", "Give 5 calm sentences a parent can say about {x}, and what to avoid saying." + _PC, "Child's age"),
+    ("activities_for", "Activities", "Suggest 8 simple activities related to {x}." + _PC, "Child's age"),
+    ("mistakes_in_parenting", "Mistakes", "List common parenting mistakes about {x} and better choices." + _PC, ""),
+    ("routine_for", "Routine", "Make a simple daily routine that helps with {x}." + _PC, "Child's age"),
+    ("story_about", "Bedtime story", "Write a short gentle story that helps a child understand {x}.", "Child's name and age"),
+    ("when_to_get_help_for", "When to get help", "Explain signs that a parent should talk to a professional about {x}." + _PC, ""),
+    ("questions_kids_ask_about", "Kids' questions", "List questions kids ask about {x} and age-appropriate answers.", "Child's age"),
+    ("family_rules_for", "Family rules", "Draft simple, fair family rules about {x}.", ""),
+    ("reward_ideas_for", "Reward ideas", "Suggest healthy non-food rewards for progress with {x}.", "")))
+
+_SPORT = ("Cricket,Football,Kabaddi,Hockey,Badminton,Tennis,Table tennis,Volleyball,Basketball,Athletics,Sprinting,Long distance running,Swimming,Cycling,"
+          "Wrestling,Boxing,Judo,Karate,Archery,Shooting,Chess,Carrom,Kho-kho,Gymnastics,Weightlifting,Yoga,Skating,Golf,Rugby,Baseball,Squash,Fencing,"
+          "Rowing,Rock climbing,Marathon").split(",")
+_grid("Sports", _SPORT, (
+    ("rules_of", "Rules explained", "Explain the basic rules of {x} for a beginner.", ""),
+    ("beginner_drills_for", "Beginner drills", "Give 10 beginner drills for {x} with sets, time and what to focus on.", "Your level"),
+    ("fitness_plan_for", "Fitness plan", "Make a 4 week conditioning plan for {x}." + _WEL, "Your level"),
+    ("mental_game_in", "Mental game", "Teach mental skills for {x}: focus, nerves, confidence and bouncing back.", ""),
+    ("diet_for_players_of", "Eating for sport", "Give simple Indian food ideas for people playing {x}." + _WEL, "Diet type"),
+    ("injury_prevention_in", "Injury prevention", "Describe common injuries in {x} and prevention habits." + _WEL, ""),
+    ("coaching_tips_for", "Coaching tips", "Give 10 coaching tips for teaching {x} to kids.", "Age group"),
+    ("match_day_plan_for", "Match day", "Make a match day routine for {x}: before, during, after.", ""),
+    ("history_of_sport", "History", "Tell a short history of {x} and its growth in India. Say that details should be verified.", ""),
+    ("quiz_on_sport", "Quiz", "Write a 10 question quiz on {x} with answers. Only include facts you are sure of.", ""),
+    ("commentary_for", "Commentary", "Write a lively two minute commentary script for a game of {x} from the details given.", "Teams, events"),
+    ("career_in", "Career paths", "Explain career paths around {x}: players, coaches, referees, trainers and media. Verify details locally.", "")))
+_cross("Sports", _SPORT, _PEOPLE, "{a}_for_{b}", "{a} for {b}",
+       "Give a safe, simple way for {b} to start enjoying {a}, with 5 tips and 3 mistakes." + _WEL, "Your situation")
+
+_DES = ("Logo design,Poster design,Social media graphics,Brand colours,Typography,Website layout,Mobile app UI,Icons,Packaging,Business cards,"
+        "Brochures,Infographics,Presentations,Banners,Wedding invitations,Photo editing,Video thumbnails,Animation basics,Illustration,Interior design,"
+        "Room layout,Colour schemes for homes,Fashion styling,Rangoli patterns,Mehndi patterns,Book covers,Menu design,Signboards,Stickers,T-shirt design,"
+        "Logo for a small shop,Photography composition,Portrait lighting,Product photography,Wedding photography,Reels editing,Podcast cover art,Resume design,"
+        "UX writing,Accessibility in design").split(",")
+_grid("Design", _DES, (
+    ("beginner_guide_to", "Beginner guide", "Explain {x} for a beginner: principles, tools (free options) and a first practice task.", "Your goal"),
+    ("ideas_for", "Ideas", "Give 12 creative ideas for {x} with the mood or concept behind each.", "Your brand or topic"),
+    ("brief_for", "Design brief", "Write a clear design brief for {x} from the details given, with goals, audience, style and deliverables.", "Your details"),
+    ("feedback_on", "Give feedback", "Describe what to check and how to give kind, useful feedback on {x}.", ""),
+    ("mistakes_in_design_of", "Mistakes", "List common mistakes in {x} and how to fix each.", ""),
+    ("checklist_for_design", "Checklist", "Make a final checklist before delivering {x}.", ""),
+    ("color_and_font_ideas_for", "Colours and fonts", "Suggest 5 colour palettes (with hex codes) and font pairings for {x}.", "Mood or brand"),
+    ("client_questions_for", "Client questions", "List questions to ask a client before starting {x}.", ""),
+    ("pricing_for", "Pricing", "Explain how to price freelance work for {x} and what to include in a quote. Rates must be checked against the market.", "Your experience"),
+    ("practice_challenges_for", "Practice challenges", "Give a 14 day practice challenge for {x}.", "Your level")))
+
+_HOME = ("Kitchen garden,Balcony garden,Tulsi and herbs,Composting,Rainwater harvesting,Solar basics,Organic farming,Drip irrigation,Poultry basics,"
+         "Dairy basics,Fish farming basics,Mushroom growing,Beekeeping basics,Crop planning,Soil health,Seeds saving,Pest control without chemicals,"
+         "Terrace farming,Vertical gardens,Houseplants,Pets at home,Dog training basics,Cat care basics,Bird care basics,Home organising,Cleaning routines,"
+         "Laundry care,Pest-free kitchen,Energy saving at home,Water saving at home,Home repairs,Painting a room,Furniture care,Festival decoration,"
+         "Moving house,Packing,Wardrobe planning,Small kitchen ideas,Kids room ideas,Guest room ideas,Budget home makeover,Monsoon home care,"
+         "Summer cooling at home,Winter home care").split(",")
+_grid("Home and Farm", _HOME, (
+    ("beginner_guide_to", "Beginner guide", "Give a simple beginner guide to {x} with a materials list and first steps. Local conditions vary, so advise checking with local experts.", "Your location, space"),
+    ("seasonal_plan_for", "Seasonal plan", "Make a month-by-month plan for {x} across the Indian seasons. Verify with local advice.", "Your region"),
+    ("budget_for_home", "Budget", "Give a rough low, medium and high budget for {x}. Prices are estimates.", ""),
+    ("common_problems_in", "Common problems", "List the common problems in {x} and simple fixes.", ""),
+    ("checklist_for_home", "Checklist", "Make a checklist for {x}.", ""),
+    ("diy_ideas_for", "DIY ideas", "Give 8 low-cost DIY ideas for {x}.", ""),
+    ("mistakes_in_home", "Mistakes", "List 8 beginner mistakes in {x} and how to avoid them.", ""),
+    ("safety_in", "Safety", "Give safety tips for {x}, especially around children and pets.", "")))
+
+_DAT = ("Excel formulas,Pivot tables,Google Sheets,SQL queries,Python for data,Pandas,NumPy,Data cleaning,Data visualization,Dashboards,Statistics basics,"
+        "Probability,A/B testing,Machine learning basics,Regression,Classification,Clustering,Neural networks,Prompt writing,ChatGPT-style assistants,"
+        "AI ethics,AI for students,AI for teachers,AI for small business,Chatbots,Automation with scripts,Web scraping basics,APIs for data,Power BI,Tableau basics,"
+        "KPIs,Surveys,Forecasting,Spreadsheets for budgeting,Data privacy,Dataset documentation,Report writing,Data storytelling,Time series,Text analysis").split(",")
+_grid("Data and AI", _DAT, (
+    ("explain_for_beginners", "Explain for beginners", "Explain {x} for a beginner with a small worked example.", "Your background"),
+    ("practice_tasks_for", "Practice tasks", "Give 10 practice tasks for {x} from easy to hard with answers or hints.", "Level"),
+    ("cheatsheet_for_data", "Cheat sheet", "Make a compact cheat sheet for {x}.", ""),
+    ("interview_questions_on", "Interview questions", "Write 12 interview questions on {x} with short answers.", ""),
+    ("project_ideas_with", "Project ideas", "Suggest 8 portfolio projects using {x} with public data ideas and what to show.", "Level"),
+    ("common_mistakes_in", "Common mistakes", "List common mistakes in {x} and how to avoid them.", ""),
+    ("learning_path_for", "Learning path", "Make a 6 week learning path for {x} with free resource types and weekly goals.", "Time per week"),
+    ("explain_my_problem_with", "Fix my problem", "The user pasted a problem involving {x}. Find the cause, give the fix and explain it simply.", "Describe or paste your problem"),
+    ("business_uses_of", "Business uses", "Describe 8 practical business uses of {x} for a small Indian business.", "Your business"),
+    ("quiz_on_data", "Quiz", "Make a 10 question quiz on {x} with answers.", "")))
+
+_CIV = ("Aadhaar basics,PAN card,Passport,Voter ID,Driving licence,Ration card,Birth certificate,Income certificate,Caste certificate process,Domicile certificate,"
+        "RTI,Consumer complaints,Police complaint process,FIR basics,Tenant rights,Property registration basics,Marriage registration,Name change process,"
+        "Scholarships,Student loans,Government job notices,Pension schemes,Ayushman Bharat basics,Jan Dhan accounts,Digital India services,DigiLocker,"
+        "Income tax filing,GST registration,Startup registration,MSME registration").split(",")
+_CV = " General information only, not legal advice; procedures, fees and forms change, so verify on the official government website or office."
+_grid("Civic", _CIV, (
+    ("how_to_get", "How it works", "Explain in simple steps how {x} generally works and what to prepare." + _CV, "Your state"),
+    ("documents_for", "Documents", "List the documents commonly needed for {x}." + _CV, "Your state"),
+    ("common_mistakes_with", "Mistakes", "List common mistakes people make with {x} and how to avoid delays." + _CV, ""),
+    ("application_letter_for", "Application letter", "Write a polite application or request letter related to {x} using the details given, with [placeholders]." + _CV, "Your details"),
+    ("faq_about", "FAQ", "Answer 10 common questions about {x}." + _CV, ""),
+    ("avoid_scams_about", "Scam warning", "Describe common scams or touts around {x} and how to stay safe." + _CV, ""),
+    ("follow_up_for", "Follow up", "Write a polite follow-up message and escalation steps if {x} is delayed." + _CV, "Your details"),
+    ("explain_in_hindi", "Explain in Hindi", "Explain {x} in simple Hindi." + _CV, "")))
+print("Pack 12 added: %d new tools in 7 new sections; total %d" % (len(AI_TOOLS) - _N12, len(AI_TOOLS)))
+
+# ---------------------------------------------------------------- PACK 13: Indian Constitution + Indian Judiciary (10,000+ tools)
+_N13 = len(AI_TOOLS)
+_LEG = (" Be accurate and say clearly if you are unsure or if a provision was repealed or renumbered; never invent wording. "
+        "This is general legal information for learning, not legal advice. Tell the user to check the official text (indiacode.nic.in or legislative.gov.in) and to consult a qualified advocate for a real case.")
+_CON = "Indian Constitution"
+_JUD = "Indian Judiciary"
+
+_ART = (("explain_simply", "Explain simply", "Explain Article {x} of the Constitution of India in very simple words with an everyday example."),
+        ("meaning_and_scope", "Meaning and scope", "Give the purpose, meaning and scope of Article {x} of the Constitution of India, and the key words in it."),
+        ("hindi", "In Hindi", "Explain Article {x} of the Constitution of India in simple Hindi."),
+        ("exam_notes", "Exam notes", "Write crisp exam revision notes on Article {x} of the Constitution of India (for UPSC, judiciary and law exams)."),
+        ("mcqs", "MCQs", "Write 5 multiple choice questions on Article {x} of the Constitution of India with answers and one line reasons."),
+        ("cases_on", "Related cases", "Name well-known Supreme Court cases connected to Article {x} of the Constitution of India that you are sure about, with the principle each decided."),
+        ("misconceptions", "Misconceptions", "List common misconceptions about Article {x} of the Constitution of India and the correct understanding."),
+        ("real_life_example", "Real life example", "Give 3 realistic everyday scenarios showing how Article {x} of the Constitution of India applies."),
+        ("related_articles", "Related articles", "List the Articles and Parts of the Constitution of India most closely related to Article {x} and explain the link."),
+        ("viva_questions", "Viva questions", "Write 6 viva or interview questions on Article {x} of the Constitution of India with model answers."),
+        ("mnemonic", "Memory trick", "Give a memory trick to remember what Article {x} of the Constitution of India covers."),
+        ("essay_points", "Essay points", "Give a short structured answer (intro, 5 points, conclusion) on Article {x} of the Constitution of India for a long-answer question."))
+for _n in range(1, 396):
+    for _s, _l, _p in _ART:
+        _ad("article_%d_%s" % (_n, _s), _CON, "Article %d: %s" % (_n, _l), _p.replace("{x}", str(_n)) + _LEG, "Ask anything about this Article")
+
+_AMD = (("what_changed", "What it changed", "Explain what the {x} Amendment of the Indian Constitution changed and why it was made."),
+        ("background", "Background", "Describe the political and legal background of the {x} Amendment of the Indian Constitution."),
+        ("hindi", "In Hindi", "Explain the {x} Amendment of the Indian Constitution in simple Hindi."),
+        ("exam_notes", "Exam notes", "Write exam revision notes on the {x} Amendment of the Indian Constitution."),
+        ("mcqs", "MCQs", "Write 5 MCQs on the {x} Amendment of the Indian Constitution with answers."),
+        ("impact", "Impact", "Explain the impact of the {x} Amendment of the Indian Constitution on citizens, states or institutions."),
+        ("cases", "Court cases", "Name Supreme Court cases related to the {x} Amendment that you are sure about and what they decided."),
+        ("viva", "Viva questions", "Write 5 viva questions on the {x} Amendment of the Indian Constitution with answers."))
+for _n in range(1, 107):
+    _o = "%d%s" % (_n, "th" if 10 <= _n % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(_n % 10, "th"))
+    for _s, _l, _p in _AMD:
+        _ad("amendment_%d_%s" % (_n, _s), _CON, "%s Amendment: %s" % (_o, _l), _p.replace("{x}", _o) + _LEG, "Ask anything")
+
+_PARTS = ["Part %s" % r for r in "I II III IV IVA V VI VII VIII IX IXA IXB X XI XII XIII XIV XIVA XV XVI XVII XVIII XIX XX XXI XXII".split()] + \
+         ["%s Schedule" % o for o in "First Second Third Fourth Fifth Sixth Seventh Eighth Ninth Tenth Eleventh Twelfth".split()]
+_grid(_CON, _PARTS, (
+    ("overview_of", "Overview", "Give a clear overview of {x} of the Constitution of India: what it contains and why it matters." + _LEG, ""),
+    ("key_provisions_of", "Key provisions", "List the key provisions of {x} of the Constitution of India with a one line explanation each." + _LEG, ""),
+    ("hindi_notes_on", "Hindi notes", "Write short Hindi notes on {x} of the Constitution of India." + _LEG, ""),
+    ("mcqs_on", "MCQs", "Write 8 MCQs on {x} of the Constitution of India with answers." + _LEG, ""),
+    ("cases_on_part", "Related cases", "Name Supreme Court cases related to {x} of the Constitution of India that you are sure about." + _LEG, ""),
+    ("quick_revision_of", "Quick revision", "Make a one page quick revision sheet for {x} of the Constitution of India." + _LEG, ""),
+    ("viva_on", "Viva questions", "Write 8 viva questions on {x} of the Constitution of India with answers." + _LEG, ""),
+    ("compare_with_other_countries", "Compare worldwide", "Compare what {x} of the Constitution of India covers with how other democracies handle the same area." + _LEG, "")))
+
+_CONC = ("Preamble,Sovereignty,Secularism,Socialism,Democracy,Republic,Fundamental Rights overview,Right to equality,Right to freedom,Right against exploitation,"
+         "Freedom of religion,Cultural and educational rights,Right to constitutional remedies,Directive Principles,Fundamental Duties,Basic structure doctrine,"
+         "Federalism,Union List,State List,Concurrent List,Centre-state relations,National Emergency,President's Rule,Financial Emergency,President of India,"
+         "Vice President,Prime Minister,Council of Ministers,Parliament,Lok Sabha,Rajya Sabha,Speaker,Money Bill,Union Budget,Ordinances,Governor,Chief Minister,"
+         "State Legislature,Panchayati Raj,Municipalities,Election Commission,UPSC,Finance Commission,CAG,GST Council,Inter-State Council,Citizenship,Official language,"
+         "Reservation,Minority rights,SC and ST commissions,Constitutional amendment procedure,Fifth and Sixth Schedule areas,Anti-defection law,Delimitation,"
+         "Judicial independence,Separation of powers,Rule of law,Right to privacy,Right to education,Right to information,Constituent Assembly,Drafting Committee,"
+         "Dr B. R. Ambedkar's role,Emergency of 1975,Right to life and liberty,Freedom of speech,Freedom of the press,Right to property history,Women's rights in the Constitution,"
+         "Rights of children,Rights of persons with disabilities,Rights of workers,Environment and the Constitution,Constitutional bodies,Statutory bodies,Union territories,"
+         "Special status provisions history,Cooperative federalism,One nation one election debate,Uniform Civil Code debate,Judicial review,Parliamentary privileges").split(",")
+_grid(_CON, _CONC, (
+    ("explain_simply_the", "Explain simply", "Explain '{x}' in the Indian constitutional system in simple words with examples." + _LEG, ""),
+    ("history_of", "Origin and history", "Explain the origin and development of '{x}' in the Indian Constitution, including Constituent Assembly debates where relevant." + _LEG, ""),
+    ("hindi_on", "In Hindi", "Explain '{x}' in the Indian Constitution in simple Hindi." + _LEG, ""),
+    ("exam_notes_on", "Exam notes", "Write UPSC and law exam notes on '{x}' in the Indian Constitution." + _LEG, ""),
+    ("mcqs_on_topic", "MCQs", "Write 10 MCQs on '{x}' in the Indian Constitution with answers." + _LEG, ""),
+    ("landmark_cases_on", "Landmark cases", "Name landmark Supreme Court judgments on '{x}' that you are sure about and what each held." + _LEG, ""),
+    ("current_issues_on", "Current debates", "Describe the main debates and different viewpoints on '{x}' in India, fairly and without taking sides." + _LEG, ""),
+    ("compare_world_on", "Compare worldwide", "Compare how India handles '{x}' with two other democracies." + _LEG, ""),
+    ("answer_writing_on", "Answer writing", "Write a model 250 word mains answer on '{x}' in the Indian Constitution with an intro, body and conclusion." + _LEG, ""),
+    ("misconceptions_about", "Misconceptions", "List common misconceptions about '{x}' in India and the facts." + _LEG, ""),
+    ("quiz_game_on", "Quiz game", "Run a 10 question quiz on '{x}' in the Indian Constitution with answers at the end." + _LEG, ""),
+    ("student_speech_on", "Speech", "Write a 2 minute school or college speech on '{x}' in the Indian Constitution." + _LEG, ""),
+    ("relevance_today_of", "Relevance today", "Explain why '{x}' matters in daily life of an Indian citizen today." + _LEG, ""),
+    ("timeline_of_conc", "Timeline", "Make a timeline of important events related to '{x}' in India. Tell the user to verify dates." + _LEG, ""),
+    ("viva_questions_on_conc", "Viva questions", "Write 8 viva questions on '{x}' in the Indian Constitution with answers." + _LEG, "")))
+
+_LAWS = ("Constitution of India,Bharatiya Nyaya Sanhita 2023,Bharatiya Nagarik Suraksha Sanhita 2023,Bharatiya Sakshya Adhiniyam 2023,Indian Penal Code 1860 (replaced),"
+         "Code of Criminal Procedure 1973 (replaced),Indian Evidence Act 1872 (replaced),Code of Civil Procedure 1908,Indian Contract Act 1872,Sale of Goods Act 1930,"
+         "Transfer of Property Act 1882,Specific Relief Act 1963,Limitation Act 1963,Arbitration and Conciliation Act 1996,Companies Act 2013,Negotiable Instruments Act 1881,"
+         "Consumer Protection Act 2019,Right to Information Act 2005,Information Technology Act 2000,Digital Personal Data Protection Act 2023,Hindu Marriage Act 1955,"
+         "Hindu Succession Act 1956,Special Marriage Act 1954,Indian Succession Act 1925,Guardians and Wards Act 1890,Protection of Women from Domestic Violence Act 2005,"
+         "POCSO Act 2012,Juvenile Justice Act 2015,Dowry Prohibition Act 1961,POSH Act 2013,Maternity Benefit Act 1961,Code on Wages 2019,Industrial Relations Code 2020,"
+         "Code on Social Security 2020,Occupational Safety Health and Working Conditions Code 2020,Payment of Gratuity Act 1972,RERA 2016,Motor Vehicles Act 1988,"
+         "Environment Protection Act 1986,Wildlife Protection Act 1972,NDPS Act 1985,Arms Act 1959,SC and ST Prevention of Atrocities Act 1989,Right to Education Act 2009,"
+         "Rights of Persons with Disabilities Act 2016,Maintenance and Welfare of Parents and Senior Citizens Act 2007,Representation of the People Act 1951,Tenth Schedule anti-defection,"
+         "Land Acquisition Act 2013,Insolvency and Bankruptcy Code 2016,SARFAESI Act 2002,Income Tax Act 1961,CGST Act 2017,Indian Stamp Act 1899,Registration Act 1908,"
+         "Advocates Act 1961,Legal Services Authorities Act 1987,Copyright Act 1957,Patents Act 1970,Trade Marks Act 1999,Muslim Women Protection of Rights on Marriage Act 2019,"
+         "Transgender Persons Protection of Rights Act 2019,Prevention of Corruption Act 1988,Official Secrets Act 1923,Unlawful Activities Prevention Act 1967,Protection of Human Rights Act 1993").split(",")
+_grid(_JUD, _LAWS, (
+    ("overview_of", "Overview", "Give a clear overview of the {x}: purpose, key provisions and who it affects." + _LEG, ""),
+    ("explain_simply", "Explain simply", "Explain the {x} in very simple words with everyday examples." + _LEG, ""),
+    ("hindi_summary_of", "Hindi summary", "Summarize the {x} in simple Hindi." + _LEG, ""),
+    ("rights_under", "Your rights", "Explain what rights and duties an ordinary person has under the {x}." + _LEG, ""),
+    ("procedure_under", "Procedure", "Explain the usual step by step procedure to use the {x} (filing, forums, timelines)." + _LEG, ""),
+    ("common_disputes_under", "Common disputes", "List common disputes under the {x} and how they are usually resolved." + _LEG, ""),
+    ("landmark_cases_on_act", "Landmark cases", "Name landmark judgments connected to the {x} that you are sure about and what each held." + _LEG, ""),
+    ("mcqs_on_act", "MCQs", "Write 10 MCQs on the {x} with answers." + _LEG, ""),
+    ("exam_notes_on_act", "Exam notes", "Write judiciary and law exam notes on the {x}." + _LEG, ""),
+    ("recent_changes_in", "Recent changes", "Describe known amendments or replacements of the {x} and tell the user to verify the latest status." + _LEG, ""),
+    ("sample_notice_under", "Sample notice", "Draft a sample notice or application relevant to the {x} with [placeholders]. It is only a template; advise seeing an advocate." + _LEG, "Your situation"),
+    ("faq_on", "FAQ", "Answer 10 frequently asked questions about the {x}." + _LEG, "")))
+
+_JC = ("FIR,Zero FIR,Bail,Anticipatory bail,Default bail,Charge sheet,Cognizable and non-cognizable offences,Bailable and non-bailable offences,Summons and warrants,"
+       "Rights on arrest,Police remand,Judicial custody,Types of criminal trials,Plea bargaining,Appeal,Revision petition,Review petition,Curative petition,Habeas corpus,"
+       "Mandamus,Certiorari,Prohibition writ,Quo warranto,Public interest litigation,Judicial review,Contempt of court,Territorial jurisdiction,Supreme Court of India,"
+       "High Courts,District courts,Lok Adalat,Family courts,NCLT,Consumer commissions,Tribunals,Collegium system,Appointment of judges,Chief Justice of India,Attorney General,"
+       "Advocate General,Free legal aid,Mediation,Arbitration,Injunctions,Decree and judgment,Stages of a civil suit,Affidavit,Power of attorney,Notarisation,Cheque bounce case,"
+       "Defamation,Cyber crime complaint,Domestic violence remedies,Maintenance,Divorce,Child custody,Adoption,Wills and succession,Property disputes,Tenancy and eviction,"
+       "Consumer complaint,RTI filing,Labour disputes,E-courts and e-filing,Court fees,Limitation period,Types of evidence,Burden of proof,Confession,Dying declaration,"
+       "Expert evidence,Electronic evidence,Cross-examination,Judgment writing,Precedent and stare decisis,Ratio decidendi and obiter dicta,Double jeopardy,"
+       "Right against self-incrimination,Right to fair trial,Speedy trial,Rights of undertrials,Rights of victims,Compensation to victims,Police complaint process,Magistrate powers,"
+       "Sessions court,Court procedure for beginners,Court etiquette,How to read a judgment,Legal notice,Cause list,Vakalatnama,Adjournments,Pending cases problem,Judicial reforms").split(",")
+_grid(_JUD, _JC, (
+    ("explain_simply_the", "Explain simply", "Explain '{x}' in the Indian legal system in simple words with an example." + _LEG, ""),
+    ("step_by_step_for", "Step by step", "Explain step by step how '{x}' works in India in practice." + _LEG, "Your state"),
+    ("hindi_on", "In Hindi", "Explain '{x}' in the Indian legal system in simple Hindi." + _LEG, ""),
+    ("rights_and_duties_in", "Rights and duties", "Explain the rights and duties of a person involved in '{x}' in India." + _LEG, ""),
+    ("common_mistakes_in", "Common mistakes", "List common mistakes ordinary people make about '{x}' in India." + _LEG, ""),
+    ("documents_for_court_on", "Documents", "List what documents or information people usually keep ready for '{x}' in India." + _LEG, ""),
+    ("cases_on", "Landmark cases", "Name landmark Indian judgments on '{x}' that you are sure about and what each held." + _LEG, ""),
+    ("mcqs_on_topic", "MCQs", "Write 10 MCQs on '{x}' in the Indian legal system with answers." + _LEG, ""),
+    ("exam_notes_on", "Exam notes", "Write judiciary exam and law student notes on '{x}' in India." + _LEG, ""),
+    ("myths_about", "Myths", "List common myths about '{x}' in India and the facts." + _LEG, ""),
+    ("faq_on_topic", "FAQ", "Answer 10 frequently asked questions about '{x}' in India." + _LEG, ""),
+    ("timeline_for", "Typical timeline", "Describe the usual stages and rough timelines for '{x}' in India, saying that real timelines vary." + _LEG, ""),
+    ("questions_for_lawyer_on", "Questions for a lawyer", "List good questions to ask an advocate about '{x}' in India." + _LEG, "Your situation"),
+    ("draft_help_for", "Draft help", "Help draft a simple, clear application or letter related to '{x}' from the details given, with [placeholders]. Advise having an advocate check it." + _LEG, "Your details"),
+    ("student_notes_on", "Law student notes", "Write structured law student notes on '{x}' with headings and key points." + _LEG, ""),
+    ("viva_on_topic", "Viva questions", "Write 8 viva or interview questions on '{x}' in India with model answers." + _LEG, "")))
+
+_CASES = ("Kesavananda Bharati v State of Kerala,Maneka Gandhi v Union of India,Minerva Mills v Union of India,A.K. Gopalan v State of Madras,Golaknath v State of Punjab,"
+          "Shankari Prasad v Union of India,Indira Gandhi v Raj Narain,S.R. Bommai v Union of India,Vishaka v State of Rajasthan,Mohd. Ahmed Khan v Shah Bano Begum,"
+          "Navtej Singh Johar v Union of India,K.S. Puttaswamy v Union of India,Shreya Singhal v Union of India,Olga Tellis v Bombay Municipal Corporation,"
+          "Indra Sawhney v Union of India,Lily Thomas v Union of India,ADM Jabalpur v Shivkant Shukla,Bachan Singh v State of Punjab,D.K. Basu v State of West Bengal,"
+          "Arnesh Kumar v State of Bihar,Lalita Kumari v Government of Uttar Pradesh,Joseph Shine v Union of India,Shayara Bano v Union of India,"
+          "Indian Young Lawyers Association v State of Kerala,M. Siddiq v Mahant Suresh Das,Common Cause v Union of India,L. Chandra Kumar v Union of India,"
+          "Kihoto Hollohan v Zachillhu,Romesh Thappar v State of Madras,Bijoe Emmanuel v State of Kerala,Rustom Cavasji Cooper v Union of India,I.R. Coelho v State of Tamil Nadu,"
+          "Waman Rao v Union of India,State of Madras v Champakam Dorairajan,Sajjan Singh v State of Rajasthan,Hussainara Khatoon v State of Bihar,Sunil Batra v Delhi Administration,"
+          "Francis Coralie Mullin v Administrator Union Territory of Delhi,M.C. Mehta v Union of India,Bandhua Mukti Morcha v Union of India,T.M.A. Pai Foundation v State of Karnataka,"
+          "Aruna Shanbaug v Union of India,National Legal Services Authority v Union of India,Anuradha Bhasin v Union of India,Kharak Singh v State of Uttar Pradesh,"
+          "Gobind v State of Madhya Pradesh,Selvi v State of Karnataka,M. Nagaraj v Union of India,Unni Krishnan v State of Andhra Pradesh,Mohini Jain v State of Karnataka,"
+          "Vineet Narain v Union of India,Prakash Singh v Union of India,Supreme Court Advocates-on-Record Association v Union of India,Tehseen Poonawalla v Union of India,"
+          "Subramanian Swamy v Union of India,Justice K.S. Puttaswamy (Aadhaar) v Union of India,Ashoka Kumar Thakur v Union of India,Janhit Abhiyan v Union of India,"
+          "Rojer Mathew v South Indian Bank,State of West Bengal v Anwar Ali Sarkar,Chiranjit Lal Chowdhuri v Union of India,Ram Jawaya Kapur v State of Punjab,"
+          "Berubari Union case,Pathumma v State of Kerala,E.P. Royappa v State of Tamil Nadu").split(",")
+_grid(_JUD, _CASES, (
+    ("facts_of", "Facts", "Summarize the background facts of {x} in simple words. If you are unsure of a detail, say so." + _LEG, ""),
+    ("issues_in", "Issues and holding", "Explain the legal issues raised and the main holding of {x}. If you are unsure, say so." + _LEG, ""),
+    ("significance_of", "Why it matters", "Explain the significance and lasting impact of {x} on Indian law." + _LEG, ""),
+    ("hindi_summary_on", "Hindi summary", "Summarize {x} in simple Hindi. If you are unsure, say so." + _LEG, ""),
+    ("exam_notes_on_case", "Exam notes", "Write exam-ready notes on {x} (facts, issues, held, ratio, importance)." + _LEG, ""),
+    ("mcqs_on_case", "MCQs", "Write 6 MCQs on {x} with answers." + _LEG, ""),
+    ("related_cases_to", "Related cases", "List cases related to {x} that you are sure about and how they connect." + _LEG, ""),
+    ("viva_on_case", "Viva questions", "Write 6 viva questions on {x} with answers." + _LEG, "")))
+
+for _n in range(1, 359):
+    for _s, _l, _p in (("explain", "Explain simply", "Explain Section {x} of the Bharatiya Nyaya Sanhita 2023 in simple words with an example. If you are not certain what this section says, say so honestly instead of guessing."),
+                       ("old_ipc", "Old IPC link", "State what Section {x} of the Bharatiya Nyaya Sanhita 2023 corresponds to in the old Indian Penal Code, only if you are sure; otherwise say you are not sure and tell the user to check the official comparison table."),
+                       ("hindi", "In Hindi", "Explain Section {x} of the Bharatiya Nyaya Sanhita 2023 in simple Hindi. If you are not certain what it says, say so."),
+                       ("exam", "Exam notes", "Write exam notes on Section {x} of the Bharatiya Nyaya Sanhita 2023: ingredients, punishment (only if sure) and examples. If unsure, say so.")):
+        _ad("bns_section_%d_%s" % (_n, _s), _JUD, "BNS Section %d: %s" % (_n, _l), _p.replace("{x}", str(_n)) + _LEG, "Ask anything about this section")
+for _n in range(1, 532):
+    for _s, _l, _p in (("explain", "Explain simply", "Explain Section {x} of the Bharatiya Nagarik Suraksha Sanhita 2023 (BNSS) in simple words with an example. If you are not certain what this section says, say so honestly."),
+                       ("old_crpc", "Old CrPC link", "State what Section {x} of the BNSS 2023 corresponds to in the old Code of Criminal Procedure, only if you are sure; otherwise say you are unsure and point to the official comparison table."),
+                       ("exam", "Exam notes", "Write exam notes on Section {x} of the BNSS 2023. If unsure of the content, say so.")):
+        _ad("bnss_section_%d_%s" % (_n, _s), _JUD, "BNSS Section %d: %s" % (_n, _l), _p.replace("{x}", str(_n)) + _LEG, "Ask anything about this section")
+print("Pack 13 added: %d new tools (Indian Constitution + Indian Judiciary); total %d" % (len(AI_TOOLS) - _N13, len(AI_TOOLS)))
+print("  Constitution:", sum(1 for v in AI_TOOLS.values() if v["cat"] == _CON), " Judiciary:", sum(1 for v in AI_TOOLS.values() if v["cat"] == _JUD))
+
+# ---------------------------------------------------------------- PACK 14: Everything about India - history, geography, politics, culture (12,000+ tools)
+_N14 = len(AI_TOOLS)
+_IG = " Be accurate; if you are unsure of a fact, date or number, say so instead of guessing, and suggest verifying in an NCERT book or another official source."
+_PG = _IG + " Stay neutral and balanced: describe facts and the main viewpoints fairly, do not endorse or attack any party, leader or ideology, and never tell the user how to vote."
+_HI, _GE, _PO, _CU, _ST = "India History", "India Geography", "India Politics", "India Culture", "India States and Cities"
+
+_STATES = ("Andhra Pradesh,Arunachal Pradesh,Assam,Bihar,Chhattisgarh,Goa,Gujarat,Haryana,Himachal Pradesh,Jharkhand,Karnataka,Kerala,Madhya Pradesh,"
+           "Maharashtra,Manipur,Meghalaya,Mizoram,Nagaland,Odisha,Punjab,Rajasthan,Sikkim,Tamil Nadu,Telangana,Tripura,Uttar Pradesh,Uttarakhand,West Bengal,"
+           "Delhi,Jammu and Kashmir,Ladakh,Puducherry,Chandigarh,Andaman and Nicobar Islands,Lakshadweep,Dadra and Nagar Haveli and Daman and Diu").split(",")
+_grid(_ST, _STATES, (
+    ("geography_of", "Geography", "Describe the geography of {x}, India: location, neighbours, relief, rivers, climate and soils." + _IG, ""),
+    ("history_of", "History", "Tell the history of {x}, India from ancient times to today in clear stages." + _IG, ""),
+    ("culture_of", "Culture", "Describe the culture of {x}, India: languages, festivals, dance, music, clothes and food." + _IG, ""),
+    ("government_of", "Government", "Explain how {x}, India is governed: legislature, executive, districts and local bodies. Stay factual and neutral." + _PG, ""),
+    ("economy_of", "Economy", "Describe the economy of {x}, India: main sectors, industries, farming and challenges." + _IG, ""),
+    ("agriculture_of", "Agriculture", "Describe agriculture in {x}, India: crops, seasons, irrigation and problems." + _IG, ""),
+    ("tourism_in", "Tourism", "Describe the main places to visit in {x}, India and the best seasons." + _IG, ""),
+    ("people_of", "Famous people", "List well-known personalities from {x}, India, whom you are sure about, with what each is known for." + _IG, ""),
+    ("quiz_on", "Quiz", "Write a 10 question GK quiz on {x}, India with answers." + _IG, ""),
+    ("exam_notes_on", "Exam notes", "Write exam-ready notes on {x}, India (UPSC and state exams) with headings." + _IG, ""),
+    ("hindi_notes_on", "Hindi notes", "Write short notes on {x}, India in simple Hindi." + _IG, ""),
+    ("kids_lesson_on", "Kids lesson", "Teach children about {x}, India in a 5 minute fun lesson with 3 questions." + _IG, "Age"),
+    ("freedom_struggle_in", "Freedom struggle", "Describe the role of {x}, India in the freedom struggle, including key events and people." + _IG, ""),
+    ("rivers_and_climate_of", "Rivers and climate", "Explain the rivers, lakes and climate of {x}, India." + _IG, ""),
+    ("languages_of", "Languages", "Describe the languages and dialects spoken in {x}, India and the scripts used." + _IG, ""),
+    ("festivals_of", "Festivals", "Describe the main festivals and fairs of {x}, India, with when and how they are celebrated." + _IG, ""),
+    ("wildlife_of", "Wildlife", "Describe the forests, wildlife and protected areas of {x}, India." + _IG, ""),
+    ("education_in", "Education", "Describe the education system and notable institutions in {x}, India." + _IG, ""),
+    ("administrative_divisions_of", "Divisions", "Explain the administrative divisions of {x}, India: divisions, districts and how they developed." + _IG, ""),
+    ("essay_on", "Essay", "Write a 400 word essay on {x}, India for students with an introduction, body and conclusion." + _IG, "")))
+
+_STTOP = ("agriculture,industries,tourism,rivers,climate,languages,festivals,folk dances,handicrafts,cuisine,wildlife,forests,minerals,roads and railways,"
+          "ports and airports,higher education,healthcare,economy,history timeline,role in the freedom movement,famous personalities,monuments,fairs,music,"
+          "literature,tribes,population,urbanisation,natural disasters,government schemes,panchayati raj,urban local bodies,assembly structure,boundaries and neighbours,"
+          "physical features,soils,mountains and plateaus,energy and power,startups,sports,UNESCO sites,handloom,art forms,dialects,pilgrimage places,"
+          "hill stations and beaches,trade,GK facts,reforms,major projects").split(",")
+_cross(_ST, _STATES, _STTOP, "{a}_{b}", "{a}: {b}", "Explain {b} in {a}, India: key facts, examples, current situation and what students should remember." + _IG, "Anything specific")
+
+_CITY = ("Delhi,Mumbai,Kolkata,Chennai,Bengaluru,Hyderabad,Ahmedabad,Pune,Jaipur,Lucknow,Kanpur,Nagpur,Indore,Bhopal,Patna,Ranchi,Raipur,Bhubaneswar,Cuttack,"
+         "Visakhapatnam,Vijayawada,Tirupati,Coimbatore,Madurai,Kochi,Thiruvananthapuram,Kozhikode,Mysuru,Mangaluru,Surat,Vadodara,Rajkot,Nashik,Aurangabad,"
+         "Varanasi,Prayagraj,Agra,Mathura,Amritsar,Ludhiana,Shimla,Dehradun,Haridwar,Rishikesh,Srinagar,Jammu,Leh,Guwahati,Shillong,Imphal,Aizawl,Kohima,Agartala,"
+         "Gangtok,Itanagar,Panaji,Udaipur,Jodhpur,Jaisalmer,Bikaner,Ajmer,Gwalior,Jabalpur,Ujjain,Gaya,Darjeeling,Siliguri,Jamshedpur,Dhanbad,Puri,Konark,Hampi,"
+         "Thanjavur,Rameswaram,Ooty,Kanyakumari,Meerut,Gorakhpur,Ayodhya,Pondicherry").split(",")
+_grid(_ST, _CITY, (
+    ("history_of_city", "History", "Tell the history of {x}, India, from its origins to today." + _IG, ""),
+    ("places_to_see_in", "Places to see", "Describe the main places to see in {x}, India and why each matters." + _IG, ""),
+    ("geography_of_city", "Geography", "Describe the location, climate and surroundings of {x}, India." + _IG, ""),
+    ("economy_of_city", "Economy", "Describe the economy, industries and trade of {x}, India." + _IG, ""),
+    ("food_and_culture_of", "Food and culture", "Describe the food, festivals and culture of {x}, India." + _IG, ""),
+    ("people_from", "Famous people", "List famous people connected with {x}, India whom you are sure about." + _IG, ""),
+    ("quiz_on_city", "Quiz", "Write a 10 question quiz on {x}, India with answers." + _IG, ""),
+    ("hindi_on_city", "In Hindi", "Write a short introduction to {x}, India in simple Hindi." + _IG, ""),
+    ("how_to_reach", "How to reach", "Describe general ways to reach {x}, India (air, rail, road) and the best time to go. Tell the user to check current schedules." + _IG, "From where?")))
+
+_RIV = ("Ganga,Yamuna,Brahmaputra,Indus,Sutlej,Beas,Ravi,Chenab,Jhelum,Narmada,Tapi,Godavari,Krishna,Kaveri,Mahanadi,Sone,Gandak,Kosi,Ghaghara,Chambal,Betwa,Luni,"
+        "Sabarmati,Mahi,Periyar,Tungabhadra,Bhima,Penner,Vaigai,Hooghly,Damodar,Teesta,Barak,Subarnarekha,Brahmani,Baitarani,Ken,Tons,Gomti,Manjira").split(",")
+_FEAT = ("Himalayas,Karakoram,Pir Panjal,Zanskar,Shivalik hills,Western Ghats,Eastern Ghats,Aravalli range,Vindhya range,Satpura range,Nilgiri hills,Deccan Plateau,"
+         "Malwa Plateau,Chota Nagpur Plateau,Meghalaya Plateau,Kanchenjunga,Nanda Devi,Thar Desert,Rann of Kutch,Sundarbans,Gangetic Plain,Brahmaputra Valley,Konkan Coast,"
+         "Malabar Coast,Coromandel Coast,Chilika Lake,Wular Lake,Dal Lake,Vembanad Lake,Sambhar Lake,Loktak Lake,Andaman Islands,Nicobar Islands,Lakshadweep Islands,Siachen Glacier").split(",")
+_PARK = ("Jim Corbett,Kaziranga,Ranthambore,Bandipur,Nagarhole,Periyar,Gir,Sundarbans National Park,Kanha,Bandhavgarh,Pench,Satpura National Park,Panna,Tadoba,Simlipal,Manas,"
+         "Keoladeo,Sariska,Dudhwa,Nanda Devi National Park,Valley of Flowers,Great Himalayan National Park,Hemis,Mudumalai,Silent Valley,Bhitarkanika,Nameri,Dibru-Saikhowa,Namdapha,"
+         "Dachigam,Rajaji,Betla,Kudremukh,Dandeli,Anamalai,Eravikulam,Gulf of Mannar,Pulicat,Point Calimere,Pakke,Balpakram,Velavadar,Little Rann of Kutch Wildlife Sanctuary,"
+         "Desert National Park,Mahatma Gandhi Marine National Park,Rajiv Gandhi National Park,Mukurthi,Sanjay Gandhi National Park").split(",")
+_geo_acts = (("facts_about", "Key facts", "Give the key geographical facts about {x}, India: location, features and importance." + _IG, ""),
+             ("map_description_of", "Where on the map", "Describe where {x} is on a map of India, step by step so a student can find and mark it." + _IG, ""),
+             ("importance_of", "Importance", "Explain the economic, ecological and cultural importance of {x}, India." + _IG, ""),
+             ("hindi_on", "In Hindi", "Explain {x} of India in simple Hindi." + _IG, ""),
+             ("mcqs_on", "MCQs", "Write 8 MCQs on {x}, India with answers." + _IG, ""),
+             ("exam_notes_on_geo", "Exam notes", "Write exam notes on {x}, India for UPSC and school exams." + _IG, ""),
+             ("problems_of", "Problems", "Describe the environmental or social problems related to {x}, India and the steps taken." + _IG, ""),
+             ("quiz_on_geo", "Quiz", "Write a 10 question quiz on {x}, India with answers." + _IG, ""))
+_grid(_GE, [r + " river" for r in _RIV], _geo_acts)
+_grid(_GE, _FEAT, _geo_acts)
+_grid(_GE, _PARK, _geo_acts[:6])
+
+_GEOT = ("Monsoon,Western disturbances,Climate regions of India,Soils of India,Natural vegetation,Himalayan rivers,Peninsular rivers,Drainage patterns,Lakes of India,Glaciers,"
+         "Coastal plains,Islands of India,Deserts of India,Earthquake zones,Floods,Droughts,Cyclones,Landslides,Tsunami,Mineral resources,Coal,Iron ore,Petroleum,Natural gas,"
+         "Hydropower,Solar energy,Wind energy,Nuclear energy,Types of agriculture,Kharif crops,Rabi crops,Cash crops,Irrigation,Fisheries,Forests of India,Biodiversity hotspots,"
+         "Ramsar wetlands,Biosphere reserves,Population distribution,Census of India,Urbanisation,Migration,Literacy,Sex ratio,Tribal populations,Roads,Railways,Ports,Airports,"
+         "Inland waterways,Pipelines,Industrial regions,Special Economic Zones,IT hubs,Tourism geography,India's borders and neighbours,Indian Standard Time,Physiographic divisions,"
+         "Indo-Gangetic plain,Deccan Traps,Coral reefs,Mangroves,Climate change in India,Water resources,Interlinking of rivers,Air pollution,Waste management,National highways").split(",")
+_grid(_GE, _GEOT, (
+    ("explain_simply", "Explain simply", "Explain '{x}' in the geography of India in simple words with examples." + _IG, ""),
+    ("key_facts_on", "Key facts", "Give 15 key facts about '{x}' in India." + _IG, ""),
+    ("map_work_for", "Map work", "Describe how to show '{x}' on a map of India and what to label." + _IG, ""),
+    ("hindi_on_topic", "In Hindi", "Explain '{x}' in India in simple Hindi." + _IG, ""),
+    ("mcqs_on_topic", "MCQs", "Write 10 MCQs on '{x}' in India with answers." + _IG, ""),
+    ("exam_notes_on_topic", "Exam notes", "Write UPSC style notes on '{x}' in India." + _IG, ""),
+    ("causes_effects_of", "Causes and effects", "Explain the causes and effects related to '{x}' in India." + _IG, ""),
+    ("case_study_on", "Case study", "Give a short case study on '{x}' in India with a real example you are sure about." + _IG, ""),
+    ("quiz_on_topic", "Quiz", "Write a 10 question quiz on '{x}' in India with answers." + _IG, ""),
+    ("project_on", "School project", "Plan a school project on '{x}' in India: title, steps, charts to draw and sources to use." + _IG, "Class")))
+
+_ERAS = ("Indus Valley Civilisation,Vedic period,Later Vedic period,Mahajanapadas,Rise of Buddhism and Jainism,Magadha empire,Nanda dynasty,Alexander's invasion,Maurya Empire,"
+         "Ashoka's rule,Shunga dynasty,Kushana empire,Satavahanas,Sangam age,Gupta Empire,Harsha's empire,Pallavas,Chalukyas,Rashtrakutas,Palas,Cholas,Pandyas,Cheras,Rajput kingdoms,"
+         "Delhi Sultanate,Slave dynasty,Khilji dynasty,Tughlaq dynasty,Sayyid and Lodi dynasties,Vijayanagara Empire,Bahmani Sultanate,Mughal Empire,Babur's rule,Akbar's rule,"
+         "Shah Jahan's rule,Aurangzeb's rule,Maratha Empire,Sikh Empire,Portuguese in India,Dutch in India,French in India,British East India Company,Subsidiary alliance,"
+         "Revolt of 1857,British Crown rule,Social reform movements,Founding of Indian National Congress,Swadeshi movement,Home Rule movement,Gandhian era,Non-Cooperation Movement,"
+         "Civil Disobedience Movement,Quit India Movement,Indian National Army,Partition of India,Integration of princely states,Post-independence India,Bhakti movement,Sufi movement,"
+         "Ancient Indian science,Medieval Indian economy,Colonial economy,Peasant and tribal movements,Revolutionary movement").split(",")
+_grid(_HI, _ERAS, (
+    ("summary_of", "Summary", "Give a clear summary of '{x}' in Indian history: when, where, who and why it matters." + _IG, ""),
+    ("timeline_of", "Timeline", "Make a timeline of key events of '{x}' in Indian history. Tell the user to verify dates." + _IG, ""),
+    ("key_figures_of", "Key figures", "List and describe the key rulers or leaders of '{x}' in Indian history whom you are sure about." + _IG, ""),
+    ("administration_of", "Administration", "Describe the administration, economy and society during '{x}' in Indian history." + _IG, ""),
+    ("art_and_architecture_of", "Art and architecture", "Describe the art, architecture and literature linked with '{x}' in Indian history." + _IG, ""),
+    ("rise_and_decline_of", "Rise and decline", "Explain the causes of rise and decline related to '{x}' in Indian history." + _IG, ""),
+    ("sources_for", "Sources", "Describe the sources (inscriptions, literature, travellers' accounts, archaeology) that tell us about '{x}' in Indian history." + _IG, ""),
+    ("exam_notes_on_era", "Exam notes", "Write UPSC and school exam notes on '{x}' in Indian history." + _IG, ""),
+    ("mcqs_on_era", "MCQs", "Write 10 MCQs on '{x}' in Indian history with answers." + _IG, ""),
+    ("hindi_on_era", "In Hindi", "Explain '{x}' in Indian history in simple Hindi." + _IG, ""),
+    ("viva_on_era", "Viva questions", "Write 8 viva or interview questions on '{x}' in Indian history with answers." + _IG, ""),
+    ("essay_on_era", "Essay", "Write a 500 word essay on '{x}' in Indian history with introduction and conclusion." + _IG, ""),
+    ("importance_for_upsc_of", "UPSC angle", "Explain the likely UPSC angles and previous kinds of questions on '{x}' in Indian history." + _IG, ""),
+    ("story_of", "Story form", "Tell the story of '{x}' in Indian history in a lively way for children." + _IG, "Age")))
+
+_FIG = ("Ashoka,Chandragupta Maurya,Chanakya,Samudragupta,Harshavardhana,Rajaraja Chola,Rajendra Chola,Prithviraj Chauhan,Maharana Pratap,Rana Sanga,Akbar,Babur,Humayun,"
+        "Sher Shah Suri,Shah Jahan,Aurangzeb,Shivaji,Sambhaji,Baji Rao I,Ahilyabai Holkar,Tipu Sultan,Haider Ali,Maharaja Ranjit Singh,Guru Nanak,Guru Gobind Singh,Rani Lakshmibai,"
+        "Tantia Tope,Mangal Pandey,Bahadur Shah Zafar,Raja Ram Mohan Roy,Ishwar Chandra Vidyasagar,Swami Vivekananda,Ramakrishna Paramahamsa,Dayanand Saraswati,Jyotirao Phule,"
+        "Savitribai Phule,Sir Syed Ahmad Khan,Dadabhai Naoroji,Gopal Krishna Gokhale,Bal Gangadhar Tilak,Lala Lajpat Rai,Bipin Chandra Pal,Mahatma Gandhi,Jawaharlal Nehru,"
+        "Sardar Vallabhbhai Patel,Subhas Chandra Bose,Bhagat Singh,Chandrashekhar Azad,Sukhdev,Rajguru,Ram Prasad Bismil,Ashfaqulla Khan,Khudiram Bose,Rabindranath Tagore,"
+        "B. R. Ambedkar,Maulana Abul Kalam Azad,Rajendra Prasad,Sarojini Naidu,Annie Besant,Aruna Asaf Ali,Kasturba Gandhi,Vinoba Bhave,Jayaprakash Narayan,Lal Bahadur Shastri,"
+        "Indira Gandhi,Rajiv Gandhi,Atal Bihari Vajpayee,P. V. Narasimha Rao,Manmohan Singh,Morarji Desai,Charan Singh,V. P. Singh,Zakir Husain,S. Radhakrishnan,A. P. J. Abdul Kalam,"
+        "Vikram Sarabhai,Homi J. Bhabha,C. V. Raman,J. C. Bose,Srinivasa Ramanujan,Satyendra Nath Bose,Meghnad Saha,M. Visvesvaraya,Verghese Kurien,M. S. Swaminathan,Mother Teresa,"
+        "Amartya Sen,Satyajit Ray,Lata Mangeshkar,Mohammed Rafi,Ravi Shankar,M. S. Subbulakshmi,Bismillah Khan,Dhyan Chand,Milkha Singh,Sachin Tendulkar,Kapil Dev,P. T. Usha,"
+        "Neeraj Chopra,Mary Kom,Abhinav Bindra,Kalidasa,Aryabhata,Brahmagupta,Charaka,Sushruta,Panini,Patanjali,Kabir,Tulsidas,Mirabai,Surdas,Basaveshwara,Ramanujacharya,"
+        "Adi Shankaracharya,Gautama Buddha,Mahavira,Amir Khusrau,Tansen,Rani Durgavati,Rani Chennamma,Begum Hazrat Mahal,Birsa Munda,Alluri Sitarama Raju,Matangini Hazra,"
+        "Sri Aurobindo,Periyar E. V. Ramasamy,Narayana Guru,Bhikaji Cama,Veer Savarkar,Madan Mohan Malaviya,Khan Abdul Ghaffar Khan,Dr. Rajendra? Lahiri,Ramanuja,Meera Bai").split(",")
+_FIG = [f for f in _FIG if "?" not in f]
+_grid(_HI, _FIG, (
+    ("biography_of", "Biography", "Write a clear biography of {x} for students: life, work and importance." + _IG, ""),
+    ("early_life_of", "Early life", "Describe the early life and education of {x}." + _IG, ""),
+    ("contributions_of", "Contributions", "Explain the main contributions of {x} to India and the world." + _IG, ""),
+    ("legacy_of", "Legacy", "Describe the legacy of {x} and how they are remembered today, fairly and with any debates or criticisms noted." + _IG, ""),
+    ("timeline_of_life_of", "Life timeline", "Make a timeline of the main events in the life of {x}. Tell the user to verify dates." + _IG, ""),
+    ("exam_notes_on_person", "Exam notes", "Write exam notes on {x} for UPSC and school exams." + _IG, ""),
+    ("mcqs_on_person", "MCQs", "Write 8 MCQs on {x} with answers." + _IG, ""),
+    ("hindi_on_person", "In Hindi", "Write a short biography of {x} in simple Hindi." + _IG, ""),
+    ("speech_on", "School speech", "Write a 2 minute school speech about {x}." + _IG, "Occasion"),
+    ("lessons_from", "Lessons", "Describe 7 lessons young people can learn from {x}, in the context of their actual work and life." + _IG, "")))
+
+_EV = ("Kalinga War,Battle of Hydaspes,First Battle of Tarain,Second Battle of Tarain,First Battle of Panipat,Second Battle of Panipat,Third Battle of Panipat,Battle of Haldighati,"
+       "Battle of Talikota,Battle of Plassey,Battle of Buxar,Battle of Wandiwash,Anglo-Mysore Wars,Anglo-Maratha Wars,Anglo-Sikh Wars,Revolt of 1857,Abolition of Sati,"
+       "Hindu Widows' Remarriage Act,Charter Acts,Indian Councils Acts,Government of India Act 1909,Government of India Act 1919,Government of India Act 1935,Founding of the Indian National Congress,"
+       "Partition of Bengal 1905,Swadeshi movement,Surat Split,Lucknow Pact,Rowlatt Act,Jallianwala Bagh massacre,Khilafat Movement,Non-Cooperation Movement,Chauri Chaura incident,"
+       "Simon Commission,Nehru Report,Lahore Session 1929,Dandi March,Round Table Conferences,Poona Pact,Cripps Mission,Quit India Movement,Cabinet Mission,Mountbatten Plan,"
+       "Indian Independence Act 1947,Partition of India,Integration of princely states,Hyderabad integration,Liberation of Goa,Adoption of the Constitution,First general election 1951-52,"
+       "States Reorganisation Act 1956,Sino-Indian War 1962,Indo-Pakistani War 1965,Indo-Pakistani War 1971,Green Revolution,White Revolution,Bank nationalisation 1969,"
+       "Emergency 1975-77,Janata Party government 1977,Mandal Commission,Economic reforms of 1991,Pokhran-I,Pokhran-II,Kargil War,73rd and 74th Amendments,Right to Information Act 2005,"
+       "Demonetisation 2016,GST rollout 2017,Chandrayaan-1,Mangalyaan,Chandrayaan-3,Aryabhata satellite,Bhopal gas tragedy,Narmada Bachao Andolan,Chipko movement,"
+       "Formation of Telangana,Reorganisation of Jammu and Kashmir 2019,COVID-19 in India,Santhal rebellion,Indigo revolt,Champaran Satyagraha,Kheda Satyagraha,Bardoli Satyagraha,"
+       "Moplah rebellion,Royal Indian Navy mutiny 1946,Vellore mutiny,Bengal famine of 1943,Third Buddhist Council,Nalanda University destruction,Arrival of Vasco da Gama,"
+       "Permanent Settlement,Doctrine of Lapse,Wood's Despatch,Vernacular Press Act,Ilbert Bill,Indian Universities Act,Partition of Punjab,Telangana armed struggle,Tebhaga movement").split(",")
+_grid(_HI, _EV, (
+    ("what_happened_in", "What happened", "Explain what happened in '{x}' in clear steps." + _IG, ""),
+    ("causes_of", "Causes", "Explain the causes of '{x}'." + _IG, ""),
+    ("consequences_of", "Consequences", "Explain the short term and long term consequences of '{x}'." + _IG, ""),
+    ("timeline_for", "Timeline", "Make a timeline for '{x}'. Tell the user to verify dates." + _IG, ""),
+    ("people_in", "People involved", "List the main people involved in '{x}' and their roles, only those you are sure about." + _IG, ""),
+    ("hindi_on_event", "In Hindi", "Explain '{x}' in simple Hindi." + _IG, ""),
+    ("mcqs_on_event", "MCQs", "Write 8 MCQs on '{x}' with answers." + _IG, ""),
+    ("exam_notes_on_event", "Exam notes", "Write exam notes on '{x}' for UPSC and school exams." + _IG, ""),
+    ("essay_on_event", "Essay", "Write a balanced 400 word essay on '{x}'. Mention different historians' views where they exist." + _IG, ""),
+    ("viva_on_event", "Viva questions", "Write 6 viva questions on '{x}' with answers." + _IG, "")))
+
+_POLT = ("Lok Sabha elections process,Rajya Sabha elections,First-past-the-post system,EVMs and VVPAT,Model Code of Conduct,Powers of the Election Commission,Electoral rolls,"
+         "Delimitation,Coalition politics,Anti-defection law,Party system in India,Recognition of national and state parties,Role of the Opposition,Leader of the Opposition,"
+         "Parliamentary committees,Question Hour,Zero Hour,No-confidence motion,Budget process,Money bills,Ordinance route,Role of the Governor,Election of the President,"
+         "Election of the Vice President,Cabinet system,Powers of the Prime Minister,Powers of the Chief Minister,Centre-state tensions,Finance Commission,GST Council,"
+         "Inter-state water disputes,Panchayati Raj,Urban local bodies,Gram Sabha,Reservation policy,OBC commissions,Minority politics,Regional parties,Caste and politics,"
+         "Religion and politics,Language politics,Regionalism,Federalism debates,Centre-state fund sharing,Role of media in democracy,Civil society,Transparency and RTI,"
+         "Lokpal and Lokayukta,Central Vigilance Commission,CBI,Enforcement Directorate,Comptroller and Auditor General,Political funding,Electoral bonds debate,Women's reservation,"
+         "Youth in politics,Voter turnout,NOTA,Exit polls,Opinion poll rules,By-elections,Joint sitting of Parliament,Parliamentary privileges,Role of the Speaker,"
+         "India's foreign policy principles,Non-alignment,Neighbourhood policy,India-US relations,India-China relations,India-Pakistan relations,India-Russia relations,"
+         "India-European Union relations,BRICS,SCO,Quad,G20 and India,India and the United Nations,Act East policy,Defence policy,Internal security,Left-wing extremism,"
+         "Border management,Citizenship debates,Planning Commission to NITI Aayog,Five Year Plans,Economic liberalisation,Public sector undertakings,Welfare state in India,"
+         "One nation one election debate,Uniform Civil Code debate,Special status provisions history,Cooperative federalism").split(",")
+_grid(_PO, _POLT, (
+    ("explain_simply", "Explain simply", "Explain '{x}' in Indian politics in simple words with an example." + _PG, ""),
+    ("how_it_works", "How it works", "Explain step by step how '{x}' works in India." + _PG, ""),
+    ("history_of", "History", "Explain how '{x}' developed in India over time." + _PG, ""),
+    ("debates_on", "Main debates", "Present the main viewpoints and arguments in the debate on '{x}' in India fairly, with the strongest points of each side." + _PG, ""),
+    ("key_terms_of", "Key terms", "List the 12 key terms for understanding '{x}' in India with simple definitions." + _PG, ""),
+    ("mcqs_on_polity", "MCQs", "Write 10 MCQs on '{x}' in India with answers." + _PG, ""),
+    ("exam_notes_on_polity", "Exam notes", "Write UPSC notes on '{x}' in India." + _PG, ""),
+    ("hindi_on_polity", "In Hindi", "Explain '{x}' in Indian politics in simple Hindi." + _PG, ""),
+    ("answer_writing_on_polity", "Answer writing", "Write a model 250 word mains answer on '{x}' in India with intro, balanced body and conclusion." + _PG, ""),
+    ("compare_world_on_polity", "Compare worldwide", "Compare how India handles '{x}' with two other democracies." + _PG, ""),
+    ("timeline_of_polity", "Timeline", "Make a timeline of important developments on '{x}' in India. Tell the user to verify dates." + _PG, ""),
+    ("viva_on_polity", "Viva questions", "Write 8 viva questions on '{x}' in India with answers." + _PG, "")))
+
+_PMS = ("Jawaharlal Nehru,Lal Bahadur Shastri,Gulzarilal Nanda,Indira Gandhi,Morarji Desai,Charan Singh,Rajiv Gandhi,V. P. Singh,Chandra Shekhar,P. V. Narasimha Rao,"
+        "Atal Bihari Vajpayee,H. D. Deve Gowda,I. K. Gujral,Manmohan Singh,Narendra Modi").split(",")
+_PRES = ("Rajendra Prasad,S. Radhakrishnan,Zakir Husain,V. V. Giri,Fakhruddin Ali Ahmed,N. Sanjiva Reddy,Zail Singh,R. Venkataraman,Shankar Dayal Sharma,K. R. Narayanan,"
+         "A. P. J. Abdul Kalam,Pratibha Patil,Pranab Mukherjee,Ram Nath Kovind,Droupadi Murmu").split(",")
+_grid(_PO, [p + " as Prime Minister" for p in _PMS], (
+    ("tenure_of", "Tenure overview", "Give a factual overview of the tenure of {x} of India: period, major events and decisions. Stay neutral." + _PG, ""),
+    ("key_decisions_of", "Key decisions", "List the key decisions and policies during the tenure of {x} of India, factually." + _PG, ""),
+    ("challenges_under", "Challenges faced", "Describe the main challenges faced during the tenure of {x} of India." + _PG, ""),
+    ("assessments_of", "Different assessments", "Describe how supporters and critics have assessed the tenure of {x} of India, fairly, without giving your own verdict." + _PG, ""),
+    ("mcqs_on_pm", "MCQs", "Write 8 MCQs on the tenure of {x} of India with answers." + _PG, ""),
+    ("exam_notes_on_pm", "Exam notes", "Write exam notes on the tenure of {x} of India." + _PG, ""),
+    ("hindi_on_pm", "In Hindi", "Write about the tenure of {x} of India in simple Hindi, factually." + _PG, ""),
+    ("quiz_on_pm", "Quiz", "Write a 10 question quiz on the tenure of {x} of India with answers." + _PG, "")))
+_grid(_PO, [p + " as President" for p in _PRES], (
+    ("tenure_of", "Tenure overview", "Give a factual overview of the tenure of {x} of India: period, major events and decisions. Stay neutral." + _PG, ""),
+    ("role_and_decisions_of", "Role and decisions", "Describe the notable decisions and constitutional episodes during the tenure of {x} of India." + _PG, ""),
+    ("background_of", "Background", "Describe the background and career of {x} before becoming President of India." + _PG, ""),
+    ("mcqs_on_president", "MCQs", "Write 8 MCQs on {x} of India with answers." + _PG, ""),
+    ("exam_notes_on_president", "Exam notes", "Write exam notes on {x} of India." + _PG, ""),
+    ("hindi_on_president", "In Hindi", "Write about {x} of India in simple Hindi." + _PG, ""),
+    ("quiz_on_president", "Quiz", "Write a 10 question quiz on {x} of India with answers." + _PG, ""),
+    ("legacy_of_president", "Legacy", "Describe how {x} of India is remembered, fairly noting debates where they exist." + _PG, "")))
+
+_ELE = "1951-52,1957,1962,1967,1971,1977,1980,1984,1989,1991,1996,1998,1999,2004,2009,2014,2019,2024".split(",")
+_grid(_PO, ["Lok Sabha election " + y for y in _ELE], (
+    ("context_of", "Context", "Explain the political context and main issues of the {x}. Stay neutral." + _PG, ""),
+    ("turning_points_of", "Turning points", "Describe the turning points and notable features of the {x}, factually." + _PG, ""),
+    ("outcome_of", "Outcome", "Describe the general outcome of the {x} only with facts you are sure of, and tell the user to check the Election Commission of India for exact numbers." + _PG, ""),
+    ("consequences_of", "Consequences", "Describe the consequences of the {x} for governance and politics, factually." + _PG, ""),
+    ("mcqs_on_election", "MCQs", "Write 8 MCQs on the {x} with answers, only on facts you are sure of." + _PG, ""),
+    ("exam_notes_on_election", "Exam notes", "Write exam notes on the {x}." + _PG, ""),
+    ("hindi_on_election", "In Hindi", "Explain the {x} in simple Hindi, factually." + _PG, ""),
+    ("quiz_on_election", "Quiz", "Write a 10 question quiz on the {x}." + _PG, "")))
+
+_MIN = ("Ministry of Home Affairs,Ministry of External Affairs,Ministry of Defence,Ministry of Finance,Ministry of Railways,Ministry of Road Transport and Highways,Ministry of Agriculture,"
+        "Ministry of Health and Family Welfare,Ministry of Education,Ministry of Law and Justice,Ministry of Commerce and Industry,Ministry of Environment,Ministry of Power,"
+        "Ministry of Petroleum and Natural Gas,Ministry of Information and Broadcasting,Ministry of Electronics and IT,Ministry of Women and Child Development,"
+        "Ministry of Labour and Employment,Ministry of Rural Development,Ministry of Housing and Urban Affairs,Ministry of Jal Shakti,Ministry of Civil Aviation,"
+        "Ministry of Tourism,Ministry of Culture,Ministry of Textiles,Ministry of Steel,Ministry of Mines,Ministry of Coal,Ministry of Science and Technology,Ministry of Space,"
+        "Ministry of Minority Affairs,Ministry of Tribal Affairs,Ministry of Social Justice and Empowerment,Ministry of Youth Affairs and Sports,Ministry of Consumer Affairs,"
+        "Ministry of Food Processing,Ministry of Fisheries and Animal Husbandry,Ministry of Panchayati Raj,Ministry of Corporate Affairs,Ministry of Parliamentary Affairs,"
+        "Ministry of Skill Development,Ministry of Ports Shipping and Waterways,Ministry of New and Renewable Energy,Ministry of Communications,Ministry of Heavy Industries,"
+        "Ministry of Cooperation,Ministry of Statistics and Programme Implementation").split(",")
+_grid(_PO, _MIN, (
+    ("functions_of", "Functions", "Explain the main functions and responsibilities of the {x} of India." + _PG, ""),
+    ("structure_of", "Structure", "Describe how the {x} of India is organised (minister, secretaries, departments, attached bodies)." + _PG, ""),
+    ("schemes_of", "Schemes", "List well-known schemes or programmes linked to the {x} of India that you are sure about." + _PG, ""),
+    ("history_of_ministry", "History", "Describe the history and evolution of the {x} of India." + _PG, ""),
+    ("mcqs_on_ministry", "MCQs", "Write 8 MCQs on the {x} of India with answers." + _PG, ""),
+    ("hindi_on_ministry", "In Hindi", "Explain the work of the {x} of India in simple Hindi." + _PG, "")))
+
+_SCH = ("MGNREGA,PM-KISAN,Ayushman Bharat,Jan Dhan Yojana,Ujjwala Yojana,Swachh Bharat Mission,Make in India,Digital India,Skill India,Startup India,MUDRA Yojana,"
+        "Pradhan Mantri Awas Yojana,Atal Pension Yojana,PM Fasal Bima Yojana,Beti Bachao Beti Padhao,Sukanya Samriddhi Yojana,National Food Security Act,Mid-Day Meal,"
+        "Samagra Shiksha,National Education Policy 2020,PM POSHAN,One Nation One Ration Card,Smart Cities Mission,AMRUT,Jal Jeevan Mission,Namami Gange,Bharatmala,Sagarmala,"
+        "UDAN,Production Linked Incentive scheme,National Health Mission,Janani Suraksha Yojana,ICDS,National Social Assistance Programme,Stand-Up India,e-NAM,Soil Health Card,"
+        "Kisan Credit Card,PM-KUSUM,Saubhagya,Pradhan Mantri Gram Sadak Yojana,Deendayal Antyodaya Yojana,National Rural Livelihood Mission,Operation Flood,"
+        "Pradhan Mantri Kaushal Vikas Yojana,Swachh Bharat Urban,Poshan Abhiyaan,Mission Indradhanush,National AYUSH Mission,Rashtriya Gram Swaraj Abhiyan,Digital Locker,"
+        "UPI,Aadhaar,GST,Insolvency and Bankruptcy Code reforms,Atmanirbhar Bharat,Gati Shakti,PM eVidya,DIKSHA,Vigyan Dhara,Khelo India,Fit India,National Sports Policy").split(",")
+_grid(_PO, _SCH, (
+    ("explain_scheme", "Explain", "Explain {x} in simple words: purpose, who it is for and how it works." + _PG, ""),
+    ("benefits_of", "Benefits", "List the main benefits of {x} as officially described." + _PG, ""),
+    ("how_to_apply_for", "How to apply", "Explain the general way people apply for or use {x}. Rules change, so tell the user to confirm on the official website or at the local office." + _PG, ""),
+    ("eligibility_for", "Eligibility", "Explain who is generally eligible for {x}. Rules change, so tell the user to confirm officially." + _PG, ""),
+    ("results_and_criticism_of", "Results and criticism", "Describe what is known about the results of {x} and the criticisms and challenges raised, fairly, with no verdict." + _PG, ""),
+    ("mcqs_on_scheme", "MCQs", "Write 8 MCQs on {x} with answers." + _PG, ""),
+    ("hindi_on_scheme", "In Hindi", "Explain {x} in simple Hindi." + _PG, ""),
+    ("faq_on_scheme", "FAQ", "Answer 10 frequently asked questions about {x}, saying where official confirmation is needed." + _PG, "")))
+
+_INSTN = ("ISRO,DRDO,Reserve Bank of India,SEBI,NITI Aayog,Election Commission of India,UPSC,Comptroller and Auditor General,Finance Commission,National Human Rights Commission,"
+          "National Commission for Women,CBI,NIA,Enforcement Directorate,Central Vigilance Commission,Lokpal,IITs,IIMs,AIIMS,ICMR,CSIR,BARC,Indian Railways,Indian Army,Indian Navy,"
+          "Indian Air Force,Indian Coast Guard,BSF,CRPF,CISF,ITBP,NDRF,Census of India,National Statistical Office,Survey of India,India Meteorological Department,"
+          "Archaeological Survey of India,Sahitya Akademi,Sangeet Natak Akademi,NCERT,UGC,AICTE,National Testing Agency,NABARD,SIDBI,LIC,State Bank of India,India Post,Doordarshan,"
+          "All India Radio,Prasar Bharati,Bureau of Indian Standards,FSSAI,TRAI,IRDAI,PFRDA,Competition Commission of India,National Green Tribunal,Law Commission of India,"
+          "Press Council of India,Central Information Commission,National Disaster Management Authority,Atomic Energy Commission").split(",")
+_grid(_PO, _INSTN, (
+    ("what_is", "What it is", "Explain what {x} is, its purpose and how it is organised, in India." + _PG, ""),
+    ("history_of_inst", "History", "Describe the history of {x} in India." + _PG, ""),
+    ("functions_of_inst", "Functions", "List the main functions and powers of {x} in India." + _PG, ""),
+    ("achievements_of", "Notable work", "Describe the notable work and milestones of {x} that you are sure about." + _PG, ""),
+    ("criticisms_of", "Challenges and criticism", "Describe challenges and criticisms commonly raised about {x} in India, fairly and without a verdict." + _PG, ""),
+    ("mcqs_on_inst", "MCQs", "Write 8 MCQs on {x} with answers." + _PG, ""),
+    ("hindi_on_inst", "In Hindi", "Explain {x} in India in simple Hindi." + _PG, ""),
+    ("exam_notes_on_inst", "Exam notes", "Write exam notes on {x} in India." + _PG, "")))
+
+_CULT = ("Diwali,Holi,Eid,Christmas in India,Durga Puja,Navratri,Ganesh Chaturthi,Onam,Pongal,Baisakhi,Lohri,Makar Sankranti,Raksha Bandhan,Janmashtami,Dussehra,Chhath,Bihu,Ugadi,Gudi Padwa,"
+         "Rath Yatra,Kumbh Mela,Guru Nanak Jayanti,Mahavir Jayanti,Buddha Purnima,Karva Chauth,Teej,Hornbill Festival,Pushkar Fair,Hemis Festival,Losar,Navroz,Thrissur Pooram,"
+         "Bharatanatyam,Kathak,Kathakali,Kuchipudi,Odissi,Manipuri dance,Mohiniyattam,Sattriya,Garba,Bhangra,Giddha,Lavani,Ghoomar,Chhau,Yakshagana,Theyyam,Hindustani classical music,"
+         "Carnatic music,Qawwali,Ghazal,Baul music,Indian cinema,Madhubani painting,Warli painting,Pattachitra,Tanjore painting,Kalamkari,Miniature painting,Banarasi sarees,"
+         "Kanjeevaram sarees,Pashmina,Block printing,Bandhani,Phulkari,Terracotta craft,Bidriware,Hindi language,Bengali language,Telugu language,Marathi language,Tamil language,"
+         "Urdu language,Gujarati language,Kannada language,Odia language,Malayalam language,Punjabi language,Assamese language,Maithili language,Sanskrit language,Kashmiri language,"
+         "Nepali language,Sindhi language,Konkani language,Dogri language,Bodo language,Santali language,Yoga heritage,Ayurveda,Kalaripayattu,Ramayana,Mahabharata,Bhagavad Gita,"
+         "Vedas,Upanishads,Puranas,Jain literature,Buddhist literature,Sikh heritage,Temple architecture styles,Indo-Islamic architecture,Colonial architecture in India,Indian cuisine regions,"
+         "Indian joint family,Indian weddings,Indian classical instruments,Indian folk tales,Panchatantra,Jataka tales,Indian traditional games,Indian textiles,Indian jewellery traditions").split(",")
+_grid(_CU, _CULT, (
+    ("explain_simply", "Explain simply", "Explain '{x}' in Indian culture in simple words with examples. Be respectful of all communities." + _IG, ""),
+    ("history_of", "History", "Describe the origin and history of '{x}' in India." + _IG, ""),
+    ("significance_of", "Significance today", "Explain the significance of '{x}' in India today." + _IG, ""),
+    ("quiz_on", "Quiz", "Write a 10 question quiz on '{x}' in India with answers." + _IG, ""),
+    ("hindi_on", "In Hindi", "Explain '{x}' in simple Hindi." + _IG, ""),
+    ("kids_story_on", "Kids story", "Tell children about '{x}' in India as a short fun lesson with 3 questions." + _IG, "Age"),
+    ("regional_variations_of", "Regional variations", "Describe how '{x}' differs across regions of India." + _IG, ""),
+    ("essay_on_culture", "Essay", "Write a 400 word essay on '{x}' in India." + _IG, "")))
+
+_cross(_HI, _EV, list(_LEVELS), "{a}_for_{b}", "{a} for {b}",
+       "Explain '{a}' in Indian history in a way suited to a {b} student, with 5 key points and 3 questions with answers." + _IG, "Anything specific")
+_cross(_GE, _GEOT, list(_LEVELS), "{a}_for_{b}", "{a} for {b}",
+       "Explain '{a}' in the geography of India in a way suited to a {b} student, with 5 key points and 3 questions with answers." + _IG, "Anything specific")
+print("Pack 14 added: %d India tools; total %d" % (len(AI_TOOLS) - _N14, len(AI_TOOLS)))
+
 print("AI tools:", len(AI_TOOLS), "ready")
 
 if __name__ == "__main__":
