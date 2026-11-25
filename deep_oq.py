@@ -16861,7 +16861,35 @@ async function loadAdv(){
 }""", 1)
 print("Pack 15 added: %d advanced tools (built on demand: %d tasks x %d topics)" % (ADV_TOTAL, len(_ADV_TASKS), len(_ADV_DOMAINS)))
 print("AI tools:", len(AI_TOOLS), "ready")
+SITE_URL = os.environ.get("DEEP_OQ_URL", "https://deep-oq.onrender.com").rstrip("/")
 
+@app.get("/robots.txt")
+def robots_txt():
+    return Response("User-agent: *\nAllow: /welcome\nDisallow: /api/\nDisallow: /admin\n"
+                    "Sitemap: %s/sitemap.xml\n" % SITE_URL, mimetype="text/plain")
+
+@app.get("/sitemap.xml")
+def sitemap_xml():
+    xml = ('<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+           '<url><loc>%s/welcome</loc></url><url><loc>%s/about</loc></url></urlset>' % (SITE_URL, SITE_URL))
+    return Response(xml, mimetype="application/xml")
+
+@app.get("/welcome")
+def welcome_page():
+    html = ("<!doctype html><html lang='en'><head><meta charset='utf-8'>"
+            "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+            "<title>Deep OQ - Free AI Assistant for Chat, Code, Photos, Video and Study</title>"
+            "<meta name='description' content='Deep OQ is a free AI assistant: chat, write code, edit photos and video, "
+            "solve exam questions, translate, and use thousands of AI tools. Made by Mayank Kumar Saw.'>"
+            "<link rel='canonical' href='%s/welcome'>"
+            "<!-- PASTE GOOGLE VERIFICATION META TAG HERE -->"
+            "</head><body style='font:17px system-ui;max-width:720px;margin:40px auto;padding:0 16px;line-height:1.6'>"
+            "<h1>Deep OQ</h1><p>A free AI assistant for chat, code, photo and video editing, exam help, "
+            "translation and thousands of AI tools.</p>"
+            "<p><a href='/login'>Sign in or create a free account</a> &middot; <a href='/about'>About the creator</a></p>"
+            "</body></html>") % SITE_URL
+    return html, 200, {"Content-Type": "text/html; charset=utf-8"}
+  
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "ingest":
         ingest(sys.argv[2:])
