@@ -16949,6 +16949,476 @@ def _s(lite, pg, params=()):
 
 def _i(x):
     return int(_tbn(x))
+  # ==========================================================================
+# PACK 16: Deep OQ identity (modes, daily streak, share, compare, verify)
+# ==========================================================================
+_MODE_NOTES = {
+    "teacher": "Act as a patient teacher: explain simply, use one everyday example, then check understanding with one short question.",
+    "upsc": "Act as a UPSC mentor: structured answers with headings, dimensions (political, economic, social), examples and a way forward. Be neutral on political topics.",
+    "lawyer": "Act as an Indian law explainer. Give general legal information in plain words, cite Articles or Sections only if you are sure, and end with one line: this is not legal advice, consult an advocate.",
+    "doctor": "Act as a health information guide. Give general, careful information in plain words, never diagnose or prescribe doses, and end with one line: see a doctor for any real problem.",
+    "coder": "Act as a senior software engineer: give complete working code first, then a short explanation and edge cases.",
+    "friend": "Talk like a warm, friendly buddy in short casual messages, with light humour, while staying accurate and kind.",
+    "hinglish": "Reply in natural Hinglish (Hindi written in English letters, mixed with simple English), unless the user writes in another language.",
+}
+_MODE_BY_SESSION = {}
+
+
+@app.before_request
+def _mode_capture16():
+    if request.method == "POST" and request.path in ("/ask", "/ask_stream"):
+        d = request.get_json(silent=True) or {}
+        sess = (login_session.get("user") or "guest") + ":" + str(d.get("session") or "default")
+        m = str(d.get("mode", ""))[:20]
+        if len(_MODE_BY_SESSION) > 5000:
+            _MODE_BY_SESSION.clear()
+        _MODE_BY_SESSION[sess] = m if m in _MODE_NOTES else ""
+    return None
+
+
+_hist_base16 = kb_load_history
+
+
+def kb_load_history(session, n=12):
+    h = _hist_base16(session, n)
+    note = _MODE_NOTES.get(_MODE_BY_SESSION.get(session, ""))
+    if note:
+        h = [{"role": "user", "content": "[Style instruction for this chat] " + note},
+             {"role": "assistant", "content": "Understood. I will follow that style."}] + h
+    return h
+
+
+# ---- own DB helpers (unique names, so the pack loops can never overwrite them)
+def _q16(lite, pg, params=(), fetch=False):
+    if USE_PG:
+        return _pg(pg, params, "all" if fetch else None)
+    if fetch:
+        return DB.execute(lite, params).fetchall()
+    with DB:
+        DB.execute(lite, params)
+
+
+if USE_PG:
+    _pg("CREATE TABLE IF NOT EXISTS oq_streaks(username TEXT PRIMARY KEY, last_day TEXT, streak INTEGER NOT NULL DEFAULT 0, "
+        "best INTEGER NOT NULL DEFAULT 0, xp INTEGER NOT NULL DEFAULT 0)")
+else:
+    with DB:
+        DB.execute("CREATE TABLE IF NOT EXISTS streaks(username TEXT PRIMARY KEY, last_day TEXT, streak INTEGER NOT NULL DEFAULT 0, "
+                   "best INTEGER NOT NULL DEFAULT 0, xp INTEGER NOT NULL DEFAULT 0)")
+
+
+def _today16():
+    return (datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)).date()   # India date
+
+
+def _streak_get16(u):
+    r = _q16("SELECT last_day, streak, best, xp FROM streaks WHERE username=?",
+             "SELECT last_day, streak, best, xp FROM oq_streaks WHERE username=%s", (u,), True)
+    if not r:
+        return {"last": "", "streak": 0, "best": 0, "xp": 0}
+    last, st, best, xp = r[0]
+    try:
+        if (_today16() - datetime.date.fromisoformat(last or "")).days > 1:
+            st = 0   # missed a day: streak is broken
+    except Exception:
+        st = 0
+    return {"last": last or "", "streak": int(st or 0), "best": int(best or 0), "xp": int(xp or 0)}
+
+
+def _streak_claim16(u, score):
+    s = _streak_get16(u)
+    today = _today16().isoformat()
+    if s["last"] == today:
+        return dict(s, claimed=False, gained=0)
+    yday = (_today16() - datetime.timedelta(days=1)).isoformat()
+    st = s["streak"] + 1 if s["last"] == yday else 1
+    gained = 10 + 10 * score + min(st, 7) * 2
+    best, xp = max(s["best"], st), s["xp"] + gained
+    _q16("INSERT OR REPLACE INTO streaks(username,last_day,streak,best,xp) VALUES(?,?,?,?,?)",
+         "INSERT INTO oq_streaks(username,last_day,streak,best,xp) VALUES(%s,%s,%s,%s,%s) ON CONFLICT (username) DO UPDATE SET "
+         "last_day=EXCLUDED.last_day, streak=EXCLUDED.streak, best=EXCLUDED.best, xp=EXCLUDED.xp", (u, today, st, best, xp))
+    return {"last": today, "streak": st, "best": best, "xp": xp, "claimed": True, "gained": gained}
+
+
+_daily16 = {"day": "", "data": None}
+_daily_lock16 = threading.Lock()
+
+
+def _daily_content16():
+    day = _today16().isoformat()
+    with _daily_lock16:
+        if _daily16["day"] == day and _daily16["data"]:
+            return _daily16["data"]
+    news = []
+    try:
+        news = [{"title": i["title"], "source": i["source"]} for i in live_news("", "nation", 5)]
+    except Exception as e:
+        print("daily news failed:", e)
+    fact, quiz = "", []
+    try:
+        raw = chat([{"role": "user", "content":
+                     "Today is %s. Return ONLY JSON: {\"fact\": \"one true, interesting fact about India or science, max 30 words\", "
+                     "\"quiz\": [exactly 5 objects like {\"q\": \"question\", \"options\": [4 short strings], \"answer\": index 0 to 3, "
+                     "\"why\": \"one short line\"}]}. Mix Indian polity and Constitution, history, geography, science and general "
+                     "knowledge. Use only well-established facts that never change; no questions about recent news. Simple English."
+                     % _today16().strftime("%A %d %B %Y")}], 0.5, 2500)
+        j = _json_from(raw)
+        fact = str(j.get("fact", ""))[:240]
+        for x in j.get("quiz", []):
+            o = [str(v)[:90] for v in x.get("options", [])][:4]
+            a = int(x.get("answer"))
+            if len(o) == 4 and 0 <= a < 4 and x.get("q"):
+                quiz.append({"q": str(x["q"])[:220], "options": o, "answer": a, "why": str(x.get("why", ""))[:200]})
+    except Exception as e:
+        print("daily quiz failed:", str(e)[:150])
+    data = {"news": news, "fact": fact, "quiz": quiz[:5]}
+    if len(quiz) >= 3:   # never cache a failed attempt
+        with _daily_lock16:
+            _daily16.update(day=day, data=data)
+    return data
+
+
+@app.get("/api/daily")
+def api_daily16():
+    u = login_session.get("user") or "guest"
+    s = _streak_get16(u)
+    d = _daily_content16()
+    return jsonify(streak=s["streak"], best=s["best"], xp=s["xp"], level=s["xp"] // 100 + 1,
+                   done=(s["last"] == _today16().isoformat()), news=d["news"], fact=d["fact"], quiz=d["quiz"])
+
+
+@app.post("/api/daily/done")
+def api_daily_done16():
+    u = login_session.get("user") or "guest"
+    try:
+        score = max(0, min(5, int((request.get_json(silent=True) or {}).get("score", 0))))
+    except (TypeError, ValueError):
+        score = 0
+    r = _streak_claim16(u, score)
+    return jsonify(streak=r["streak"], best=r["best"], xp=r["xp"], level=r["xp"] // 100 + 1,
+                   claimed=r["claimed"], gained=r["gained"])
+
+
+@app.post("/api/compare")
+def api_compare16():
+    q = str((request.get_json(silent=True) or {}).get("q", "")).strip()[:3000]
+    if not q:
+        return jsonify(error="Type your question first."), 400
+    from concurrent.futures import ThreadPoolExecutor
+    sysm = SYSTEM + " Today's date is " + datetime.date.today().strftime("%A, %d %B %Y") + ". Keep the answer under 250 words."
+    base = [{"role": "system", "content": sysm}]
+
+    def one(msgs, temp, smart):
+        try:
+            return hide_keys(plain_math(collapse_repeats(chat(msgs, temp, 2500, smart=smart))))
+        except Exception as e:
+            return "Could not answer: " + hide_ai(str(e))[:120]
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        fa = ex.submit(one, base + [{"role": "user", "content": q}], 0.2, False)
+        fb = ex.submit(one, base + [{"role": "user", "content": q + "\n\nGive your own independent answer, thinking carefully."}], 0.7, True)
+        return jsonify(a=fa.result(), b=fb.result())
+
+
+@app.post("/api/verify")
+def api_verify16():
+    d = request.get_json(silent=True) or {}
+    q, a = str(d.get("q", ""))[:3000], str(d.get("a", ""))[:9000]
+    if not a.strip():
+        return jsonify(error="Nothing to check."), 400
+    try:
+        out = chat([{"role": "system", "content": "You are a strict, honest fact and logic checker. Never invent facts."},
+                    {"role": "user", "content": "QUESTION:\n" + q + "\n\nANSWER TO CHECK:\n" + a +
+                     "\n\nCheck every fact, number and step. Reply in this exact format. Line 1: CONFIDENCE: High or Medium or Low. "
+                     "Then 'Issues:' with short bullets, or 'None found'. Then, only if something is wrong, 'Corrected:' with the fix."}],
+                   0.1, 1800, smart=True, prefer=EXAM_CHECK_MODEL)
+    except Exception as e:
+        return jsonify(error=hide_ai(str(e))[:200] or "Could not check right now."), 500
+    m = re.match(r"\s*CONFIDENCE:\s*(High|Medium|Low)", out, re.I)
+    return jsonify(level=(m.group(1).capitalize() if m else "Medium"),
+                   text=hide_keys(plain_math(re.sub(r"^\s*CONFIDENCE:.*\n?", "", out, count=1, flags=re.I))))
+
+
+_OQ16_HTML = r"""
+<style>
+.oqorb{width:56px;height:56px;border-radius:50%;flex:none;background:radial-gradient(circle at 35% 30%,#ffe29a,#F2A02E 45%,#7C5CFF 100%);
+ box-shadow:0 0 36px rgba(242,160,46,.5),0 0 70px rgba(124,92,255,.35);animation:oqfloat 4s ease-in-out infinite}
+@keyframes oqfloat{50%{transform:translateY(-6px) scale(1.05)}}
+.hero{flex-wrap:wrap}
+.hero h1{background:linear-gradient(90deg,var(--ink),#F2A02E);-webkit-background-clip:text;background-clip:text;color:transparent}
+.oqsub{flex-basis:100%;text-align:center;color:var(--ink-2);font:500 17px var(--ui);transition:opacity .4s;margin-top:-6px}
+body:not(.chatting) .ideas{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;max-width:780px}
+.ideas button{border-radius:16px;padding:14px 16px;text-align:left;display:flex;gap:12px;align-items:center;width:100%;font:500 14px var(--ui)}
+.ideas button::before{content:attr(data-i);font-size:22px}
+@media(max-width:600px){body:not(.chatting) .ideas{grid-template-columns:1fr}}
+.oqmodes{display:flex;gap:6px;overflow-x:auto;margin:0 6px 8px;padding-bottom:2px;scrollbar-width:none}
+.oqmodes button{flex:none;border:1px solid var(--line);background:transparent;color:var(--ink-2);border-radius:99px;padding:5px 12px;font:600 12.5px var(--ui);cursor:pointer}
+.oqmodes button.on{background:var(--accent);color:var(--accent-ink);border-color:transparent}
+.oqmod{position:fixed;inset:0;z-index:99990;background:rgba(5,8,30,.72);display:flex;align-items:center;justify-content:center;padding:16px}
+.oqbox{position:relative;width:min(520px,100%);max-height:90vh;overflow:auto;background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:20px;padding:22px;font-family:var(--ui)}
+.oqbox.wide{width:min(980px,100%)}
+.oqbox h3{margin:0 0 8px;font-size:21px}
+.oqx{position:absolute;right:12px;top:8px;border:0;background:none;color:var(--ink);font-size:26px;cursor:pointer}
+.oqmuted{color:var(--ink-2);font-size:14px;margin:0 0 12px}
+.oqcmp{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media(max-width:700px){.oqcmp{grid-template-columns:1fr}}
+.oqcol{border:1px solid var(--line);border-radius:14px;padding:12px;min-width:0}
+.oqcol .body{font-size:15px;line-height:1.55}
+.oqvote{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px;align-items:center}
+.oqbtn{font:600 14px var(--ui);padding:9px 16px;border-radius:99px;border:1px solid var(--line);background:transparent;color:var(--ink);cursor:pointer}
+.oqbtn.pri{background:var(--accent);color:var(--accent-ink);border-color:transparent}
+.oqverify{margin:8px 0 12px;padding:10px 14px;border:1px solid var(--line);border-radius:12px;font:14px/1.5 var(--ui)}
+.oqbadge{display:inline-block;padding:2px 10px;border-radius:99px;font-weight:700;font-size:12px;margin-bottom:6px;color:#04122b}
+.oqbadge.High{background:#33e6a1}.oqbadge.Medium{background:#F2A02E}.oqbadge.Low{background:#ff7a90}
+.oqstats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:8px 0}
+.oqstats div{border:1px solid var(--line);border-radius:14px;padding:10px;text-align:center}
+.oqstats b{display:block;font-size:20px}.oqstats small{color:var(--ink-2)}
+.oqbar{height:8px;border-radius:6px;background:var(--line);overflow:hidden;margin:6px 0 14px}
+.oqbar i{display:block;height:100%;background:linear-gradient(90deg,#33E6A1,#F2A02E)}
+.oqcard{border:1px solid var(--line);border-radius:14px;padding:12px 14px;margin:10px 0;font-size:14.5px;line-height:1.5}
+.oqcard ul{margin:6px 0 0;padding-left:18px}
+.oqqt{font-size:17px;font-weight:600;margin:6px 0 10px}
+.oqopt{display:block;width:100%;text-align:left;margin:6px 0;padding:11px 14px;border-radius:12px;border:1px solid var(--line);background:transparent;color:var(--ink);font:500 15px var(--ui);cursor:pointer}
+.oqopt.ok{background:#1f7a3a;border-color:#33e6a1;color:#fff}.oqopt.bad{background:#8a2a3a;border-color:#ff7a90;color:#fff}
+.oqwhy{color:var(--ink-2);font-size:14px;margin:8px 0;min-height:18px}
+header.top #dailyBtn{order:4;justify-content:center;width:100%;border-radius:10px;padding:6px 8px;font-size:13px}
+.oqc{position:fixed;top:-20px;width:10px;height:14px;z-index:99999;animation:oqfall 1.8s ease-in forwards}
+@keyframes oqfall{to{transform:translateY(105vh) rotate(540deg);opacity:.2}}
+@media(prefers-reduced-motion:reduce){.oqorb,.oqc{animation:none}}
+</style>
+<script>
+(function(){
+const Q=s=>document.querySelector(s);
+const E=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const LS={get:k=>{try{return localStorage.getItem(k)}catch(e){return null}},set:(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}}};
+async function call(u,b){
+  const o=b===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)};
+  const r=await fetch(u,o),j=await r.json().catch(()=>({}));
+  if(!r.ok||j.error)throw new Error(j.error||'Something went wrong. Try again.');
+  return j;
+}
+function modal(html,wide){
+  const o=document.createElement('div');o.className='oqmod';
+  o.innerHTML='<div class="oqbox'+(wide?' wide':'')+'" role="dialog"><button type="button" class="oqx" aria-label="Close">×</button>'+html+'</div>';
+  document.body.appendChild(o);
+  const k=e=>{if(e.key==='Escape')close()};
+  const close=()=>{o.remove();document.removeEventListener('keydown',k)};
+  document.addEventListener('keydown',k);
+  o.addEventListener('click',e=>{if(e.target===o||e.target.closest('.oqx'))close()});
+  return {el:o,box:o.firstChild,close};
+}
+
+/* ---------- answer modes: sent with every question ---------- */
+const MODES=[['default','✨ Normal'],['teacher','🎓 Teacher'],['upsc','🏛️ UPSC mentor'],['lawyer','⚖️ Law info'],['doctor','🩺 Health info'],['coder','💻 Coder'],['friend','🤝 Friend'],['hinglish','🗣️ Hinglish']];
+let mode=LS.get('oqmode')||'default';
+const row=document.createElement('div');row.className='oqmodes';row.setAttribute('role','group');row.setAttribute('aria-label','Answer style');
+MODES.forEach(([k,l])=>{const b=document.createElement('button');b.type='button';b.textContent=l;b.dataset.k=k;b.onclick=()=>{mode=k;LS.set('oqmode',k);paintModes()};row.appendChild(b)});
+function paintModes(){row.querySelectorAll('button').forEach(b=>b.classList.toggle('on',b.dataset.k===mode))}
+const atts=Q('#atts');atts.parentNode.insertBefore(row,atts);paintModes();
+const f1=window.fetch;
+window.fetch=function(u,o){
+  try{if((u==='/ask_stream'||u==='/ask')&&o&&typeof o.body==='string'){const j=JSON.parse(o.body);j.mode=mode;o=Object.assign({},o,{body:JSON.stringify(j)})}}catch(e){}
+  return f1.call(this,u,o);
+};
+
+/* ---------- look: orb, Hinglish tagline, card suggestions ---------- */
+const hm=Q('#heroMark');if(hm)hm.innerHTML='<div class="oqorb"></div>';
+const hero=Q('#hero');
+if(hero){
+  const sub=document.createElement('div');sub.className='oqsub';hero.appendChild(sub);
+  const T=['Kya seekhna hai aaj?','Poochho kuch bhi, Hindi ya English mein.','Padhai, code, kanoon, khabar: sab ek jagah.'];let ti=0;
+  sub.textContent=T[0];setInterval(()=>{sub.style.opacity=0;setTimeout(()=>{ti=(ti+1)%T.length;sub.textContent=T[ti];sub.style.opacity=1},400)},4500);
+}
+const ul=Q('.ideas');
+if(ul){
+  ul.innerHTML='';
+  [['⚖️','Article 21 ko simple Hindi mein samjhao'],['📰','Aaj ki current affairs do aur 5 quiz questions'],['🧮','Solve a JEE maths problem step by step'],
+   ['🏛️','Explain how a bill becomes a law in India'],['💻','Write a Python program and explain it line by line'],['🍛','Aaj dinner mein kya banau? Simple recipe batao']].forEach(([i,t])=>{
+    const li=document.createElement('li'),b=document.createElement('button');b.type='button';b.dataset.i=i;b.dataset.t=t;b.textContent=t;
+    b.onclick=()=>ask(t);li.appendChild(b);ul.appendChild(li)});
+}
+
+/* ---------- loading lines that match the topic ---------- */
+const GEN=['Soch raha hoon…','Jawab taiyaar ho raha hai…','Thoda aur sochta hoon…'];
+const THEMES=[[/article|constitution|amendment|parliament|supreme court|law|court|bns|right/i,['Constitution khol rahe hain…','Articles check kar rahe hain…','Cases yaad kar rahe hain…']],
+ [/solve|maths|math|calculate|integral|equation|jee|neet|physics|chemistry|\d\s*[\+\-\*\/x]\s*\d/i,['Step by step solve ho raha hai…','Calculation double-check ho rahi hai…','Answer verify kar rahe hain…']],
+ [/code|python|java|bug|error|function|program|html|sql/i,['Code likh rahe hain…','Edge cases soch rahe hain…','Syntax check ho raha hai…']],
+ [/news|current|aaj|today|latest/i,['Taaza khabrein dhoondh rahe hain…','Kai sources padh rahe hain…']]];
+const ALL=GEN.concat.apply(GEN,THEMES.map(x=>x[1]));
+function loadingLines(el){
+  const w=el.querySelector('.wait');if(!w)return;
+  const prev=el.previousElementSibling,qq=(prev&&prev.raw)||'';
+  let lines=GEN;for(const [re,l] of THEMES){if(re.test(qq)){lines=l;break}}
+  let i=0;
+  const tick=()=>{if(!w.isConnected||!el.classList.contains('thinking')){clearInterval(t);return}
+    const c=w.textContent;if(c!=='Thinking'&&ALL.indexOf(c)<0){clearInterval(t);return}
+    w.textContent=lines[i++%lines.length]};
+  const t=setInterval(tick,2200);tick();
+}
+
+/* ---------- Share and Verify buttons under every answer ---------- */
+const log=Q('#log');let pend=false;
+function decorate(){
+  pend=false;
+  log.querySelectorAll('.turn.bot').forEach(t=>{
+    const a=t.querySelector('.acts');
+    if(!a||a.dataset.oq||!t.raw||t.classList.contains('err'))return;
+    a.dataset.oq='1';
+    a.insertAdjacentHTML('beforeend',' <button type="button" class="mini" data-oqshare>Share</button> <button type="button" class="mini" data-oqverify>Verify</button>');
+  });
+}
+new MutationObserver(ms=>{
+  ms.forEach(m=>m.addedNodes.forEach(n=>{if(n.nodeType===1&&n.classList.contains('bot')&&n.classList.contains('thinking'))loadingLines(n)}));
+  if(!pend){pend=true;requestAnimationFrame(decorate)}
+}).observe(log,{childList:true,subtree:true});
+
+function plain(t){return String(t||'').replace(/```[\s\S]*?```/g,' [code] ').replace(/\[([^\]]+)\]\([^)]+\)/g,'$1').replace(/[*#`>|_~]/g,'').replace(/^\s*[-•]\s+/gm,'• ').replace(/\n{3,}/g,'\n\n').trim()}
+function wrapText(g,text,max){
+  const out=[];
+  text.split('\n').forEach(par=>{
+    if(!par.trim()){out.push('');return}
+    let line='';
+    par.split(/\s+/).forEach(w=>{
+      const t=line?line+' '+w:w;
+      if(g.measureText(t).width<=max){line=t;return}
+      if(line)out.push(line);line='';
+      while(g.measureText(w).width>max){let k=w.length;while(k>1&&g.measureText(w.slice(0,k)).width>max)k--;out.push(w.slice(0,k));w=w.slice(k)}
+      line=w;
+    });
+    if(line)out.push(line);
+  });
+  return out;
+}
+async function drawCard(q,a){
+  try{await document.fonts.ready}catch(e){}
+  const W=1080,H=1350,c=document.createElement('canvas');c.width=W;c.height=H;const g=c.getContext('2d');
+  const bg=g.createLinearGradient(0,0,W,H);bg.addColorStop(0,'#0E1233');bg.addColorStop(1,'#2A3192');g.fillStyle=bg;g.fillRect(0,0,W,H);
+  const gl=g.createRadialGradient(W-120,120,10,W-120,120,420);gl.addColorStop(0,'rgba(242,160,46,.35)');gl.addColorStop(1,'rgba(242,160,46,0)');g.fillStyle=gl;g.fillRect(0,0,W,H);
+  const FF='"Bricolage Grotesque","Noto Sans Devanagari","Segoe UI",system-ui,sans-serif';
+  g.lineWidth=9;g.strokeStyle='#EEF0FF';g.beginPath();g.arc(100,100,34,0,Math.PI*2);g.stroke();
+  g.fillStyle='#F2A02E';g.beginPath();g.arc(128,128,10,0,Math.PI*2);g.fill();
+  g.fillStyle='#EEF0FF';g.font='800 44px '+FF;g.textBaseline='middle';g.fillText('Deep OQ',160,100);
+  g.textBaseline='alphabetic';let y=215;
+  if(q){g.fillStyle='#F2A02E';g.font='700 40px '+FF;wrapText(g,plain(q),W-160).slice(0,3).forEach(l=>{g.fillText(l,80,y);y+=54});y+=20}
+  g.fillStyle='rgba(255,255,255,.18)';g.fillRect(80,y,W-160,3);y+=62;
+  g.fillStyle='#EEF0FF';g.font='500 38px '+FF;
+  let lines=wrapText(g,plain(a),W-160);const per=52,fit=Math.max(1,Math.floor((H-170-y)/per));
+  if(lines.length>fit){lines=lines.slice(0,fit);lines[fit-1]=lines[fit-1].replace(/\s*\S*$/,'')+' …'}
+  lines.forEach(l=>{g.fillText(l,80,y);y+=per});
+  g.font='600 30px '+FF;g.fillStyle='rgba(238,240,255,.75)';g.fillText('Made with Deep OQ  •  '+location.host,80,H-70);
+  return new Promise(r=>c.toBlob(r,'image/png'));
+}
+async function shareCard(turn,btn){
+  const old=btn.textContent;btn.textContent='Making…';
+  try{
+    const p=turn.previousElementSibling,blob=await drawCard((p&&p.raw)||'',turn.raw||'');
+    const file=new File([blob],'deep-oq-answer.png',{type:'image/png'});
+    if(navigator.canShare&&navigator.canShare({files:[file]})){
+      try{await navigator.share({files:[file],title:'Deep OQ',text:'Made with Deep OQ'});btn.textContent=old;return}catch(e){if(e.name==='AbortError'){btn.textContent=old;return}}
+    }
+    const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='deep-oq-answer.png';document.body.appendChild(a);a.click();a.remove();
+    setTimeout(()=>URL.revokeObjectURL(a.href),4000);
+  }catch(e){alert('Could not make the card.')}
+  btn.textContent=old;
+}
+async function verifyAnswer(turn,btn){
+  btn.disabled=true;btn.textContent='Checking…';
+  const p=turn.previousElementSibling;
+  try{
+    const j=await call('/api/verify',{q:(p&&p.raw)||'',a:turn.raw||''});
+    const d=document.createElement('div');d.className='oqverify';
+    d.innerHTML='<span class="oqbadge '+E(j.level)+'">'+E(j.level)+' confidence</span><div class="body">'+md(j.text)+'</div>';
+    const acts=turn.querySelector('.acts');acts.parentNode.insertBefore(d,acts);btn.textContent='Verified';
+  }catch(e){btn.disabled=false;btn.textContent='Verify';alert(e.message)}
+}
+log.addEventListener('click',e=>{
+  const s=e.target.closest('[data-oqshare]');if(s){shareCard(s.closest('.turn'),s);return}
+  const v=e.target.closest('[data-oqverify]');if(v)verifyAnswer(v.closest('.turn'),v);
+});
+
+/* ---------- plus menu: Compare and Photo to action ---------- */
+const pm=Q('#pmenu');
+function addItem(title,sub,icon,fn){
+  const b=document.createElement('button');b.type='button';b.className='pitem';b.setAttribute('role','menuitem');
+  b.innerHTML='<svg viewBox="0 0 24 24">'+icon+'</svg><span><b>'+title+'</b><small>'+sub+'</small></span>';
+  b.onclick=()=>{if(typeof menu==='function')menu(false);fn()};pm.appendChild(b);
+}
+function openCompare(q){
+  const m=modal('<h3>Compare two answers</h3><p class="oqmuted">'+E(q.slice(0,200))+'</p><div class="oqcmp"><div class="oqcol"><b>Answer A</b><div class="body" data-a>Thinking…</div></div><div class="oqcol"><b>Answer B</b><div class="body" data-b>Thinking…</div></div></div><div class="oqvote" hidden><span class="oqmuted">Which is better?</span><button class="oqbtn pri" data-v="A">A</button><button class="oqbtn pri" data-v="B">B</button><button class="oqbtn" data-v="same">Same</button></div>',true);
+  call('/api/compare',{q}).then(j=>{
+    m.box.querySelector('[data-a]').innerHTML=md(j.a);m.box.querySelector('[data-b]').innerHTML=md(j.b);
+    const vt=m.box.querySelector('.oqvote');vt.hidden=false;
+    vt.onclick=e=>{const b=e.target.closest('[data-v]');if(!b)return;
+      let v={};try{v=JSON.parse(LS.get('oqvotes')||'{}')}catch(x){}
+      v[b.dataset.v]=(v[b.dataset.v]||0)+1;LS.set('oqvotes',JSON.stringify(v));vt.innerHTML='<span class="oqmuted">Thanks! Your vote is saved.</span>'};
+  }).catch(e=>{m.box.querySelector('[data-a]').textContent=e.message;m.box.querySelector('[data-b]').textContent=''});
+}
+addItem('Compare two answers','Type your question first, then pick this','<path d="M8 3v18M16 3v18M4 8h8M12 16h8"/>',()=>{
+  const b=Q('#q'),q=b.value.trim();
+  if(!q){b.focus();b.placeholder='Type your question first, then choose Compare';return}
+  openCompare(q);
+});
+const fi=document.createElement('input');fi.type='file';fi.accept='image/*';fi.hidden=true;document.body.appendChild(fi);
+fi.onchange=async()=>{
+  const f=fi.files[0];fi.value='';if(!f)return;
+  try{
+    const d=await shrinkImage(f,1800,true);
+    if(typeof showView==='function')showView('chat');
+    askExtra('What is this? Pull out the important details (names, amounts, dates, deadlines) and give me clear numbered steps on what to do next.',{kind:'image',name:f.name,data:d,doc:d,thumb:d},false);
+  }catch(e){alert(e.message)}
+};
+addItem('Photo to action','Bill, form or notice: get the next steps','<path d="M4 7h4l2-3h4l2 3h4v12H4z"/><circle cx="12" cy="13" r="3.5"/>',()=>fi.click());
+
+/* ---------- Daily: streak, XP, brief, quiz ---------- */
+const db=document.createElement('button');db.type='button';db.className='btn';db.id='dailyBtn';db.textContent='🔥 Daily';
+Q('#chatTools').appendChild(db);
+call('/api/daily').then(d=>{db.textContent='🔥 Daily · '+d.streak+'d'}).catch(()=>{});
+function confetti(){
+  const cols=['#F2A02E','#33E6A1','#2F8CFF','#ff5d8f','#7C5CFF'];
+  for(let i=0;i<40;i++){const s=document.createElement('span');s.className='oqc';s.style.left=Math.random()*100+'vw';s.style.background=cols[i%5];
+    s.style.animationDelay=(Math.random()*.5)+'s';document.body.appendChild(s);setTimeout(()=>s.remove(),2600)}
+}
+db.onclick=async()=>{
+  const m=modal('<h3>Daily</h3><p class="oqmuted">Loading…</p>');
+  let d;try{d=await call('/api/daily')}catch(e){m.box.innerHTML+='<p>'+E(e.message)+'</p>';return}
+  const stats=d2=>'<div class="oqstats"><div><b>🔥 '+d2.streak+'</b><small>day streak</small></div><div><b>⭐ '+d2.xp+'</b><small>Level '+d2.level+'</small></div><div><b>🏆 '+d2.best+'</b><small>best streak</small></div></div><div class="oqbar"><i style="width:'+(d2.xp%100)+'%"></i></div>';
+  m.box.innerHTML='<button type="button" class="oqx" aria-label="Close">×</button><h3>Daily</h3><div id="oqst">'+stats(d)+'</div>'
+    +(d.fact?'<div class="oqcard">💡 '+E(d.fact)+'</div>':'')
+    +(d.news.length?'<div class="oqcard"><b>Today in India</b><ul>'+d.news.map(n=>'<li>'+E(n.title)+' <span class="oqmuted">('+E(n.source)+')</span></li>').join('')+'</ul></div>':'')
+    +'<h3 style="margin-top:16px">Daily quiz</h3><div id="oqq"></div>';
+  const el=m.box.querySelector('#oqq');
+  if(!d.quiz.length){el.innerHTML='<p class="oqmuted">The quiz is not ready right now. Please try again in a minute.</p>';return}
+  let i=0,score=0;
+  function showQ(){
+    const q=d.quiz[i];el.dataset.lock='0';
+    el.innerHTML='<div class="oqmuted">Question '+(i+1)+' of '+d.quiz.length+'</div><div class="oqqt">'+E(q.q)+'</div>'
+      +q.options.map((o,k)=>'<button type="button" class="oqopt" data-k="'+k+'">'+E(o)+'</button>').join('')+'<div class="oqwhy"></div><div class="oqnext"></div>';
+    el.querySelectorAll('.oqopt').forEach(b=>b.onclick=()=>{
+      if(el.dataset.lock==='1')return;el.dataset.lock='1';
+      const k=+b.dataset.k,opts=el.querySelectorAll('.oqopt');
+      opts[q.answer].classList.add('ok');if(k!==q.answer)b.classList.add('bad');else score++;
+      el.querySelector('.oqwhy').textContent=q.why||'';
+      const n=document.createElement('button');n.type='button';n.className='oqbtn pri';n.textContent=i+1<d.quiz.length?'Next':'Finish';
+      n.onclick=()=>{i++;if(i<d.quiz.length)showQ();else finish()};el.querySelector('.oqnext').appendChild(n);
+    });
+  }
+  async function finish(){
+    el.innerHTML='<div class="oqqt">You scored '+score+' of '+d.quiz.length+'</div><p class="oqmuted">Saving…</p>';
+    if(d.done){el.querySelector('p').textContent='You already earned today’s XP. This round was just practice. Come back tomorrow to keep your streak!';return}
+    try{
+      const r=await call('/api/daily/done',{score});
+      if(score>=3)confetti();
+      el.querySelector('p').innerHTML='+'+r.gained+' XP! Streak: '+r.streak+' day'+(r.streak===1?'':'s')+'. Come back tomorrow to keep it going.';
+      m.box.querySelector('#oqst').innerHTML=stats(r);db.textContent='🔥 Daily · '+r.streak+'d';d.done=true;
+    }catch(e){el.querySelector('p').textContent=e.message}
+  }
+  showQ();
+};
+})();
+</script>
+"""
+_i16 = PAGE.rfind("</body>")      # rfind: the page text contains "</body>" inside a JS string earlier
+if _i16 > 0:
+    PAGE = PAGE[:_i16] + _OQ16_HTML + PAGE[_i16:]
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "ingest":
         ingest(sys.argv[2:])
