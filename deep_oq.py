@@ -19202,6 +19202,38 @@ try:
 except Exception as _e26:
     print("Pack 26: could not add palm control:", _e26)
 # ================= END PACK 26 =================
+# ================= PACK 28: PINCH ON SCREEN = VOICE CHAT (no camera) =================
+_PINCH28_HTML = r"""
+<style>
+@media (pointer:coarse){html,body{touch-action:pan-x pan-y}}
+</style>
+<script>
+(function(){
+var d0=0,fired=false;
+function dist(t){return Math.hypot(t[0].clientX-t[1].clientX,t[0].clientY-t[1].clientY)}
+function skip(e){return e.target.closest&&e.target.closest('#gcv,iframe,.camov,#t3frame')}
+document.addEventListener('touchstart',function(e){
+  if(e.touches.length===2&&!skip(e)){d0=dist(e.touches);fired=false}
+  else if(e.touches.length!==2){d0=0}
+},{passive:true});
+document.addEventListener('touchmove',function(e){
+  if(e.touches.length!==2||!d0||fired)return;
+  var r=dist(e.touches)/d0,vcOn=!!document.querySelector('.vc');
+  if(r<0.6&&!vcOn){fired=true;var b=document.getElementById('vcBtn');if(b)b.click()}
+  else if(r>1.6&&vcOn){fired=true;var x=document.querySelector('.vc-end');if(x)x.click()}
+},{passive:true});
+document.addEventListener('touchend',function(e){if(e.touches.length<2){d0=0}},{passive:true});
+})();
+</script>
+"""
+try:
+    _i28 = PAGE.rfind("</body>")
+    if _i28 > 0:
+        PAGE = PAGE[:_i28] + _PINCH28_HTML + PAGE[_i28:]
+    print("Pack 28 ready: pinch to open voice chat")
+except Exception as _e28:
+    print("Pack 28 failed:", _e28)
+# ================= END PACK 28 =================
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "ingest":
         ingest(sys.argv[2:])
