@@ -19369,7 +19369,7 @@ html,body{touch-action:pan-x pan-y}
 </style>
 <script>
 (function(){
-var DEBUG=true;                 /* shows a small level meter at the bottom left. Set to false when it works. */
+var DEBUG=false;                /* level meter hidden */
 var MIN_LEVEL=0.07;             /* smallest peak that can count as a clap. Lower = more sensitive (0.04 to 0.15) */
 var RISE=6;                     /* a clap must be this many times louder than the room noise */
 
@@ -19455,6 +19455,18 @@ try:
 except Exception as _e31:
     print("Pack 31 failed:", _e31)
 # ================= END PACK 31 =================
+# ================= PACK 34: HIDE THE MIC LEVEL METER =================
+_HIDE34_HTML = r"""
+<style>#oqmeter{display:none !important}</style>
+"""
+try:
+    _i34 = PAGE.rfind("</body>")
+    if _i34 > 0:
+        PAGE = PAGE[:_i34] + _HIDE34_HTML + PAGE[_i34:]
+    print("Pack 34 ready: level meter hidden")
+except Exception as _e34:
+    print("Pack 34 failed:", _e34)
+# ================= END PACK 34 =================
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "ingest":
         ingest(sys.argv[2:])
