@@ -21075,35 +21075,71 @@ def api_browse_run42():
 
 _ACT42 = r"""
 _PW = {}
+_PW_Q = None
 
 
-def _page():
-    pg = _PW.get("page")
-    if pg:
+def _pw_worker():
+    # Playwright runs in its own thread, which has no asyncio loop, so the Sync API works
+    p = b = pg = None
+    err = None
+
+    def launch():
+        nonlocal p, b, pg
+        from playwright.sync_api import sync_playwright
+        if p is None:
+            p = sync_playwright().start()
+        b = p.chromium.launch(headless=False)
+        pg = b.new_page()
+
+    try:
+        launch()
+    except Exception as e:
+        err = e
+    while True:
+        item = _PW_Q.get()
+        if item is None:
+            break
+        fn, box, ev = item
         try:
-            pg.title()
-            return pg
-        except Exception:
-            pass
-    b = _PW.get("b")
-    if b:  # the window or tab was closed: open a new tab in the same browser
-        try:
-            _PW["page"] = b.new_page()
-            return _PW["page"]
-        except Exception:
-            pass
-    old = _PW.get("p")
-    if old:  # the browser is gone: stop Playwright properly before starting it again
-        try:
-            old.stop()
-        except Exception:
-            pass
-    _PW.clear()
-    from playwright.sync_api import sync_playwright
-    p = sync_playwright().start()
-    b = p.chromium.launch(headless=False)
-    _PW.update(p=p, b=b, page=b.new_page())
-    return _PW["page"]
+            if err is not None:
+                try:
+                    launch()
+                    err = None
+                except Exception as e:
+                    err = e
+                    raise RuntimeError("Could not start the browser. Run: playwright install chromium  (%s)" % str(e)[:120])
+            try:
+                pg.title()
+            except Exception:
+                try:
+                    pg = b.new_page()
+                except Exception:
+                    launch()
+            box["r"] = fn(pg)
+        except Exception as e:
+            box["e"] = e
+        ev.set()
+    try:
+        b.close()
+        p.stop()
+    except Exception:
+        pass
+
+def _on_pw(fn, timeout=120):
+    global _PW_Q
+    import queue as _q
+    import threading as _t
+    if _PW_Q is None or not _PW.get("t") or not _PW["t"].is_alive():
+        _PW_Q = _q.Queue()
+        _PW["t"] = _t.Thread(target=_pw_worker, daemon=True)
+        _PW["t"].start()
+    box, ev = {}, _t.Event()
+    _PW_Q.put((fn, box, ev))
+    if not ev.wait(timeout):
+        raise RuntimeError("the browser did not answer in time")
+    if "e" in box:
+        raise box["e"]
+    return box.get("r")
 
 
 _TAGS = ["input:not([type=hidden]):not([type=checkbox]):not([type=radio]):not([type=submit]):not([type=button]):not([type=image])",
@@ -21154,7 +21190,7 @@ def op_act(arg):
     if input("Allow these steps? [y/N] ").strip().lower() not in ("y", "yes"):
         raise PermissionError("You declined on the device.")
     try:
-        pg = _page()
+        import playwright  # noqa: F401
     except ImportError:
         n = 0
         for s in steps:
@@ -21162,28 +21198,31 @@ def op_act(arg):
                 webbrowser.open(s["url"])
                 n += 1
         return "Opened %d tab(s). To click and type too, run: pip install playwright && playwright install chromium" % n
-    out = []
-    for i, s in enumerate(steps, 1):
-        d = s.get("do")
-        try:
-            if d == "goto":
-                pg.goto(s["url"], timeout=30000)
-            elif d == "click":
-                pg.get_by_text(s["text"], exact=False).first.click(timeout=8000)
-            elif d == "type":
-                _fill(pg, s.get("label") or "", s["text"])
-                if s.get("enter"):
-                    pg.keyboard.press("Enter")
-            elif d == "press":
-                pg.keyboard.press(s.get("key") or "Enter")
-            elif d == "wait":
-                pg.wait_for_timeout(min(int(s.get("sec", 2)), 10) * 1000)
-            elif d == "read":
-                out.append("PAGE: %s | %s\n%s" % (pg.title(), pg.url, pg.inner_text("body")[:6000]))
-        except Exception as e:
-            return "Step %d (%s) failed: %s\n%s" % (i, show[i - 1], str(e)[:160], "\n".join(out))
-    return ("\n".join(out) or "Done. %d step(s) finished. The browser window stays open." % len(steps))
-"""
+
+    def run_steps(pg):
+        out = []
+        for i, s in enumerate(steps, 1):
+            d = s.get("do")
+            try:
+                if d == "goto":
+                    pg.goto(s["url"], timeout=30000)
+                elif d == "click":
+                    pg.get_by_text(s["text"], exact=False).first.click(timeout=8000)
+                elif d == "type":
+                    _fill(pg, s.get("label") or "", s["text"])
+                    if s.get("enter"):
+                        pg.keyboard.press("Enter")
+                elif d == "press":
+                    pg.keyboard.press(s.get("key") or "Enter")
+                elif d == "wait":
+                    pg.wait_for_timeout(min(int(s.get("sec", 2)), 10) * 1000)
+                elif d == "read":
+                    out.append("PAGE: %s | %s\n%s" % (pg.title(), pg.url, pg.inner_text("body")[:6000]))
+            except Exception as e:
+                return "Step %d (%s) failed: %s\n%s" % (i, show[i - 1], str(e)[:160], "\n".join(out))
+        return "\n".join(out) or "Done. %d step(s) finished. The browser window stays open." % len(steps)
+
+    return _on_pw(run_steps)
 try:
     _DEVICE_PY = (_DEVICE_PY.replace("def handle(j, roots, auto):", _ACT42 + "\n\ndef handle(j, roots, auto):", 1)
                   .replace('if j["op"] != "info" and not roots:', 'if j["op"] not in ("info", "act") and not roots:', 1)
