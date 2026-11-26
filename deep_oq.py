@@ -21223,6 +21223,7 @@ def op_act(arg):
         return "\n".join(out) or "Done. %d step(s) finished. The browser window stays open." % len(steps)
 
     return _on_pw(run_steps)
+"""
 try:
     _DEVICE_PY = (_DEVICE_PY.replace("def handle(j, roots, auto):", _ACT42 + "\n\ndef handle(j, roots, auto):", 1)
                   .replace('if j["op"] != "info" and not roots:', 'if j["op"] not in ("info", "act") and not roots:', 1)
