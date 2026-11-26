@@ -21073,7 +21073,6 @@ def api_browse_run42():
     ok, data = _dev_request42(login_session.get("user") or "", str(d.get("device", ""))[:20], "act", json.dumps(steps))
     return (jsonify(data=data) if ok else (jsonify(error=data), 400))
 
-
 _ACT42 = r"""
 _PW = {}
 _PW_Q = None
@@ -21084,14 +21083,14 @@ def _pw_worker():
     p = b = pg = None
     err = None
 
-def launch():
-    nonlocal p, b, pg
-    from playwright.sync_api import sync_playwright
-    if p is None:
-        p = sync_playwright().start()
-    # Microsoft Edge only. No fallback to any other browser.
-    b = p.chromium.launch(channel="msedge", headless=False)
-    pg = b.new_page()
+    def launch():
+        nonlocal p, b, pg
+        from playwright.sync_api import sync_playwright
+        if p is None:
+            p = sync_playwright().start()
+        # Microsoft Edge only. No fallback to any other browser.
+        b = p.chromium.launch(channel="msedge", headless=False)
+        pg = b.new_page()
 
     try:
         launch()
@@ -21126,6 +21125,7 @@ def launch():
         p.stop()
     except Exception:
         pass
+
 
 def _on_pw(fn, timeout=120):
     global _PW_Q
@@ -21176,6 +21176,7 @@ def _fill(pg, lab, text):
                 continue
     raise RuntimeError("no text box found for '%s'" % lab)
 
+
 def _open_edge(url):
     import subprocess, webbrowser
     try:
@@ -21194,8 +21195,9 @@ def _open_edge(url):
     except Exception:
         pass
     webbrowser.open(url)   # last resort: default browser
+
+
 def op_act(arg):
-    import webbrowser
     steps = json.loads(arg)[:20]
     show = []
     for s in steps:
