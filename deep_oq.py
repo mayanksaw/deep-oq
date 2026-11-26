@@ -10425,7 +10425,7 @@ def askfile_route():
         return jsonify(error="locked"), 401
     d = request.get_json(silent=True) or {}
     raw_q = str(d.get("q", "")).strip()[:2000]
-    q = raw_q or "Summarize this file and list the key points."
+    q = raw_q or "Summarize this file in short numbered/bulleted points (key facts, names, dates, amounts)."
     name = re.sub(r"[\r\n]+", " ", str(d.get("name", "file")))[:120]
     text = str(d.get("text", ""))[:600000]
     if not text.strip():
@@ -10446,7 +10446,9 @@ def askfile_route():
         today = datetime.date.today().strftime("%A, %d %B %Y")
         msgs = ([{"role": "system", "content": SYSTEM + f" Today's date is {today}. The user attached a file. "
                   "Answer from its content and say so if the answer is not in it. For code files, explain, "
-                  "fix or improve the code as asked."}]
+                  "fix or improve the code as asked. Always format the answer point-wise: short bullet "
+                  "points or numbered points, one fact per line, with a bold label where useful. "
+                  "No long paragraphs."}]
                 + kb_load_history(sess, 6)
                 + [{"role": "user", "content": f"FILE NAME: {name}\n----- FILE START -----\n{_doc_context(text, q)}\n"
                     f"----- FILE END -----\n\nQUESTION:\n{q}"}])
@@ -20498,10 +20500,10 @@ async function home(box){
     const op=Q('#dvo').value,arg=Q('#dva').value.trim(),dev=Q('#dvd').value,q=Q('#dvq').value.trim(),out=Q('#dvout');
     out.style.display='block';out.textContent='Waiting for your device… approve on the device if it asks.';run.disabled=true;
     try{
-      if(op==='ask'){
+      if(op==='ask'||op==='read'){
         const r=await call('/api/device/run',{device:dev,op:'read',arg});
-        out.textContent='Read the file. Asking Deep OQ…';
-        const a=await call('/askfile',{q:q||'Summarize this file and list the key points.',name:arg.split(/[\\/]/).pop()||'file',text:r.data,session:'device'});
+        out.textContent='Read the file. Making points…';
+        const a=await call('/askfile',{q:(op==='ask'&&q)?q:'Give the important details of this file as short point-wise bullets.',name:arg.split(/[\\/]/).pop()||'file',text:r.data,session:'device'});
         out.innerHTML='<div class="body">'+md(a.answer)+'</div>';
       }else{const r=await call('/api/device/run',{device:dev,op,arg});out.innerHTML='<div class="stutxt">'+E(r.data)+'</div>'}
     }catch(e){out.textContent=e.message}
