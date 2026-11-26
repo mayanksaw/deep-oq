@@ -21078,17 +21078,33 @@ _PW = {}
 
 
 def _page():
-    if "page" in _PW:
+    pg = _PW.get("page")
+    if pg:
         try:
-            _PW["page"].title()
+            pg.title()
+            return pg
+        except Exception:
+            pass
+    b = _PW.get("b")
+    if b:  # the window or tab was closed: open a new tab in the same browser
+        try:
+            _PW["page"] = b.new_page()
             return _PW["page"]
         except Exception:
-            _PW.clear()
+            pass
+    old = _PW.get("p")
+    if old:  # the browser is gone: stop Playwright properly before starting it again
+        try:
+            old.stop()
+        except Exception:
+            pass
+    _PW.clear()
     from playwright.sync_api import sync_playwright
     p = sync_playwright().start()
     b = p.chromium.launch(headless=False)
     _PW.update(p=p, b=b, page=b.new_page())
     return _PW["page"]
+
 
 _TAGS = ["input:not([type=hidden]):not([type=checkbox]):not([type=radio]):not([type=submit]):not([type=button]):not([type=image])",
          "textarea", "[contenteditable=true]", "[role=searchbox]", "[role=textbox]", "[role=combobox]"]
@@ -21121,6 +21137,8 @@ def _fill(pg, lab, text):
             except Exception:
                 continue
     raise RuntimeError("no text box found for '%s'" % lab)
+
+
 def op_act(arg):
     import webbrowser
     steps = json.loads(arg)[:20]
@@ -21153,13 +21171,7 @@ def op_act(arg):
             elif d == "click":
                 pg.get_by_text(s["text"], exact=False).first.click(timeout=8000)
             elif d == "type":
-                lab = s.get("label") or "", s["text"])
-                loc = pg.get_by_placeholder(lab, exact=False).first if lab else pg.locator("input:visible,textarea:visible").first
-                try:
-                    loc.fill(s["text"], timeout=5000)
-                except Exception:
-                    loc = pg.get_by_label(lab, exact=False).first
-                    loc.fill(s["text"], timeout=5000)
+                _fill(pg, s.get("label") or "", s["text"])
                 if s.get("enter"):
                     pg.keyboard.press("Enter")
             elif d == "press":
