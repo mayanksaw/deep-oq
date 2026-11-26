@@ -20267,13 +20267,27 @@ def safe(arg, roots):
     raise FileNotFoundError("Not found inside your shared folders.")
 
 
+ALWAYS = False
+
+
 def ask_ok(msg):
+    global ALWAYS
+    if ALWAYS:
+        return True
     if not sys.stdin or not sys.stdin.isatty():
         return False
     try:
-        return input("\n" + msg + "\nAllow? [y/N] ").strip().lower() in ("y", "yes")
+        r = input("\n" + msg + "\nAllow? [y = this file / a = always, all shared folders / N = no] ").strip().lower()
     except EOFError:
         return False
+    if r in ("a", "all", "always"):
+        ALWAYS = True
+        c = load()
+        c["auto_read"] = True
+        save(c)
+        print("OK. Deep OQ can now read any file inside your shared folders without asking. (Run with --ask to turn this off.)")
+        return True
+    return r in ("y", "yes")
 
 
 def op_info(roots):
@@ -20379,6 +20393,7 @@ def main():
     ap.add_argument("code", nargs="?")
     ap.add_argument("--share", action="append")
     ap.add_argument("--auto-read", action="store_true")
+    ap.add_argument("--ask", action="store_true")
     ap.add_argument("--name")
     a = ap.parse_args()
     c = load()
@@ -20392,16 +20407,36 @@ def main():
         print("Linked.")
     elif not c.get("token"):
         sys.exit("First run: python oq_device.py https://your-site CODE --share ~/Documents")
-    if a.share:
+       if a.share:
         c["shares"] = [os.path.realpath(os.path.expanduser(s)) for s in a.share]
+    if not c.get("shares"):
+        home = os.path.expanduser("~")
+        c["shares"] = [os.path.realpath(os.path.join(home, *x)) for x in
+                       (("Desktop",), ("Documents",), ("Downloads",), ("OneDrive", "Desktop"), ("OneDrive", "Documents"))
+                       if os.path.isdir(os.path.join(home, *x))]
+    if a.auto_read:
+        c["auto_read"] = True
+    if a.ask:
+        c["auto_read"] = False
     save(c)
+    auto_all = bool(c.get("auto_read"))
     roots = [r for r in c.get("shares", []) if os.path.isdir(r)]
+        if not auto_all and roots and sys.stdin and sys.stdin.isatty():
+        print("\nDeep OQ wants READ-ONLY access to these folders:\n  " + "\n  ".join(roots))
+        try:
+            ans = input("Allow ONE time for everything inside them? Deep OQ will not ask again. [y/N] ").strip().lower()
+        except EOFError:
+            ans = ""
+        if ans in ("y", "yes", "a"):
+            c["auto_read"] = True
+            save(c)
+            auto_all = True
     print("Deep OQ device link is running. Shared folders:", ", ".join(roots) or "none (use --share)")
-    print("Read-only. You will be asked before each file is read" + (" (disabled by --auto-read)." if a.auto_read else ".") + " Ctrl+C to stop.")
+    print("Read-only. " + ("Reading any file inside the shared folders is allowed (run with --ask to be asked again)." if auto_all else "You will be asked once; answer a = always to stop the questions.") + " Ctrl+C to stop.")
     while True:
         try:
             for j in call(c, "GET", "/api/device/c/poll").get("jobs", []):
-                ok, data = handle(j, roots, a.auto_read)
+                ok, data = handle(j, roots, auto_all)
                 call(c, "POST", "/api/device/c/result", {"job": j["id"], "ok": ok, "data": data})
             time.sleep(2)
         except urllib.error.HTTPError as e:
