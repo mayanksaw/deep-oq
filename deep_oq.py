@@ -21030,6 +21030,7 @@ def api_browse_plan42():
                      "At most 12 steps. Add a wait after each page load. Use read only if the user wants information from the page. "
                      "To search a website, prefer ONE goto to its search-results link (for example https://www.youtube.com/results?search_query=lofi+music "
                      "or https://www.google.com/search?q=millinore+song) instead of typing into a search box.\n\n"
+                     "For playing a video or song on YouTube: goto the results link, wait 3 seconds, then ONE click with text 'video' (it opens the first result). Do not add a separate Play click, because videos start automatically. "
                      "REQUEST: " + goal}], 0.2, 900)
         j = _json_from(raw)
     except Exception as e:
@@ -21083,15 +21084,13 @@ def _pw_worker():
     p = b = pg = None
     err = None
 
-    def launch():
+       def launch():
         nonlocal p, b, pg
         from playwright.sync_api import sync_playwright
         if p is None:
             p = sync_playwright().start()
-        try:
-            b = p.chromium.launch(channel="msedge", headless=False)
-        except Exception:
-            b = p.chromium.launch(headless=False)   # fallback: Playwright's own Chromium
+        # Microsoft Edge only. No fallback to any other browser.
+        b = p.chromium.launch(channel="msedge", headless=False)
         pg = b.new_page()
 
     try:
@@ -21110,7 +21109,7 @@ def _pw_worker():
                     err = None
                 except Exception as e:
                     err = e
-                    raise RuntimeError("Could not start the browser. Run: playwright install chromium  (%s)" % str(e)[:120])
+                    raise RuntimeError("Could not start Microsoft Edge. Make sure Edge is installed. (%s)" % str(e)[:120])
             try:
                 pg.title()
             except Exception:
@@ -21226,8 +21225,22 @@ def op_act(arg):
             try:
                 if d == "goto":
                     pg.goto(s["url"], timeout=30000)
-                elif d == "click":
-                    pg.get_by_text(s["text"], exact=False).first.click(timeout=8000)
+               elif d == "click":
+                    t = s["text"]
+                    done = False
+                    # YouTube results: open the first real video link
+                    if "youtube.com/results" in pg.url and t.lower() not in ("play",):
+                        try:
+                            pg.locator("a#video-title:visible").first.click(timeout=8000)
+                            done = True
+                        except Exception:
+                            pass
+                    if not done:
+                        loc = pg.get_by_role("link", name=t).or_(pg.get_by_role("button", name=t))
+                        try:
+                            loc.first.click(timeout=8000)
+                        except Exception:
+                            pg.get_by_text(t, exact=False).locator("visible=true").first.click(timeout=8000)
                 elif d == "type":
                     _fill(pg, s.get("label") or "", s["text"])
                     if s.get("enter"):
