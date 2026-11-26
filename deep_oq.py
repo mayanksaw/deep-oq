@@ -21088,7 +21088,10 @@ def _pw_worker():
         from playwright.sync_api import sync_playwright
         if p is None:
             p = sync_playwright().start()
-        b = p.chromium.launch(headless=False)
+        try:
+            b = p.chromium.launch(channel="chrome", headless=False)
+        except Exception:
+            b = p.chromium.launch(headless=False)
         pg = b.new_page()
 
     try:
