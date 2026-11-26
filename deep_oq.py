@@ -20460,7 +20460,7 @@ _DEV39_HTML = r"""
 (function(){
 const Q=s=>document.querySelector(s);
 const E=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-async function call(u,b){const o=b===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)};
+async function call(u,b){const h={'Content-Type':'application/json','X-Access-Key':localStorage.ak||''};const o=b===undefined?{headers:h}:{method:'POST',headers:h,body:JSON.stringify(b)};
   const r=await fetch(u,o),j=await r.json().catch(()=>({}));if(!r.ok||j.error)throw new Error(j.error||'Something went wrong.');return j}
 const btn=document.createElement('button');btn.type='button';btn.className='btn';btn.id='devBtn';btn.textContent='💻 Devices';
 const host=Q('#chatTools');if(host)host.appendChild(btn);
