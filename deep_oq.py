@@ -21081,16 +21081,19 @@ _PW_Q = None
 def _pw_worker():
     p = b = pg = None
     err = None
-
     def launch():
         nonlocal p, b, pg
         from playwright.sync_api import sync_playwright
         if p is None:
             p = sync_playwright().start()
-        # Microsoft Edge only. No fallback to any other browser.
-        b = p.chromium.launch(channel="msedge", headless=False,
-                              args=["--autoplay-policy=no-user-gesture-required"])
-        pg = b.new_page()  
+        profile = os.path.join(os.path.expanduser("~"), ".oq_edge_profile")
+        ctx = p.chromium.launch_persistent_context(
+            profile, channel="msedge", headless=False,
+            ignore_default_args=["--enable-automation"],
+            args=["--autoplay-policy=no-user-gesture-required",
+                  "--disable-blink-features=AutomationControlled"])
+        b = ctx
+        pg = ctx.pages[0] if ctx.pages else ctx.new_page()
 
     try:
         launch()
@@ -21254,6 +21257,14 @@ def op_act(arg):
                             pass
                         if done:
                             pg.wait_for_timeout(2500)
+                            try:
+                                u = pg.url
+                                if "list=RD" in u or "start_radio" in u:
+                                    pg.goto(re.sub(r"&(list|start_radio|index)=[^&]*", "", u), timeout=30000)
+                                    pg.wait_for_timeout(2000)
+                                    pg.evaluate("var v=document.querySelector('video'); if(v){v.play();}")
+                            except Exception:
+                                pass
                             try:
                                 pg.evaluate("var v=document.querySelector('video'); if(v){v.play();}")
                             except Exception:
