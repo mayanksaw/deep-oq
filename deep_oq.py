@@ -3796,6 +3796,8 @@ def ask():
         mem_learn(_session_user(session), data["q"])
     except Exception as e:
         print("ask failed:", e)
+        import traceback as _tbk
+        _tbk.print_exc()
         return jsonify(error=hide_ai(str(e)[:300])), 500
     return jsonify(answer=hide_keys(answer))
 
@@ -3884,6 +3886,8 @@ def ask_stream():
             qu.put(("done", hide_keys(answer)))
         except Exception as e:
             print("ask_stream failed:", e)
+            import traceback as _tbk
+            _tbk.print_exc()
             qu.put(("error", hide_ai(str(e)[:300])))
 
     threading.Thread(target=work, daemon=True).start()
@@ -15629,8 +15633,8 @@ _TASKS6 = (("interview_questions_in_", "Code", "Interview questions", "Write 15 
            ("review_security_in_", "Code", "Security review", "Review the %s code pasted for security problems (injection, secrets, unsafe input) and show fixes."),
            ("convert_to_", "Code", "Convert code to", "Convert the code pasted into idiomatic %s. Keep behaviour the same and note any differences."))
 for _t in _TECH:
-    for _pre, _cat, _lab, _pr in _TASKS6:
-        _ad(_pre + _t, _cat, "%s: %s" % (_lab, _t), _pr % _t, "Paste code or describe the task")
+for _pre, _cat, _labtxt, _pr in _TASKS6:
+    _ad(_pre + _t, _cat, "%s: %s" % (_labtxt, _t), _pr % _t, "Paste code or describe the task")
 
 for _s in _SUBJ + _SUBJ2:
     _ad("one_page_summary_of_" + _s, "Study", "One page summary: " + _s, "Summarize the %s topic given on one page with headings, key points and one example." % _s, "Topic or chapter")
@@ -21191,7 +21195,7 @@ except Exception as _e42:
 #  Daily, Coach, Studio, Devices and App Builder become small 2-per-row buttons
 #  (saves about half of the height) instead of five wide rows below Knowledge.
 # ==========================================================================
-_TG42_HTML = r"""
+_TG43_HTML = r"""
 <style>
 header.top .oqtg{order:4;display:grid;grid-template-columns:1fr 1fr;gap:4px;width:100%;margin:2px 0;box-sizing:border-box}
 header.top .oqtg .btn{width:100%!important;min-width:0;order:0!important;padding:4px 6px!important;font-size:12px!important;line-height:1.3;border-radius:8px!important;justify-content:center;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
