@@ -15633,8 +15633,8 @@ _TASKS6 = (("interview_questions_in_", "Code", "Interview questions", "Write 15 
            ("review_security_in_", "Code", "Security review", "Review the %s code pasted for security problems (injection, secrets, unsafe input) and show fixes."),
            ("convert_to_", "Code", "Convert code to", "Convert the code pasted into idiomatic %s. Keep behaviour the same and note any differences."))
 for _t in _TECH:
-for _pre, _cat, _labtxt, _pr in _TASKS6:
-    _ad(_pre + _t, _cat, "%s: %s" % (_labtxt, _t), _pr % _t, "Paste code or describe the task")
+    for _pre, _cat, _labtxt, _pr in _TASKS6:
+        _ad(_pre + _t, _cat, "%s: %s" % (_labtxt, _t), _pr % _t, "Paste code or describe the task")
 
 for _s in _SUBJ + _SUBJ2:
     _ad("one_page_summary_of_" + _s, "Study", "One page summary: " + _s, "Summarize the %s topic given on one page with headings, key points and one example." % _s, "Topic or chapter")
