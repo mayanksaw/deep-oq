@@ -21623,6 +21623,172 @@ try:
 except Exception as _e44:
     print("Pack 44 failed:", _e44)
 # ================= END PACK 44 =================
+# ================= PACK 45: FIXES + FEEDBACK + EVAL + SAFER KNOWLEDGE =================
+
+# ---- 1. Fix: Pack 44 called _dec38_calc, but the function is named _dec44_calc
+_dec38_calc = _dec44_calc
+
+# ---- 2. Only admins can add to the shared Knowledge (it is used in everyone's answers)
+@app.before_request
+def _teach_guard45():
+    if request.path == "/teach" and request.method == "POST" and not is_admin():
+        return jsonify(error="Only the site owner can add shared knowledge."), 403
+    return None
+
+
+# ---- 3. Prompt-injection filter for web pages and files the AI reads
+_INJ45 = re.compile(
+    r"(ignore|disregard|forget)\s+(all|any|the|your|previous|prior|above)[^.\n]{0,40}(instruction|rule|prompt)s?"
+    r"|you are now\b|new instructions?:|system prompt|reveal your (prompt|instructions|key)|act as (an? )?(admin|developer|root)", re.I)
+_read_url_base45 = read_url
+
+
+def read_url(url, max_chars=None):
+    title, body = _read_url_base45(url, max_chars)
+    clean = [("[removed: looked like an instruction aimed at the AI]" if _INJ45.search(l) else l) for l in body.split("\n")]
+    return title, "\n".join(clean)
+
+
+# ---- 4. Thumbs up / down under every answer
+if USE_PG:
+    _pg("CREATE TABLE IF NOT EXISTS oq_feedback(id BIGSERIAL PRIMARY KEY, username TEXT, rating INTEGER, "
+        "q TEXT, a TEXT, ts DOUBLE PRECISION)")
+else:
+    with DB:
+        DB.execute("CREATE TABLE IF NOT EXISTS feedback(id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT, "
+                   "rating INTEGER, q TEXT, a TEXT, ts REAL)")
+
+
+@app.post("/api/feedback")
+def api_feedback45():
+    if denied():
+        return jsonify(error="locked"), 401
+    d = request.get_json(silent=True) or {}
+    try:
+        rating = 1 if int(d.get("rating")) > 0 else -1
+    except (TypeError, ValueError):
+        return jsonify(error="Bad rating."), 400
+    if _limit_hit("feedback", 300):
+        return jsonify(error="Too many ratings today."), 429
+    _q16("INSERT INTO feedback(username,rating,q,a,ts) VALUES(?,?,?,?,?)",
+         "INSERT INTO oq_feedback(username,rating,q,a,ts) VALUES(%s,%s,%s,%s,%s)",
+         (login_session.get("user") or "guest", rating, str(d.get("q", ""))[:1500], str(d.get("a", ""))[:4000], time.time()))
+    return jsonify(ok=True)
+
+
+@app.get("/api/admin/feedback")
+def admin_feedback45():
+    bad = _adm_guard()
+    if bad:
+        return bad
+    c = _q16("SELECT rating, COUNT(*) FROM feedback GROUP BY rating",
+             "SELECT rating, COUNT(*) FROM oq_feedback GROUP BY rating", (), True)
+    counts = {("up" if r > 0 else "down"): n for r, n in c}
+    rows = _q16("SELECT username,q,a,ts FROM feedback WHERE rating<0 ORDER BY id DESC LIMIT 30",
+                "SELECT username,q,a,ts FROM oq_feedback WHERE rating<0 ORDER BY id DESC LIMIT 30", (), True)
+    return jsonify(counts=counts, recent_bad=[{"user": r[0], "q": r[1], "a": (r[2] or "")[:600],
+                                               "time": time.strftime("%Y-%m-%d %H:%M", time.gmtime(r[3] or 0))} for r in rows])
+
+
+# ---- 5. Test set: check your AI's quality whenever you change a model or prompt
+_EVAL45_Q = [
+    ("What is 17 * 23?", "391"), ("What is 15% of 200?", "30"), ("Square root of 144?", "12"),
+    ("Solve x^2 - 5x + 6 = 0", "2&3"), ("What is the derivative of x^3?", "3x"),
+    ("Which Article of the Indian Constitution protects the right to life and personal liberty?", "21"),
+    ("Who is known as the Father of the Indian Constitution?", "ambedkar"),
+    ("In which year did India become a republic?", "1950"),
+    ("Who was the first Prime Minister of India?", "nehru"),
+    ("Who wrote the Indian national anthem?", "tagore"),
+    ("What is the capital of Australia?", "canberra"),
+    ("What is the largest planet in the solar system?", "jupiter"),
+    ("What is the chemical symbol of gold?", "au"),
+    ("What is the SI unit of force?", "newton"),
+    ("Which gas do plants take in for photosynthesis?", "carbondioxide|co2"),
+    ("What is the boiling point of water at sea level in Celsius?", "100"),
+    ("Which is the longest river in India?", "ganga|ganges"),
+    ("In Python, which keyword defines a function?", "def"),
+    ("What does HTTP stand for?", "hypertext&transfer&protocol"),
+    ("How many days are in a leap year?", "366"),
+]
+_EVAL45 = {"state": "idle", "results": [], "started": 0, "score": None}
+
+
+def _eval_ok45(ans, exp):
+    a = re.sub(r"[\s,*.]", "", (ans or "").lower())
+    return all(any(alt.replace(" ", "") in a for alt in grp.split("|")) for grp in exp.split("&"))
+
+
+def _eval_run45():
+    res = []
+    for q, exp in _EVAL45_Q:
+        t0 = time.time()
+        try:
+            ans = deep_oq("eval:" + uuid.uuid4().hex[:8] + ":x", q)
+            ok = _eval_ok45(ans, exp)
+        except Exception as e:
+            ans, ok = "ERROR: " + hide_ai(str(e))[:120], False
+        res.append({"q": q, "expected": exp, "ok": ok, "secs": round(time.time() - t0, 1), "answer": ans[:200]})
+        _EVAL45["results"] = list(res)
+    _EVAL45["score"] = "%d / %d" % (sum(r["ok"] for r in res), len(res))
+    _EVAL45["state"] = "done"
+
+
+@app.post("/api/admin/eval")
+def admin_eval_start45():
+    bad = _adm_guard()
+    if bad:
+        return bad
+    if _EVAL45["state"] == "running":
+        return jsonify(error="A test is already running."), 429
+    _EVAL45.update(state="running", results=[], started=time.time(), score=None)
+    threading.Thread(target=_eval_run45, daemon=True).start()
+    return jsonify(ok=True, total=len(_EVAL45_Q))
+
+
+@app.get("/api/admin/eval")
+def admin_eval_status45():
+    bad = _adm_guard()
+    if bad:
+        return bad
+    return jsonify(state=_EVAL45["state"], score=_EVAL45["score"], done=len(_EVAL45["results"]),
+                   total=len(_EVAL45_Q), failed=[r for r in _EVAL45["results"] if not r["ok"]])
+
+
+# ---- client: 👍 👎 buttons
+_FB45_HTML = r"""
+<script>
+(function(){
+const log=document.querySelector('#log');if(!log)return;
+let pend=false;
+function add(){
+  pend=false;
+  log.querySelectorAll('.turn.bot').forEach(t=>{
+    const a=t.querySelector('.acts');
+    if(!a||a.dataset.oqfb||!t.raw||t.classList.contains('err'))return;
+    a.dataset.oqfb='1';
+    a.insertAdjacentHTML('beforeend',' <button type="button" class="mini" data-fb="1" aria-label="Good answer">👍</button> <button type="button" class="mini" data-fb="-1" aria-label="Bad answer">👎</button>');
+  });
+}
+new MutationObserver(()=>{if(!pend){pend=true;requestAnimationFrame(add)}}).observe(log,{childList:true,subtree:true});
+log.addEventListener('click',e=>{
+  const b=e.target.closest('[data-fb]');if(!b)return;
+  const t=b.closest('.turn'),p=t.previousElementSibling,box=b.parentNode;
+  fetch('/api/feedback',{method:'POST',headers:{'Content-Type':'application/json','X-Access-Key':localStorage.ak||''},
+    body:JSON.stringify({rating:+b.dataset.fb,q:(p&&p.raw)||'',a:t.raw||''})}).catch(()=>{});
+  box.querySelectorAll('[data-fb]').forEach(x=>x.remove());
+  box.insertAdjacentHTML('beforeend',' <span class="mini">'+(+b.dataset.fb>0?'Thanks!':'Thanks, we will improve.')+'</span>');
+});
+})();
+</script>
+"""
+try:
+    _i45 = PAGE.rfind("</body>")
+    if _i45 > 0:
+        PAGE = PAGE[:_i45] + _FB45_HTML + PAGE[_i45:]
+except Exception as _e45:
+    print("Pack 45 page hook failed:", _e45)
+print("Pack 45 ready: fixes, feedback, eval, injection filter")
+# ================= END PACK 45 =================
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "ingest":
         ingest(sys.argv[2:])
