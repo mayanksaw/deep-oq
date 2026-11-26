@@ -20557,6 +20557,223 @@ try:
 except Exception as _e39:
     print("Pack 39 failed:", _e39)
 # ================= END PACK 39 =================
+# ==========================================================================
+# PACK 40: App Builder. Give a command, Deep OQ writes a whole app in the language you pick.
+#  - 15 stacks (HTML/JS, Python Flask, Tkinter, Pygame, Node, React, Java, C#, C++, Go, Rust, PHP, Flutter, auto)
+#  - shows every file, copy buttons, live preview for web apps, ZIP download
+#  - "Change this app" keeps the files and applies your new command
+#  - generated code is NEVER run on this server (the preview runs in a sandboxed frame)
+# ==========================================================================
+AB40_STACKS = {
+    "auto": "Choose the best language and framework for the request.",
+    "html": "HTML + CSS + JavaScript web app. Files: index.html, style.css, app.js. It must run by opening index.html in a browser, with no build step.",
+    "flask": "Python 3 web app with Flask. Files: app.py, requirements.txt, templates/ and static/ when needed. It runs with python app.py on port 5000.",
+    "tk": "Python 3 desktop app using tkinter (standard library only). Main file: main.py.",
+    "pygame": "Python 3 game using pygame. Files: main.py and requirements.txt.",
+    "node": "Node.js web app with Express. Files: package.json, server.js and a public/ folder. Run: npm install && node server.js.",
+    "react": "React app built with Vite. Files: package.json, index.html, vite.config.js, src/main.jsx, src/App.jsx, src/App.css. Run: npm install && npm run dev.",
+    "java": "Java 17 app (console or Swing). Main file: Main.java. Run: javac Main.java && java Main.",
+    "csharp": "C# on .NET 8 console app. Files: Program.cs and App.csproj. Run: dotnet run.",
+    "cpp": "C++17 console app. Files: main.cpp and a simple Makefile. Run: make && ./app.",
+    "go": "Go app. Files: go.mod and main.go. Run: go run .",
+    "rust": "Rust app. Files: Cargo.toml and src/main.rs. Run: cargo run.",
+    "php": "PHP web app. Files: index.php and others. Run: php -S localhost:8000.",
+    "flutter": "Flutter mobile app (Android and iOS). Files: pubspec.yaml and lib/main.dart. Run: flutter pub get && flutter run.",
+    "kotlin": "Kotlin console app with Gradle. Files: build.gradle.kts, settings.gradle.kts, src/main/kotlin/Main.kt. Run: gradle run.",
+}
+
+AB40_SYSTEM = (
+    "You are an expert software engineer who builds complete, working apps. Reply ONLY in this exact plain-text format. "
+    "No talk before or after it, and no markdown fences around the whole reply:\n"
+    "### NAME: short-folder-name (lowercase letters, numbers, hyphens)\n"
+    "### ABOUT: one sentence about the app\n"
+    "### RUN: the exact commands to run it (join steps with ' && ')\n"
+    "### FILE: path/to/file.ext\n"
+    "(the full content of that file)\n"
+    "### FILE: another/file.ext\n"
+    "(the full content)\n"
+    "### END\n"
+    "Rules: write every file in full, never use '...' or placeholders. The app must work as it is, with no API keys "
+    "and no paid services. Add input checks and error handling. Web apps get a clean, modern, mobile-friendly design. "
+    "Include the package or requirements files. At most 12 files, none of them binary or images (use CSS, SVG or emoji). "
+    "Keep code comments in English, but the app text can be in the language the user wrote in.")
+
+
+def _ab_path40(p):
+    p = str(p or "").replace("\\", "/").strip().strip("`'\" ")
+    p = re.sub(r"^(\./)+", "", p).lstrip("/")
+    parts = [x for x in p.split("/") if x not in ("", ".")]
+    if not parts or any(x == ".." for x in parts) or len(p) > 120:
+        return ""
+    if not all(re.fullmatch(r"[\w .\-+@]+", x) for x in parts):
+        return ""
+    return "/".join(parts)
+
+
+def _ab_parse40(text):
+    text = str(text or "").replace("\r", "")
+    top = re.split(r"^### FILE:", text, 1, flags=re.M)[0]
+
+    def one(tag):
+        m = re.search(r"^### " + tag + r":[ \t]*(.+)$", top, re.M)
+        return m.group(1).strip() if m else ""
+    name = re.sub(r"[^a-z0-9\-]+", "-", one("NAME").lower()).strip("-")[:40] or "my-app"
+    parts = re.split(r"^### FILE:[ \t]*(.+?)[ \t]*$", text, flags=re.M)
+    files, seen = [], set()
+    for i in range(1, len(parts) - 1, 2):
+        path = _ab_path40(parts[i])
+        body = re.split(r"^### END[ \t]*$", parts[i + 1], flags=re.M)[0].strip("\n")
+        m = re.match(r"^```[\w+\-#.]*\n(.*?)\n```[ \t]*$", body, re.S)
+        if m:
+            body = m.group(1)
+        if path and path not in seen and body.strip():
+            seen.add(path)
+            files.append({"path": path, "content": body[:400000]})
+        if len(files) >= 20:
+            break
+    return {"name": name, "about": one("ABOUT")[:300], "run": one("RUN")[:400], "files": files}
+
+
+@app.post("/api/appbuild")
+def api_appbuild40():
+    if denied():
+        return jsonify(error="locked"), 401
+    d = request.get_json(silent=True) or {}
+    ask = str(d.get("prompt", "")).strip()[:4000]
+    if len(ask) < 5:
+        return jsonify(error="Tell me what app to build."), 400
+    stack = str(d.get("stack", "auto"))
+    stack = stack if stack in AB40_STACKS else "auto"
+    old = []
+    for f in (d.get("files") or [])[:20]:
+        if isinstance(f, dict) and _ab_path40(f.get("path")):
+            old.append({"path": _ab_path40(f.get("path")), "content": str(f.get("content", ""))[:60000]})
+    user = "STACK: " + AB40_STACKS[stack] + "\n\n"
+    if old:
+        cur = "\n".join("### FILE: %s\n%s" % (f["path"], f["content"]) for f in old)[:90000]
+        user += ("CURRENT PROJECT FILES:\n" + cur + "\n### END\n\nCHANGE REQUEST: " + ask +
+                 "\n\nReturn the COMPLETE updated project in the same format (every file in full).")
+    else:
+        user += "APP TO BUILD: " + ask
+    msgs = [{"role": "system", "content": AB40_SYSTEM}, {"role": "user", "content": user}]
+    res = None
+    for budget in (12000, 6000):
+        try:
+            res = _ab_parse40(chat(msgs, 0.25, budget, smart=True))
+            if res["files"]:
+                break
+        except Exception as e:
+            print("appbuild failed:", str(e)[:200])
+    if not res or not res["files"]:
+        return jsonify(error="The AI could not build that app. Try a shorter, clearer command."), 502
+    if old and res["name"] == "my-app" and d.get("name"):
+        res["name"] = re.sub(r"[^a-z0-9\-]+", "-", str(d["name"]).lower()).strip("-")[:40] or "my-app"
+    return jsonify(res)
+
+
+@app.post("/api/appbuild/zip")
+def api_appbuild_zip40():
+    if denied():
+        return jsonify(error="locked"), 401
+    import zipfile
+    d = request.get_json(silent=True) or {}
+    name = re.sub(r"[^a-z0-9\-]+", "-", str(d.get("name", "my-app")).lower()).strip("-")[:40] or "my-app"
+    buf = io.BytesIO()
+    n = 0
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for f in (d.get("files") or [])[:20]:
+            p = _ab_path40(f.get("path")) if isinstance(f, dict) else ""
+            if p:
+                z.writestr(name + "/" + p, str(f.get("content", ""))[:400000])
+                n += 1
+    if not n:
+        return jsonify(error="No files to download."), 400
+    return Response(buf.getvalue(), mimetype="application/zip",
+                    headers={"Content-Disposition": "attachment; filename=%s.zip" % name})
+
+
+_AB40_HTML = r"""
+<style>#abBtn{order:4;justify-content:center;width:100%;border-radius:10px;padding:6px 8px;font-size:13px}
+.abcode{font:12.5px/1.5 ui-monospace,Menlo,Consolas,monospace;background:rgba(0,0,0,.35);color:#d8e6ff;padding:12px;border-radius:10px;white-space:pre;overflow:auto;max-height:340px;margin:8px 0}
+.abtabs{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0 0}.abtabs button{font:600 12px var(--ui);padding:5px 10px;border-radius:99px;border:1px solid var(--line);background:transparent;color:var(--ink);cursor:pointer}
+.abtabs button.on{background:var(--accent);color:var(--accent-ink);border-color:transparent}
+.abprev{width:100%;height:420px;border:1px solid var(--line);border-radius:10px;background:#fff;margin-top:8px}</style>
+<script>
+(function(){
+const Q=s=>document.querySelector(s);
+const E=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const STACKS=[['auto','Auto (AI chooses)'],['html','HTML + CSS + JavaScript (web, live preview)'],['flask','Python Flask (web)'],['tk','Python Tkinter (desktop)'],['pygame','Python Pygame (game)'],['node','Node.js + Express (web)'],['react','React + Vite (web)'],['java','Java'],['csharp','C# (.NET)'],['cpp','C++'],['go','Go'],['rust','Rust'],['php','PHP (web)'],['flutter','Flutter / Dart (mobile)'],['kotlin','Kotlin']];
+async function post(u,b){const r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json','X-Access-Key':localStorage.ak||''},body:JSON.stringify(b)});
+  if(!r.ok){const j=await r.json().catch(()=>({}));throw new Error(j.error||'Something went wrong.')}return r}
+const btn=document.createElement('button');btn.type='button';btn.className='btn';btn.id='abBtn';btn.textContent='🛠 App Builder';
+const host=Q('#chatTools');if(host)host.appendChild(btn);
+function modal(){
+  const o=document.createElement('div');o.className='oqmod';
+  o.innerHTML='<div class="oqbox wide" role="dialog"><button type="button" class="oqx" aria-label="Close">×</button><div id="abbox"></div></div>';
+  document.body.appendChild(o);
+  const k=e=>{if(e.key==='Escape')close()},close=()=>{o.remove();document.removeEventListener('keydown',k)};
+  document.addEventListener('keydown',k);o.addEventListener('click',e=>{if(e.target===o||e.target.closest('.oqx'))close()});
+  return o.querySelector('#abbox');
+}
+function preview(files){
+  const idx=files.find(f=>/(^|\/)index\.html?$/i.test(f.path));if(!idx)return '';
+  let h=idx.content;
+  files.forEach(f=>{const n=f.path.split('/').pop().replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+    if(/\.css$/i.test(f.path))h=h.replace(new RegExp('<link[^>]*href=["\\\']\\.?/?[^"\\\']*'+n+'["\\\'][^>]*>','i'),()=>'<style>'+f.content+'</style>');
+    if(/\.js$/i.test(f.path))h=h.replace(new RegExp('<script[^>]*src=["\\\']\\.?/?[^"\\\']*'+n+'["\\\'][^>]*><\/script>','i'),()=>'<script>'+f.content.replace(/<\/script/gi,'<\\/script')+'<\/script>')});
+  return h;
+}
+function home(box,app){
+  box.innerHTML='<h3>🛠 App Builder</h3><p class="oqmuted">Write what you want. Deep OQ builds the whole app in the language you choose. You get every file, a preview for web apps, and a ZIP to download.</p>'
+   +'<div class="stuf"><label>Language / type of app<select id="abs">'+STACKS.map(s=>'<option value="'+s[0]+'">'+E(s[1])+'</option>').join('')+'</select></label>'
+   +'<label id="abl">'+(app?'What should I change in this app?':'Your command')+'<textarea id="abp" style="min-height:90px" maxlength="4000" placeholder="'+(app?'Add a dark mode and a score board':'A to-do app with dark mode that saves tasks in the browser')+'"></textarea></label>'
+   +'<button type="button" class="oqbtn pri" id="abg">'+(app?'Change the app':'Build the app')+'</button></div><div id="abo"></div>';
+  if(app)Q('#abs').value=app.stack||'auto';
+  const go=Q('#abg');
+  go.onclick=async()=>{
+    const p=Q('#abp').value.trim(),out=Q('#abo');if(p.length<5){out.innerHTML='<p>Write what to build first.</p>';return}
+    go.disabled=true;out.innerHTML='<p class="oqmuted">Building your app… this can take up to a minute.</p>';
+    try{const r=await post('/api/appbuild',{prompt:p,stack:Q('#abs').value,files:app?app.files:[],name:app?app.name:''});
+      const j=await r.json();j.stack=Q('#abs').value;show(box,j)}
+    catch(e){out.innerHTML='<p>'+E(e.message)+'</p>'}
+    go.disabled=false;
+  };
+}
+function show(box,app){
+  let sel=0;const pv=preview(app.files);
+  box.innerHTML='<h3>✅ '+E(app.name)+'</h3><p>'+E(app.about)+'</p>'
+   +(app.run?'<div class="oqmuted">How to run:</div><div class="abcode" style="max-height:none;white-space:pre-wrap">'+E(app.run)+'</div>':'')
+   +'<div class="oqvote"><button type="button" class="oqbtn pri" id="abz">⬇ Download ZIP</button>'+(pv?'<button type="button" class="oqbtn" id="abv">▶ Preview</button>':'')
+   +'<button type="button" class="oqbtn" id="abn">+ Change this app</button><button type="button" class="oqbtn" id="abw">New app</button></div>'
+   +'<div id="abpv"></div><div class="abtabs" id="abt"></div><div id="abf"></div>';
+  const tabs=Q('#abt'),fb=Q('#abf');
+  function draw(){
+    tabs.innerHTML=app.files.map((f,i)=>'<button type="button" data-i="'+i+'" class="'+(i===sel?'on':'')+'">'+E(f.path)+'</button>').join('');
+    fb.innerHTML='<div class="oqvote"><button type="button" class="oqbtn" id="abc">Copy this file</button></div><div class="abcode">'+E(app.files[sel].content)+'</div>';
+    tabs.querySelectorAll('button').forEach(b=>b.onclick=()=>{sel=+b.dataset.i;draw()});
+    Q('#abc').onclick=async e=>{try{await navigator.clipboard.writeText(app.files[sel].content);e.target.textContent='Copied ✓'}catch(_){e.target.textContent='Copy failed'}};
+  }
+  draw();
+  Q('#abz').onclick=async e=>{e.target.disabled=true;
+    try{const r=await post('/api/appbuild/zip',{name:app.name,files:app.files});const b=await r.blob(),a=document.createElement('a');
+      a.href=URL.createObjectURL(b);a.download=app.name+'.zip';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),4000)}
+    catch(err){alert(err.message)}e.target.disabled=false};
+  const v=Q('#abv');if(v)v.onclick=()=>{Q('#abpv').innerHTML='<iframe class="abprev" sandbox="allow-scripts allow-forms allow-modals"></iframe>';Q('#abpv iframe').srcdoc=pv};
+  Q('#abn').onclick=()=>home(box,app);
+  Q('#abw').onclick=()=>home(box,null);
+}
+btn.onclick=()=>home(modal(),null);
+})();
+</script>
+"""
+try:
+    _i40 = PAGE.rfind("</body>")
+    if _i40 > 0:
+        PAGE = PAGE[:_i40] + _brand17(_AB40_HTML) + PAGE[_i40:]
+    print("Pack 40 ready: App Builder")
+except Exception as _e40:
+    print("Pack 40 failed:", _e40)
+# ================= END PACK 40 =================
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "ingest":
         ingest(sys.argv[2:])
