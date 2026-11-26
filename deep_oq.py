@@ -20060,6 +20060,466 @@ except NameError:
 
 print("Pack 38 added: %d advanced pro tools (%d tasks x %d domains x %d depths)" % (Z_TOTAL, len(_Z_TASKS), len(_Z_DOMS), len(_Z_DEPTH)))
 # ================= END PACK 38 =================
+# ================= PACK 39: DEVICE LINK (laptop / Android can be read by the AI, with your approval) =================
+_DEV_PAIR = {}     # code -> (username, expires)
+_DEV_JOBS = {}     # job id -> dict
+_DEV_SEEN = {}     # device id -> last poll time
+_DEV_OPS = ("info", "list", "read", "search")
+
+if USE_PG:
+    _pg("CREATE TABLE IF NOT EXISTS oq_devices(id TEXT PRIMARY KEY, username TEXT NOT NULL, name TEXT, th TEXT NOT NULL, ts DOUBLE PRECISION)")
+else:
+    with DB:
+        DB.execute("CREATE TABLE IF NOT EXISTS devices(id TEXT PRIMARY KEY, username TEXT NOT NULL, name TEXT, th TEXT NOT NULL, ts REAL)")
+
+# the device program talks to /api/device/c/* with its own token, not a browser login
+_rl39 = require_login
+def _rl39_wrap():
+    if request.path.startswith("/api/device/c/"):
+        return None
+    return _rl39()
+_lst39 = app.before_request_funcs.get(None, [])
+for _i39, _f39 in enumerate(_lst39):
+    if _f39 is _rl39:
+        _lst39[_i39] = _rl39_wrap
+
+
+def _dev_list(user):
+    rows = _q16("SELECT id,name FROM devices WHERE username=?", "SELECT id,name FROM oq_devices WHERE username=%s", (user,), True)
+    now = time.time()
+    return [{"id": r[0], "name": r[1] or "device", "online": _DEV_SEEN.get(r[0], 0) > now - 12} for r in rows]
+
+
+def _dev_auth():
+    tok = request.headers.get("X-Device-Token", "")
+    if len(tok) < 20:
+        return None
+    r = _q16("SELECT id,username FROM devices WHERE th=?", "SELECT id,username FROM oq_devices WHERE th=%s",
+             (hashlib.sha256(tok.encode()).hexdigest(),), True)
+    return {"id": r[0][0], "user": r[0][1]} if r else None
+
+
+def _dev_request(user, dev, op, arg, wait=40):
+    """Returns (ok, text). Waits for the device to answer (it may ask its owner to approve)."""
+    if op not in _DEV_OPS:
+        return False, "Unknown operation."
+    devs = [d for d in _dev_list(user) if (not dev or d["id"] == dev)]
+    online = [d for d in devs if d["online"]]
+    if not devs:
+        return False, "No device is linked. Open Devices and link one."
+    if not online:
+        return False, "Your device is offline. Start oq_device.py on it."
+    now = time.time()
+    for k in [k for k, v in _DEV_JOBS.items() if now - v["t"] > 300]:
+        _DEV_JOBS.pop(k, None)
+    jid = uuid.uuid4().hex[:12]
+    _DEV_JOBS[jid] = {"dev": online[0]["id"], "user": user, "op": op, "arg": str(arg or "")[:300], "state": "queued", "t": now}
+    end = now + wait
+    while time.time() < end:
+        time.sleep(0.4)
+        j = _DEV_JOBS.get(jid)
+        if j and j["state"] == "done":
+            _DEV_JOBS.pop(jid, None)
+            return bool(j["ok"]), str(j["data"])
+    _DEV_JOBS.pop(jid, None)
+    return False, "The device did not answer in time (it may be waiting for you to approve on the device)."
+
+
+@app.post("/api/device/pair/new")
+def api_device_pair_new39():
+    u = login_session.get("user") or ""
+    now = time.time()
+    for k in [k for k, v in _DEV_PAIR.items() if v[1] < now]:
+        _DEV_PAIR.pop(k, None)
+    if sum(1 for v in _DEV_PAIR.values() if v[0] == u) >= 5:
+        return jsonify(error="Too many unused codes. Wait 10 minutes."), 429
+    if len(_dev_list(u)) >= 10:
+        return jsonify(error="You already have 10 devices. Unlink one first."), 400
+    code = "".join(secrets.choice(_VR_ALPHA) for _ in range(8))
+    _DEV_PAIR[code] = (u, now + 600)
+    return jsonify(code=code)
+
+
+@app.post("/api/device/c/pair")
+def api_device_c_pair39():
+    if _too_many_fails():
+        return jsonify(error="Too many tries. Wait 10 minutes."), 429
+    d = request.get_json(silent=True) or {}
+    item = _DEV_PAIR.pop(str(d.get("code", "")).upper().strip()[:12], None)
+    if not item or item[1] < time.time():
+        _login_fails.setdefault(_client_ip(), []).append(time.time())
+        return jsonify(error="That code is wrong or expired."), 400
+    tok, did = secrets.token_urlsafe(32), uuid.uuid4().hex[:12]
+    name = re.sub(r"[^\w .\-]", "", str(d.get("name", "device")))[:40] or "device"
+    _q16("INSERT INTO devices(id,username,name,th,ts) VALUES(?,?,?,?,?)",
+         "INSERT INTO oq_devices(id,username,name,th,ts) VALUES(%s,%s,%s,%s,%s)",
+         (did, item[0], name, hashlib.sha256(tok.encode()).hexdigest(), time.time()))
+    return jsonify(token=tok, id=did)
+
+
+@app.get("/api/device/c/poll")
+def api_device_c_poll39():
+    a = _dev_auth()
+    if not a:
+        return jsonify(error="unlinked"), 401
+    _DEV_SEEN[a["id"]] = time.time()
+    jobs = []
+    for jid, j in list(_DEV_JOBS.items()):
+        if j["dev"] == a["id"] and j["state"] == "queued":
+            j["state"] = "sent"
+            jobs.append({"id": jid, "op": j["op"], "arg": j["arg"]})
+    return jsonify(jobs=jobs)
+
+
+@app.post("/api/device/c/result")
+def api_device_c_result39():
+    a = _dev_auth()
+    if not a:
+        return jsonify(error="unlinked"), 401
+    d = request.get_json(silent=True) or {}
+    j = _DEV_JOBS.get(str(d.get("job", "")))
+    if not j or j["dev"] != a["id"] or j["state"] != "sent":
+        return jsonify(error="unknown job"), 404
+    j.update(state="done", ok=bool(d.get("ok")), data=str(d.get("data", ""))[:60000])
+    return jsonify(ok=True)
+
+
+@app.get("/api/device/list")
+def api_device_list39():
+    if denied():
+        return jsonify(error="locked"), 401
+    return jsonify(devices=_dev_list(login_session.get("user") or ""))
+
+
+@app.post("/api/device/unlink")
+def api_device_unlink39():
+    if denied():
+        return jsonify(error="locked"), 401
+    did = str((request.get_json(silent=True) or {}).get("id", ""))[:20]
+    _q16("DELETE FROM devices WHERE id=? AND username=?", "DELETE FROM oq_devices WHERE id=%s AND username=%s",
+         (did, login_session.get("user") or ""))
+    return jsonify(ok=True)
+
+
+@app.post("/api/device/run")
+def api_device_run39():
+    if denied():
+        return jsonify(error="locked"), 401
+    d = request.get_json(silent=True) or {}
+    ok, data = _dev_request(login_session.get("user") or "", str(d.get("device", ""))[:20], str(d.get("op", "")), d.get("arg", ""))
+    return (jsonify(data=data) if ok else (jsonify(error=data), 400))
+
+
+_DEVICE_PY = r'''#!/usr/bin/env python3
+"""Deep OQ device link (standard library only). Read-only: info, list, search, read.
+First time:  python oq_device.py https://your-site CODE --share ~/Documents --share ~/Downloads
+Later:       python oq_device.py        (remembers the site, token and shared folders)
+Options:     --auto-read  = do not ask y/n before each file read (only inside shared folders)
+Stop it with Ctrl+C. Unlink any time from the Devices window on the website."""
+import argparse, json, os, platform, re, shutil, socket, sys, time, urllib.request, urllib.error
+
+CFG = os.path.join(os.path.expanduser("~"), ".oq_device.json")
+BLOCK = re.compile(r"(\.ssh|\.gnupg|\.aws|\.env|id_rsa|id_ed25519|passwd|shadow|password|secret|token|credential|wallet|keychain|\.pem$|\.key$|\.kdbx$)", re.I)
+TEXT = {".txt", ".md", ".csv", ".tsv", ".json", ".xml", ".yaml", ".yml", ".log", ".html", ".css", ".js", ".ts", ".py", ".java",
+        ".c", ".cpp", ".h", ".cs", ".go", ".rs", ".php", ".sql", ".sh", ".ini", ".rtf"}
+MAXREAD = 40000
+
+
+def load():
+    try:
+        return json.load(open(CFG, encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def save(c):
+    with open(CFG, "w", encoding="utf-8") as f:
+        json.dump(c, f)
+    try:
+        os.chmod(CFG, 0o600)
+    except OSError:
+        pass
+
+
+def call(c, method, path, body=None):
+    req = urllib.request.Request(c["server"] + path, method=method,
+                                 data=json.dumps(body).encode() if body is not None else None,
+                                 headers={"Content-Type": "application/json", "X-Device-Token": c.get("token", "")})
+    with urllib.request.urlopen(req, timeout=25) as r:
+        return json.loads(r.read().decode() or "{}")
+
+
+def safe(arg, roots):
+    arg = (arg or "").strip().strip('"')
+    exp = os.path.expanduser(arg)
+    cands = [exp] if os.path.isabs(exp) else [os.path.join(r, arg) for r in roots]
+    for cand in cands:
+        rp = os.path.realpath(cand)
+        for r in roots:
+            if rp == r or rp.startswith(r + os.sep):
+                rel = os.path.relpath(rp, r)
+                if rel != "." and BLOCK.search(rel):
+                    raise PermissionError("That name looks private, so it is blocked.")
+                if os.path.exists(rp):
+                    return rp
+    raise FileNotFoundError("Not found inside your shared folders.")
+
+
+def ask_ok(msg):
+    if not sys.stdin or not sys.stdin.isatty():
+        return False
+    try:
+        return input("\n" + msg + "\nAllow? [y/N] ").strip().lower() in ("y", "yes")
+    except EOFError:
+        return False
+
+
+def op_info(roots):
+    t, u, f = shutil.disk_usage(os.path.expanduser("~"))
+    out = ["Name: " + socket.gethostname(), "System: " + platform.platform(), "Python: " + platform.python_version(),
+           "Disk free: %.1f GB of %.1f GB" % (f / 1e9, t / 1e9), "Shared folders: " + (", ".join(roots) or "none")]
+    try:
+        import psutil
+        b = psutil.sensors_battery()
+        if b:
+            out.append("Battery: %d%%%s" % (b.percent, " (charging)" if b.power_plugged else ""))
+        out.append("Memory used: %d%%" % psutil.virtual_memory().percent)
+    except Exception:
+        pass
+    return "\n".join(out)
+
+
+def op_list(arg, roots):
+    if not (arg or "").strip():
+        return "Shared folders:\n" + "\n".join(roots)
+    p = safe(arg, roots)
+    if not os.path.isdir(p):
+        raise NotADirectoryError("That is a file. Use read.")
+    out = []
+    for n in sorted(os.listdir(p))[:300]:
+        if n.startswith(".") or BLOCK.search(n):
+            continue
+        fp = os.path.join(p, n)
+        out.append("[folder] " + n if os.path.isdir(fp) else "[file] %s  (%d KB)" % (n, os.path.getsize(fp) // 1024))
+    return p + "\n" + ("\n".join(out[:200]) or "(empty)")
+
+
+def op_read(arg, roots, auto):
+    p = safe(arg, roots)
+    ext = os.path.splitext(p)[1].lower()
+    if not os.path.isfile(p):
+        raise IsADirectoryError("That is a folder. Use list.")
+    if ext not in TEXT and ext != ".pdf":
+        raise ValueError("Only text, code, CSV, JSON and PDF files can be read.")
+    if os.path.getsize(p) > 20 * 1024 * 1024:
+        raise ValueError("That file is too big.")
+    if not auto and not ask_ok("Deep OQ wants to READ this file:\n  " + p):
+        raise PermissionError("You declined on the device.")
+    if ext == ".pdf":
+        try:
+            from pypdf import PdfReader
+        except ImportError:
+            raise ValueError("To read PDFs run: pip install pypdf")
+        txt = "\n".join((pg.extract_text() or "") for pg in PdfReader(p).pages)
+        if not txt.strip():
+            raise ValueError("This PDF has no text (it may be a scan).")
+        return txt[:MAXREAD]
+    with open(p, "r", encoding="utf-8", errors="replace") as f:
+        return f.read(MAXREAD)
+
+
+def op_search(arg, roots):
+    words = [w for w in re.findall(r"\w+", (arg or "").lower()) if len(w) > 1][:6]
+    if not words:
+        raise ValueError("Give some search words.")
+    end, res = time.time() + 10, []
+    for r in roots:
+        for d, dirs, files in os.walk(r):
+            dirs[:] = [x for x in dirs if not x.startswith(".") and not BLOCK.search(x)]
+            for f in files:
+                if time.time() > end or len(res) >= 20:
+                    break
+                if f.startswith(".") or BLOCK.search(f):
+                    continue
+                fp, low = os.path.join(d, f), f.lower()
+                if all(w in low for w in words):
+                    res.append(fp + "  (name match)")
+                    continue
+                if os.path.splitext(low)[1] in TEXT:
+                    try:
+                        if os.path.getsize(fp) > 500000:
+                            continue
+                        t = open(fp, encoding="utf-8", errors="ignore").read().lower()
+                        if all(w in t for w in words):
+                            i = t.find(words[0])
+                            res.append("%s  ...%s..." % (fp, t[max(0, i - 40):i + 80].replace("\n", " ")))
+                    except OSError:
+                        pass
+    return "\n".join(res) or "Nothing found."
+
+
+def handle(j, roots, auto):
+    try:
+        if j["op"] != "info" and not roots:
+            raise PermissionError("No shared folder. Restart with --share FOLDER.")
+        fn = {"info": lambda: op_info(roots), "list": lambda: op_list(j["arg"], roots),
+              "read": lambda: op_read(j["arg"], roots, auto), "search": lambda: op_search(j["arg"], roots)}.get(j["op"])
+        if not fn:
+            raise ValueError("Unknown operation.")
+        return True, fn()
+    except Exception as e:
+        return False, "%s: %s" % (type(e).__name__, e)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("server", nargs="?")
+    ap.add_argument("code", nargs="?")
+    ap.add_argument("--share", action="append")
+    ap.add_argument("--auto-read", action="store_true")
+    ap.add_argument("--name")
+    a = ap.parse_args()
+    c = load()
+    if a.server and a.code:
+        c = {"server": a.server.rstrip("/")}
+        try:
+            r = call(c, "POST", "/api/device/c/pair", {"code": a.code, "name": a.name or socket.gethostname()})
+        except urllib.error.HTTPError as e:
+            sys.exit("Could not link: " + e.read().decode()[:200])
+        c["token"] = r["token"]
+        print("Linked.")
+    elif not c.get("token"):
+        sys.exit("First run: python oq_device.py https://your-site CODE --share ~/Documents")
+    if a.share:
+        c["shares"] = [os.path.realpath(os.path.expanduser(s)) for s in a.share]
+    save(c)
+    roots = [r for r in c.get("shares", []) if os.path.isdir(r)]
+    print("Deep OQ device link is running. Shared folders:", ", ".join(roots) or "none (use --share)")
+    print("Read-only. You will be asked before each file is read" + (" (disabled by --auto-read)." if a.auto_read else ".") + " Ctrl+C to stop.")
+    while True:
+        try:
+            for j in call(c, "GET", "/api/device/c/poll").get("jobs", []):
+                ok, data = handle(j, roots, a.auto_read)
+                call(c, "POST", "/api/device/c/result", {"job": j["id"], "ok": ok, "data": data})
+            time.sleep(2)
+        except urllib.error.HTTPError as e:
+            if e.code == 401:
+                sys.exit("This device was unlinked. Link it again from the website.")
+            time.sleep(5)
+        except KeyboardInterrupt:
+            sys.exit("Stopped.")
+        except Exception:
+            time.sleep(5)
+
+
+if __name__ == "__main__":
+    main()
+'''
+
+
+@app.get("/device/oq_device.py")
+def device_script39():
+    return Response(_DEVICE_PY, mimetype="text/x-python",
+                    headers={"Content-Disposition": "attachment; filename=oq_device.py", "Cache-Control": "no-cache"})
+
+
+# ---- let the Agent use the linked device (toolbox tools; the Agent runs them with the owner's account)
+def _tb_dev39(op):
+    def f(x):
+        u = getattr(_tl, "dev_user", "")
+        if not u:
+            return "Device tools only work inside the Agent."
+        ok, data = _dev_request(u, None, op, str(x).strip())
+        return data if ok else "Device error: " + data
+    return f
+
+
+for _n39, (_d39, _o39) in {
+        "device_info": ("system, disk and battery of my linked device (input can be empty)", "info"),
+        "device_list_files": ("list a folder on my linked device; empty input lists the shared folders", "list"),
+        "device_search_files": ("search file names and text on my linked device by words", "search"),
+        "device_read_file": ("read one text, code, CSV, JSON or PDF file on my linked device (owner approves on the device)", "read")}.items():
+    TOOLBOX[_n39] = {"cat": "device", "desc": _d39, "fn": _tb_dev39(_o39)}
+
+AGENT_SYSTEM += ("\n\nDEVICE TOOLS (inside the toolbox tool): device_info, device_list_files, device_search_files, device_read_file. "
+                 "Use them only when the user asks about files on their own laptop or phone. Input format: 'device_search_files | electricity bill'. "
+                 "They are read-only and the owner may decline. Never claim you saw a file unless the tool returned its text.")
+
+_agent_run_base39 = _agent_run
+
+
+def _agent_run(jid, goal, history, opts=None):
+    _tl.dev_user = (_ajobs.get(jid) or {}).get("user", "")
+    return _agent_run_base39(jid, goal, history, opts)
+
+
+_DEV39_HTML = r"""
+<style>header.top #devBtn{order:4;justify-content:center;width:100%;border-radius:10px;padding:6px 8px;font-size:13px}
+.devcmd{font:12.5px/1.5 ui-monospace,Menlo,Consolas,monospace;background:rgba(0,0,0,.35);color:#7CFFD0;padding:10px;border-radius:10px;word-break:break-all;margin:8px 0}</style>
+<script>
+(function(){
+const Q=s=>document.querySelector(s);
+const E=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+async function call(u,b){const o=b===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)};
+  const r=await fetch(u,o),j=await r.json().catch(()=>({}));if(!r.ok||j.error)throw new Error(j.error||'Something went wrong.');return j}
+const btn=document.createElement('button');btn.type='button';btn.className='btn';btn.id='devBtn';btn.textContent='💻 Devices';
+const host=Q('#chatTools');if(host)host.appendChild(btn);
+function modal(){
+  const o=document.createElement('div');o.className='oqmod';
+  o.innerHTML='<div class="oqbox" role="dialog" style="width:min(680px,100%)"><button type="button" class="oqx" aria-label="Close">×</button><div id="devbox"></div></div>';
+  document.body.appendChild(o);
+  const k=e=>{if(e.key==='Escape')close()},close=()=>{o.remove();document.removeEventListener('keydown',k)};
+  document.addEventListener('keydown',k);o.addEventListener('click',e=>{if(e.target===o||e.target.closest('.oqx'))close()});
+  return o.querySelector('#devbox');
+}
+async function home(box){
+  box.innerHTML='<h3>My devices</h3><p class="oqmuted">Loading…</p>';
+  let d;try{d=await call('/api/device/list')}catch(e){box.innerHTML='<h3>My devices</h3><p>'+E(e.message)+'</p>';return}
+  const on=d.devices.filter(x=>x.online);
+  box.innerHTML='<h3>My devices</h3><p class="oqmuted">Deep OQ can look at files you choose on your own laptop or Android phone. It is read-only, limited to folders you share, and you approve each file on the device.</p>'
+   +(d.devices.length?d.devices.map(x=>'<div class="oqtopic"><div class="top"><span><b>'+E(x.name)+'</b> '+(x.online?'🟢 online':'⚪ offline')+'</span><button type="button" class="oqbtn" data-un="'+E(x.id)+'">Unlink</button></div></div>').join(''):'<p class="oqmuted">No device linked yet.</p>')
+   +'<div class="oqvote"><button type="button" class="oqbtn pri" id="dvnew">Link a new device</button><a class="oqbtn" href="/device/oq_device.py" style="text-decoration:none">Download oq_device.py</a></div><div id="dvc"></div>'
+   +(on.length?'<h3 style="margin-top:16px">Use a device</h3><div class="stuf"><div class="stu2"><label>Device<select id="dvd">'+on.map(x=>'<option value="'+E(x.id)+'">'+E(x.name)+'</option>').join('')+'</select></label>'
+     +'<label>Action<select id="dvo"><option value="info">System info</option><option value="list">List a folder</option><option value="search">Search files</option><option value="read">Read a file</option><option value="ask">Read a file and ask Deep OQ</option></select></label></div>'
+     +'<label>Folder, file path or search words<input id="dva" maxlength="300" placeholder="Documents/bills.pdf or electricity bill"></label>'
+     +'<label>Your question about the file (for Read and ask)<textarea id="dvq" style="min-height:60px" maxlength="500"></textarea></label>'
+     +'<button type="button" class="oqbtn pri" id="dvr">Run</button></div><div id="dvout" class="stucard" style="display:none"></div>'
+     :(d.devices.length?'<p class="oqmuted">Start oq_device.py on your device to use it.</p>':''));
+  box.querySelectorAll('[data-un]').forEach(b=>b.onclick=async()=>{try{await call('/api/device/unlink',{id:b.dataset.un});home(box)}catch(e){alert(e.message)}});
+  Q('#dvnew').onclick=async()=>{
+    try{const j=await call('/api/device/pair/new',{});
+      Q('#dvc').innerHTML='<div class="stucard"><b>Code: '+E(j.code)+'</b> (valid 10 minutes, one use)<div class="oqmuted">1. Download oq_device.py. 2. On the device, open a terminal in the same folder and run:</div>'
+       +'<div class="devcmd">python oq_device.py '+E(location.origin)+' '+E(j.code)+' --share ~/Documents</div>'
+       +'<div class="oqmuted">Android: install Termux, then <b>pkg install python</b> and run the same command with <b>--share ~/storage/shared/Documents</b> (run <b>termux-setup-storage</b> first). iPhone is not supported.</div></div>'}
+    catch(e){alert(e.message)}
+  };
+  const run=Q('#dvr');
+  if(run)run.onclick=async()=>{
+    const op=Q('#dvo').value,arg=Q('#dva').value.trim(),dev=Q('#dvd').value,q=Q('#dvq').value.trim(),out=Q('#dvout');
+    out.style.display='block';out.textContent='Waiting for your device… approve on the device if it asks.';run.disabled=true;
+    try{
+      if(op==='ask'){
+        const r=await call('/api/device/run',{device:dev,op:'read',arg});
+        out.textContent='Read the file. Asking Deep OQ…';
+        const a=await call('/askfile',{q:q||'Summarize this file and list the key points.',name:arg.split(/[\\/]/).pop()||'file',text:r.data,session:'device'});
+        out.innerHTML='<div class="body">'+md(a.answer)+'</div>';
+      }else{const r=await call('/api/device/run',{device:dev,op,arg});out.innerHTML='<div class="stutxt">'+E(r.data)+'</div>'}
+    }catch(e){out.textContent=e.message}
+    run.disabled=false;
+  };
+}
+btn.onclick=()=>home(modal());
+})();
+</script>
+"""
+try:
+    _i39b = PAGE.rfind("</body>")
+    if _i39b > 0:
+        PAGE = PAGE[:_i39b] + _brand17(_DEV39_HTML) + PAGE[_i39b:]
+    print("Pack 39 ready: device link (read-only, approved on the device)")
+except Exception as _e39:
+    print("Pack 39 failed:", _e39)
+# ================= END PACK 39 =================
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "ingest":
         ingest(sys.argv[2:])
