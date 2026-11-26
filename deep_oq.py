@@ -21027,7 +21027,9 @@ def api_browse_plan42():
                      "{\"do\":\"goto\",\"url\":\"https://...\"}, {\"do\":\"click\",\"text\":\"visible text of a button or link\"}, "
                      "{\"do\":\"type\",\"label\":\"placeholder or label of the box\",\"text\":\"...\",\"enter\":true}, "
                      "{\"do\":\"press\",\"key\":\"Enter\"}, {\"do\":\"wait\",\"sec\":2}, {\"do\":\"read\"}]} "
-                     "At most 12 steps. Add a wait after each page load. Use read only if the user wants information from the page.\n\n"
+                     "At most 12 steps. Add a wait after each page load. Use read only if the user wants information from the page. "
+                     "To search a website, prefer ONE goto to its search-results link (for example https://www.youtube.com/results?search_query=lofi+music "
+                     "or https://www.google.com/search?q=millinore+song) instead of typing into a search box.\n\n"
                      "REQUEST: " + goal}], 0.2, 900)
         j = _json_from(raw)
     except Exception as e:
@@ -21088,7 +21090,37 @@ def _page():
     _PW.update(p=p, b=b, page=b.new_page())
     return _PW["page"]
 
+_TAGS = ["input:not([type=hidden]):not([type=checkbox]):not([type=radio]):not([type=submit]):not([type=button]):not([type=image])",
+         "textarea", "[contenteditable=true]", "[role=searchbox]", "[role=textbox]", "[role=combobox]"]
 
+
+def _fill(pg, lab, text):
+    lab = re.sub(r"[^\w .\-]", "", lab or "")[:60]
+    sels = []
+    if lab:
+        for attr in ("placeholder", "aria-label", "name", "title", "id"):
+            for t in _TAGS:
+                sels.append("%s[%s*='%s' i]:visible" % (t, attr, lab))
+    sels += [t + ":visible" for t in _TAGS]
+    for sel in sels:
+        try:
+            loc = pg.locator(sel)
+            if loc.count() == 0:
+                continue
+            el = loc.first
+        except Exception:
+            continue
+        try:
+            el.fill(text, timeout=4000)
+            return
+        except Exception:
+            try:
+                el.click(timeout=3000)
+                pg.keyboard.type(text, delay=20)
+                return
+            except Exception:
+                continue
+    raise RuntimeError("no text box found for '%s'" % lab)
 def op_act(arg):
     import webbrowser
     steps = json.loads(arg)[:20]
@@ -21121,7 +21153,7 @@ def op_act(arg):
             elif d == "click":
                 pg.get_by_text(s["text"], exact=False).first.click(timeout=8000)
             elif d == "type":
-                lab = s.get("label") or ""
+                lab = s.get("label") or "", s["text"])
                 loc = pg.get_by_placeholder(lab, exact=False).first if lab else pg.locator("input:visible,textarea:visible").first
                 try:
                     loc.fill(s["text"], timeout=5000)
