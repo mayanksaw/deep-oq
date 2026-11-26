@@ -21225,7 +21225,7 @@ def op_act(arg):
             try:
                 if d == "goto":
                     pg.goto(s["url"], timeout=30000)
-               elif d == "click":
+                elif d == "click":
                     t = s["text"]
                     done = False
                     # YouTube results: open the first real video link
