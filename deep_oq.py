@@ -20407,7 +20407,7 @@ def main():
         print("Linked.")
     elif not c.get("token"):
         sys.exit("First run: python oq_device.py https://your-site CODE --share ~/Documents")
-       if a.share:
+    if a.share:
         c["shares"] = [os.path.realpath(os.path.expanduser(s)) for s in a.share]
     if not c.get("shares"):
         home = os.path.expanduser("~")
@@ -20421,7 +20421,7 @@ def main():
     save(c)
     auto_all = bool(c.get("auto_read"))
     roots = [r for r in c.get("shares", []) if os.path.isdir(r)]
-        if not auto_all and roots and sys.stdin and sys.stdin.isatty():
+    if not auto_all and roots and sys.stdin and sys.stdin.isatty():
         print("\nDeep OQ wants READ-ONLY access to these folders:\n  " + "\n  ".join(roots))
         try:
             ans = input("Allow ONE time for everything inside them? Deep OQ will not ask again. [y/N] ").strip().lower()
