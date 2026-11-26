@@ -21084,14 +21084,14 @@ def _pw_worker():
     p = b = pg = None
     err = None
 
-       def launch():
-        nonlocal p, b, pg
-        from playwright.sync_api import sync_playwright
-        if p is None:
-            p = sync_playwright().start()
-        # Microsoft Edge only. No fallback to any other browser.
-        b = p.chromium.launch(channel="msedge", headless=False)
-        pg = b.new_page()
+def launch():
+    nonlocal p, b, pg
+    from playwright.sync_api import sync_playwright
+    if p is None:
+        p = sync_playwright().start()
+    # Microsoft Edge only. No fallback to any other browser.
+    b = p.chromium.launch(channel="msedge", headless=False)
+    pg = b.new_page()
 
     try:
         launch()
