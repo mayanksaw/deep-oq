@@ -19862,6 +19862,204 @@ try:
 except Exception as _e37:
     print("Pack 37 failed:", _e37)
 # ================= END PACK 37 =================
+# ================= PACK 38: 10,000+ ADVANCED PROFESSIONAL AI TOOLS (built on demand) =================
+# Tool name format:  z~<task>~<domain>~<depth>     e.g.  z~raci_matrix~project_management~deep
+# 50 tasks x ~100 domains x 2 depth levels = ~10,000 tools. No memory cost: each one is built only when used.
+
+_Z_SAFE = (" Never invent facts, figures, quotes, links, laws or citations; say plainly when you are unsure and mark any "
+           "number you are not certain about as an assumption. For health, legal, tax, money or safety topics give general "
+           "information only and add one short line to consult a qualified professional.")
+
+_Z_DEPTH = {
+    "standard": "Give a clear, practical, well-organised result a busy professional can use immediately.",
+    "deep": ("Go deeper: expert level, include trade-offs, edge cases, common failure points, a worked example, "
+             "and what to verify before acting."),
+}
+
+_Z_TASKS = {
+    "strategy_brief": ("Strategy brief", "Write a strategy brief: situation, objectives, options, recommended path, risks and the first 90 days."),
+    "gap_analysis": ("Gap analysis", "Do a gap analysis: current state, target state, gaps ranked by impact, and actions to close each."),
+    "root_cause": ("Root cause analysis", "Run a root cause analysis using 5-whys and a fishbone view, then list corrective and preventive actions."),
+    "risk_register": ("Risk register", "Build a risk register: risk, cause, likelihood, impact, early warning sign, owner role and mitigation."),
+    "raci_matrix": ("RACI matrix", "Create a RACI matrix for the main activities and roles, as plain text lines, and note common conflicts."),
+    "kpi_framework": ("KPI framework", "Design a KPI framework: 10 metrics, definitions, formulas, data sources, targets (as placeholders) and review rhythm."),
+    "okr_set": ("OKR set", "Write 3 objectives with 3 measurable key results each, plus the initiatives and how progress is checked."),
+    "roadmap_12m": ("12 month roadmap", "Make a 12 month roadmap with quarterly themes, monthly milestones, dependencies and decision points."),
+    "sop_writer": ("SOP writer", "Write a standard operating procedure: purpose, scope, roles, step-by-step actions, checks, records and exceptions."),
+    "checklist_audit": ("Audit checklist", "Write an audit checklist: what to inspect, evidence to request, pass/fail criteria and red flags."),
+    "policy_draft": ("Policy draft", "Draft an internal policy with purpose, scope, rules, responsibilities, exceptions and review cycle. Mark it as a template."),
+    "training_plan": ("Training plan", "Design a 4 week training plan with modules, exercises, assessments and how to measure the learning."),
+    "interview_kit": ("Interview kit", "Create an interview kit: 12 questions at rising difficulty, what good answers contain and a scoring rubric."),
+    "job_description": ("Job description", "Write a clear job description: purpose, duties, must-have and nice-to-have skills, success measures in 6 months."),
+    "onboarding_30_60_90": ("30-60-90 onboarding", "Write a 30-60-90 day onboarding plan with learning goals, deliverables and check-ins."),
+    "meeting_pack": ("Meeting pack", "Prepare a meeting pack: objective, agenda with timings, pre-reads, decisions needed and a follow-up template."),
+    "stakeholder_map": ("Stakeholder map", "Map the stakeholders: interests, influence, concerns, how to engage each and what to avoid."),
+    "comms_plan": ("Communication plan", "Write a communication plan: audiences, messages, channels, timing, owners and how feedback is collected."),
+    "change_plan": ("Change management plan", "Write a change plan: what changes, who is affected, resistance to expect, training, rollout and success signs."),
+    "business_case": ("Business case", "Write a business case: problem, options, costs and benefits (as placeholders), risks, recommendation and next steps."),
+    "swot_deep": ("SWOT with actions", "Do a SWOT with 5 points per part, then turn it into 6 concrete actions (SO, WO, ST, WT)."),
+    "competitor_scan": ("Competitor scan framework", "Give a framework to scan competitors: what to compare, where to find the data legitimately, and how to find a gap. Do not invent competitor facts."),
+    "customer_persona": ("Customer personas", "Create 3 realistic personas: goals, pain points, buying triggers, objections and how to reach them. Label them as hypotheses."),
+    "journey_map": ("Customer journey map", "Map the journey stage by stage: actions, thoughts, pain points, opportunities and metrics."),
+    "pricing_model": ("Pricing model options", "Explain pricing models that fit, how to choose, a method to test price, and the risks. Numbers are placeholders."),
+    "experiment_plan": ("Experiment plan", "Design 3 experiments: hypothesis, setup, sample, success metric, duration and how to read the result."),
+    "data_dictionary": ("Data dictionary", "Create a data dictionary: fields, meaning, type, allowed values, owner and quality rules."),
+    "dashboard_spec": ("Dashboard spec", "Specify a dashboard: audience, questions it answers, charts, filters, data sources and refresh needs."),
+    "data_quality": ("Data quality plan", "Write a data quality plan: checks, thresholds, monitoring, ownership and issue handling."),
+    "sql_pack": ("SQL practice pack", "Write 8 SQL tasks for this domain from easy to hard with a sample schema, tasks and reference solutions."),
+    "python_automation": ("Python automation ideas", "List 10 tasks in this domain worth automating with Python, with libraries, effort, risk and a code outline for the best one."),
+    "prompt_library": ("AI prompt library", "Write 12 high-quality prompts a professional here can reuse, each with its goal, inputs and a quality check."),
+    "ai_use_cases": ("AI use cases", "List 10 realistic AI use cases, the data needed, benefits, risks, human review steps and a pilot plan."),
+    "ethics_review": ("Ethics and risk review", "Review the ethical, privacy and fairness risks, and give safeguards and questions to ask before launch."),
+    "compliance_matrix": ("Compliance matrix", "Make a compliance matrix of requirement areas, what to check, evidence and owners. Tell the user to confirm exact rules with official sources."),
+    "incident_playbook": ("Incident playbook", "Write an incident playbook: detection, triage, roles, containment, communication, recovery and review."),
+    "bcp_plan": ("Continuity plan", "Write a business continuity outline: critical functions, scenarios, recovery targets (placeholders), backups and drills."),
+    "vendor_eval": ("Vendor evaluation", "Create a vendor evaluation: criteria with weights, questions, red flags, scoring sheet and a decision memo template."),
+    "negotiation_prep": ("Negotiation prep", "Prepare a negotiation: goals, priorities, limits, concessions, tactics, scripts and a walk-away plan."),
+    "proposal_writer": ("Proposal writer", "Write a proposal outline: understanding of need, approach, timeline, team, assumptions and pricing placeholders."),
+    "case_study": ("Case study", "Write a clearly labelled hypothetical case study with context, decisions, results and lessons, plus 4 discussion questions."),
+    "whitepaper_outline": ("White paper outline", "Write a detailed white paper outline with thesis, sections, evidence types to gather and a call to action."),
+    "research_design": ("Research design", "Design a study: question, hypotheses, method, sampling, measures, ethics, analysis plan and limitations."),
+    "literature_map": ("Literature review map", "Make a literature review structure: themes, search terms, inclusion rules and gaps to look for. Do not invent papers."),
+    "exam_pack": ("Exam pack", "Write a 20 question exam for this domain with mixed types, a marking guide and answer key."),
+    "capstone_project": ("Capstone project", "Design a capstone project: brief, deliverables, milestones, rubric and portfolio presentation tips."),
+    "mentor_questions": ("Mentor questions", "List 15 sharp questions to ask a mentor or senior expert, grouped by theme."),
+    "career_ladder": ("Career ladder", "Describe levels from entry to senior: skills, scope, signals of readiness and how to progress."),
+    "postmortem": ("Project postmortem", "Write a blameless postmortem template and fill it with prompts: timeline, what went well, what failed, lessons and actions."),
+}
+
+_Z_RAW = (
+    "Software architecture,Cloud cost optimization,Cybersecurity operations,Data engineering,Machine learning operations,Product management,"
+    "UX research,Digital marketing,Search engine optimization,Sales operations,Customer success,HR and talent acquisition,Corporate finance,"
+    "Accounting,Indian taxation,Banking operations,Insurance underwriting,Investment research,Startup fundraising,Supply chain management,"
+    "Manufacturing operations,Quality engineering,Civil engineering,Mechanical engineering,Electrical engineering,Electronics design,"
+    "Embedded systems,Robotics,Renewable energy projects,Agriculture technology,Food processing,Hospital administration,Clinical research,"
+    "Public health programs,Pharmacy management,Nursing education,Mental health programs,Education technology,Curriculum design,Research methods,"
+    "Academic writing,Contract management,Intellectual property,Regulatory compliance,Real estate development,Urban planning,Transport planning,"
+    "Aviation operations,Logistics and warehousing,E-commerce operations,Retail management,Hospitality management,Tourism management,"
+    "Event management,Journalism,Film production,Game development,Music production,Photography business,Fashion business,Nonprofit management,"
+    "Public policy,Government procurement,Disaster management,Environmental management,Climate adaptation,Water resource management,Telecom networks,"
+    "Computer networking,DevOps,Software testing,Mobile app development,Web performance,Database administration,Blockchain applications,"
+    "Quantum computing basics,Data analytics,Business intelligence,Applied statistics,Operations research,Project management,Enterprise risk management,"
+    "Negotiation,Team leadership,Coaching and mentoring,Public speaking,Customer support,Community management,Content strategy,Copywriting,"
+    "Brand design,Podcasting,YouTube channel growth,Freelancing,Management consulting,Competitive exam preparation,Language teaching,Library science,"
+    "Museum curation,Sports management,Fitness coaching,Nutrition counselling,Veterinary practice"
+)
+
+
+def _z_slug(s):
+    return re.sub(r"[^a-z0-9]+", "_", str(s).lower()).strip("_")
+
+
+_Z_DOMS = {}
+for _zd in _Z_RAW.split(","):
+    _zd = _zd.strip()
+    if _zd and _z_slug(_zd) not in _Z_DOMS:
+        _Z_DOMS[_z_slug(_zd)] = _zd
+Z_TOTAL = len(_Z_TASKS) * len(_Z_DOMS) * len(_Z_DEPTH)
+
+
+def z_get(name):
+    p = str(name).split("~")
+    if len(p) != 4 or p[0] != "z" or p[1] not in _Z_TASKS or p[2] not in _Z_DOMS or p[3] not in _Z_DEPTH:
+        return None
+    label, instr = _Z_TASKS[p[1]]
+    dom = _Z_DOMS[p[2]]
+    return {"name": name, "cat": "Advanced Pro", "desc": "%s: %s (%s)" % (label, dom, p[3]),
+            "prompt": "Domain: %s. %s %s%s" % (dom, instr, _Z_DEPTH[p[3]], _Z_SAFE),
+            "ph": "Describe your situation, goals, constraints, or paste your draft (optional)"}
+
+
+def z_search(q, limit=60):
+    words = re.findall(r"[a-z0-9]+", str(q).lower())
+    if not words:
+        return []
+    depth = "standard"
+    for k in _Z_DEPTH:
+        if k in words:
+            depth = k
+            words = [w for w in words if w != k]
+    out, seen = [], set()
+
+    def add(ts, ds):
+        if (ts, ds) in seen or len(out) >= limit:
+            return
+        seen.add((ts, ds))
+        t = z_get("z~%s~%s~%s" % (ts, ds, depth))
+        out.append({"name": t["name"], "cat": t["cat"], "desc": t["desc"], "ph": t["ph"]})
+    tasks = list(_Z_TASKS.items())
+    if words:
+        for ts, (tl, _) in tasks:                       # task words + topic words, e.g. "raci hospital"
+            hay = (ts + " " + tl).lower()
+            tw = [w for w in words if w in hay]
+            rem = [w for w in words if w not in hay]
+            if tw and rem:
+                for ds, d in _Z_DOMS.items():
+                    if all(w in d.lower() for w in rem):
+                        add(ts, ds)
+                        if len(out) >= limit:
+                            return out
+        for ds in [ds for ds, d in _Z_DOMS.items() if all(w in d.lower() for w in words)][:5]:
+            for ts, _ in tasks[:12]:                    # topic only: show 12 tasks for each match
+                add(ts, ds)
+        if not out:                                     # task only: that task on a few domains
+            sample = random.sample(list(_Z_DOMS), min(8, len(_Z_DOMS)))
+            for ts, (tl, _) in tasks:
+                if all(w in (ts + " " + tl).lower() for w in words):
+                    for ds in sample:
+                        add(ts, ds)
+    return out[:limit]
+
+
+_ai_tool_run_base38 = ai_tool_run
+
+
+def ai_tool_run(name, text):
+    t = z_get(name)
+    if not t:
+        return _ai_tool_run_base38(name, text)
+    text = str(text or "").strip()[:12000] or "Use the domain above, state your assumptions, and give the best general result."
+    out = chat([{"role": "system", "content": AI_TOOLS_SYSTEM + "\n\nTASK: " + t["prompt"]},
+                {"role": "user", "content": text}], 0.4, 4000, smart=True)
+    return _plain_tool_text(hide_keys(plain_math(collapse_repeats(out))))
+
+
+@app.get("/api/aitools/z")
+def api_aitools_z38():
+    if denied():
+        return jsonify(error="locked"), 401
+    return jsonify(total=Z_TOTAL, tools=z_search(request.args.get("q", "")[:80]))
+
+
+try:
+    TOOLS_PAGE = TOOLS_PAGE.replace("</body></html>", r"""<script>
+(function(){
+  let t=null;const q=document.querySelector('#q');
+  q.addEventListener('input',()=>{clearTimeout(t);t=setTimeout(go,650)});
+  async function go(){
+    const f=q.value.trim();if(f.length<2)return;
+    try{
+      const j=await api('/api/aitools/z?q='+encodeURIComponent(f)),L=document.querySelector('#list');
+      if(!j.tools.length)return;
+      const h=document.createElement('div');h.className='muted';h.style.padding='8px 10px';
+      h.textContent='Advanced Pro tools ('+j.total.toLocaleString()+' available). Add the word deep for expert depth:';L.appendChild(h);
+      j.tools.forEach(x=>{const b=document.createElement('button');b.className='it';b.textContent=x.desc;
+        b.onclick=()=>{cur=x;stopSpeak();document.querySelector('#tt').textContent=x.desc;document.querySelector('#td').textContent='Category: '+x.cat;document.querySelector('#in').placeholder=x.ph};
+        L.appendChild(b)});
+    }catch(e){}
+  }
+})();
+</script></body></html>""", 1)
+except Exception as _e38:
+    print("Pack 38: could not extend the tools page:", _e38)
+
+try:
+    _G_CHAT.update({"/api/aitools/z"})
+except NameError:
+    pass
+
+print("Pack 38 added: %d advanced pro tools (%d tasks x %d domains x %d depths)" % (Z_TOTAL, len(_Z_TASKS), len(_Z_DOMS), len(_Z_DEPTH)))
+# ================= END PACK 38 =================
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "ingest":
         ingest(sys.argv[2:])
