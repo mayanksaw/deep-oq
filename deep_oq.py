@@ -20217,7 +20217,7 @@ def api_device_run39():
 
 
 _DEVICE_PY = r'''#!/usr/bin/env python3
-"""Deep OQ device link (standard library only). Read-only: info, list, search, read.
+"""Deep OQ device link (standard library only). Read-only: info, list, search, read, scan.
 First time:  python oq_device.py https://your-site CODE --share ~/Documents --share ~/Downloads
 Later:       python oq_device.py        (remembers the site, token and shared folders)
 Options:     --auto-read  = do not ask y/n before each file read (only inside shared folders)
