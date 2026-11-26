@@ -21089,9 +21089,9 @@ def _pw_worker():
         if p is None:
             p = sync_playwright().start()
         try:
-            b = p.chromium.launch(channel="chrome", headless=False)
+            b = p.chromium.launch(channel="msedge", headless=False)
         except Exception:
-            b = p.chromium.launch(headless=False)
+            b = p.chromium.launch(headless=False)   # fallback: Playwright's own Chromium
         pg = b.new_page()
 
     try:
@@ -21177,7 +21177,24 @@ def _fill(pg, lab, text):
                 continue
     raise RuntimeError("no text box found for '%s'" % lab)
 
-
+def _open_edge(url):
+    import subprocess, webbrowser
+    try:
+        if os.name == "nt":
+            for exe in (r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+                        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe"):
+                if os.path.exists(exe):
+                    subprocess.Popen([exe, url])
+                    return
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", "-a", "Microsoft Edge", url])
+            return
+        else:
+            subprocess.Popen(["microsoft-edge", url])
+            return
+    except Exception:
+        pass
+    webbrowser.open(url)   # last resort: default browser
 def op_act(arg):
     import webbrowser
     steps = json.loads(arg)[:20]
@@ -21198,7 +21215,7 @@ def op_act(arg):
         n = 0
         for s in steps:
             if s.get("do") == "goto":
-                webbrowser.open(s["url"])
+                _open_edge(s["url"])
                 n += 1
         return "Opened %d tab(s). To click and type too, run: pip install playwright && playwright install chromium" % n
 
