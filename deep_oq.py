@@ -21186,6 +21186,39 @@ try:
 except Exception as _e42:
     print("Pack 42 failed:", _e42)
 # ================= END PACK 42 =================
+# ==========================================================================
+# PACK 43: compact sidebar tool buttons.
+#  Daily, Coach, Studio, Devices and App Builder become small 2-per-row buttons
+#  (saves about half of the height) instead of five wide rows below Knowledge.
+# ==========================================================================
+_TG42_HTML = r"""
+<style>
+header.top .oqtg{order:4;display:grid;grid-template-columns:1fr 1fr;gap:4px;width:100%;margin:2px 0;box-sizing:border-box}
+header.top .oqtg .btn{width:100%!important;min-width:0;order:0!important;padding:4px 6px!important;font-size:12px!important;line-height:1.3;border-radius:8px!important;justify-content:center;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+header.top .oqtg .btn:last-child:nth-child(odd){grid-column:1/-1}
+</style>
+<script>
+(function(){
+const IDS=['dailyBtn','coachBtn','studioBtn','devBtn','abBtn'];
+function pack(){
+  const found=IDS.map(i=>document.getElementById(i)).filter(Boolean);
+  if(!found.length)return;
+  let box=document.querySelector('.oqtg');
+  if(!box){box=document.createElement('div');box.className='oqtg';found[0].parentNode.insertBefore(box,found[0])}
+  IDS.forEach(i=>{const b=document.getElementById(i);if(b&&b.parentNode!==box)box.appendChild(b)});
+}
+pack();window.addEventListener('load',pack);setTimeout(pack,1500);setTimeout(pack,4000);
+})();
+</script>
+"""
+try:
+    _i43 = PAGE.rfind("</body>")
+    if _i43 > 0:
+        PAGE = PAGE[:_i43] + _TG43_HTML + PAGE[_i43:]
+    print("Pack 43 ready: compact sidebar tool buttons")
+except Exception as _e43:
+    print("Pack 43 failed:", _e43)
+# ================= END PACK 43 =================
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "ingest":
         ingest(sys.argv[2:])
