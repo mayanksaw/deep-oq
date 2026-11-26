@@ -21088,7 +21088,8 @@ def _pw_worker():
         if p is None:
             p = sync_playwright().start()
         # Microsoft Edge only. No fallback to any other browser.
-        b = p.chromium.launch(channel="msedge", headless=False)
+        b = p.chromium.launch(channel="msedge", headless=False,
+                              args=["--autoplay-policy=no-user-gesture-required"])
         pg = b.new_page()  
 
     try:
@@ -21229,13 +21230,34 @@ def op_act(arg):
                 elif d == "click":
                     t = s["text"]
                     done = False
-                    # YouTube results: open the first real video link
+                    # YouTube results: open the first FULL video (skip Shorts and clips under 2.5 minutes)
                     if "youtube.com/results" in pg.url and t.lower() not in ("play",):
                         try:
-                            pg.locator("a#video-title:visible").first.click(timeout=8000)
-                            done = True
+                            pg.wait_for_selector("ytd-video-renderer", timeout=10000)
+                            cards = pg.locator("ytd-video-renderer")
+                            for k in range(min(cards.count(), 12)):
+                                c = cards.nth(k)
+                                try:
+                                    dur = c.locator("ytd-thumbnail-overlay-time-status-renderer").first.inner_text(timeout=1500)
+                                except Exception:
+                                    continue
+                                m = re.search(r"(?:(\d+):)?(\d+):(\d\d)", dur)
+                                if not m:
+                                    continue
+                                secs = int(m.group(1) or 0) * 3600 + int(m.group(2)) * 60 + int(m.group(3))
+                                if secs < 150:
+                                    continue
+                                c.locator("a#video-title").first.click(timeout=8000)
+                                done = True
+                                break
                         except Exception:
                             pass
+                        if done:
+                            pg.wait_for_timeout(2500)
+                            try:
+                                pg.evaluate("var v=document.querySelector('video'); if(v){v.play();}")
+                            except Exception:
+                                pass
                     if not done:
                         loc = pg.get_by_role("link", name=t).or_(pg.get_by_role("button", name=t))
                         try:
