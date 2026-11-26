@@ -18253,9 +18253,10 @@ header.top #studioBtn{order:4;justify-content:center;width:100%;border-radius:10
 const Q=s=>document.querySelector(s);
 const E=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 async function call(u,b){
+  const r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json','X-Access-Key':localStorage.ak||''},body:JSON.stringify(b)});
+async function call(u,b){
   const r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});
   const j=await r.json().catch(()=>({}));
-  const r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json','X-Access-Key':localStorage.ak||''},body:JSON.stringify(b)});
   if(!r.ok||j.error)throw new Error(j.error||'Something went wrong. Try again.');
   return j;
 }
