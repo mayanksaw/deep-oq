@@ -21079,7 +21079,6 @@ _PW_Q = None
 
 
 def _pw_worker():
-    # Playwright runs in its own thread, which has no asyncio loop, so the Sync API works
     p = b = pg = None
     err = None
 
