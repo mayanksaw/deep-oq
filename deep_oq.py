@@ -21309,12 +21309,12 @@ except Exception as _e43:
 # ================= END PACK 43 =================
 # ================= PACK 44: DEBATE ARENA + CLAIM CHECKER + DECISION LAB =================
 # Paste BELOW Pack 44 and ABOVE `if __name__ == "__main__":`. Needs Pack 21 (Studio) and Pack 43 order kept.
-# Settings (optional): DEEP_OQ_LAB38_DAILY = AI calls per person per day for these tools (default 60)
+# Settings (optional): DEEP_OQ_LAB44_DAILY = AI calls per person per day for these tools (default 60)
 
 LAB44_DAILY = int(os.environ.get("DEEP_OQ_LAB44_DAILY", "60"))
 
 
-def _lab38_gate():
+def _lab44_gate():
     if LAB44_DAILY > 0 and _limit_hit("studio_lab44", LAB44_DAILY):
         return jsonify(error="Daily limit reached for this tool. Come back tomorrow."), 429
     return None
@@ -21511,7 +21511,7 @@ try:
 except NameError:
     pass
 
-_LAB38_HTML = r"""
+_LAB44_HTML = r"""
 <style>
 .vd{display:inline-block;padding:2px 10px;border-radius:99px;font:700 12px var(--ui);color:#04122b}
 .vd.supported{background:#33e6a1}.vd.contradicted{background:#ff7a90}.vd.unclear{background:#F2A02E}
