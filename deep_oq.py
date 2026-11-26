@@ -21087,7 +21087,7 @@ def _pw_worker():
         nonlocal p, b, pg
         from playwright.sync_api import sync_playwright
         if p is None:
-            p = sync_playwright().start()
+        p = sync_playwright().start()
         # Microsoft Edge only. No fallback to any other browser.
         b = p.chromium.launch(channel="msedge", headless=False)
         pg = b.new_page()
