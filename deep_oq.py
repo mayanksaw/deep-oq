@@ -24343,6 +24343,293 @@ try:
 except Exception as _e52g:
     print("Pack 52: could not add the device guide:", _e52g)
 # ================= END PACK 52 =================
+# ================= PACK 53: SPORTS (live scores, today's games, who plays whom) =================
+# PASTE THIS WHOLE BLOCK in deep_oq.py just ABOVE the line:   if __name__ == "__main__":
+# Adds a "Sports" button next to "Devices". Scores come from ESPN's public score feed (no key needed).
+# Football (many leagues), basketball, American football, hockey, baseball, plus Cricket headlines.
+from concurrent.futures import ThreadPoolExecutor as _TPE53
+
+_SP53_LEAGUES = [   # key, label, ESPN path
+    ("epl", "Premier League", "soccer/eng.1"),
+    ("laliga", "La Liga", "soccer/esp.1"),
+    ("seriea", "Serie A", "soccer/ita.1"),
+    ("bundes", "Bundesliga", "soccer/ger.1"),
+    ("ligue1", "Ligue 1", "soccer/fra.1"),
+    ("ucl", "Champions League", "soccer/uefa.champions"),
+    ("uel", "Europa League", "soccer/uefa.europa"),
+    ("isl", "Indian Super League", "soccer/ind.1"),
+    ("mls", "MLS", "soccer/usa.1"),
+    ("wc", "World Cup", "soccer/fifa.world"),
+    ("nba", "NBA", "basketball/nba"),
+    ("nfl", "NFL", "football/nfl"),
+    ("nhl", "NHL", "hockey/nhl"),
+    ("mlb", "MLB", "baseball/mlb"),
+    ("eng2", "Championship (England)", "soccer/eng.2"),
+    ("por", "Primeira Liga", "soccer/por.1"),
+    ("ned", "Eredivisie", "soccer/ned.1"),
+    ("ksa", "Saudi Pro League", "soccer/ksa.1"),
+    ("lib", "Copa Libertadores", "soccer/conmebol.libertadores"),
+    ("afc", "AFC Champions League", "soccer/afc.champions"),
+    ("wnba", "WNBA", "basketball/wnba"),
+    ("ncaab", "College basketball", "basketball/mens-college-basketball"),
+    ("atp", "Tennis ATP", "tennis/atp"),
+    ("wta", "Tennis WTA", "tennis/wta"),
+    ("f1", "Formula 1", "racing/f1"),
+]
+_SP53_PATH = {k: p for k, _l, p in _SP53_LEAGUES}
+_SP53_LABEL = {k: l for k, l, _p in _SP53_LEAGUES}
+_SP53_CACHE = {}   # (league, date) -> (time, games)
+
+
+def _sp53_fetch(path, date=""):
+    url = "https://site.api.espn.com/apis/site/v2/sports/%s/scoreboard" % path
+    if date:
+        url += "?dates=" + date
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (DeepOQ sports)", "Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=8) as r:
+        return json.loads(r.read(3_000_000).decode("utf-8", "replace"))
+
+
+def _sp53_state(st):
+    s = (st or {}).get("state") or "pre"
+    return s if s in ("pre", "in", "post") else "pre"
+
+
+def _sp53_tennis(data, key):
+    out = []
+    for ev in (data.get("events") or [])[:200]:
+        for gr in (ev.get("groupings") or [])[:8]:
+            gname = ((gr.get("grouping") or {}).get("displayName") or "")
+            for comp in (gr.get("competitions") or [])[:150]:
+                try:
+                    cs = comp.get("competitors") or []
+                    if len(cs) < 2:
+                        continue
+                    rows = []
+                    for c in cs[:2]:
+                        a = c.get("athlete") or {}
+                        ls = [str(int(x.get("value"))) for x in (c.get("linescores") or []) if isinstance(x.get("value"), (int, float))]
+                        rows.append({"name": a.get("displayName") or a.get("shortName") or "?", "abbr": "",
+                                     "logo": (a.get("flag") or {}).get("href") or "", "score": " ".join(ls),
+                                     "winner": bool(c.get("winner"))})
+                    st = (comp.get("status") or {}).get("type") or {}
+                    out.append({"id": str(comp.get("id", "")), "lg": key, "league": (ev.get("name") or "") + (" · " + gname if gname else ""),
+                                "name": rows[0]["name"] + " vs " + rows[1]["name"], "date": comp.get("date") or comp.get("startDate") or ev.get("date", ""),
+                                "state": _sp53_state(st), "status": st.get("shortDetail") or st.get("detail") or "",
+                                "home": rows[0], "away": rows[1], "venue": ((comp.get("venue") or {}).get("court") or "")[:80]})
+                except Exception as e:
+                    print("sports: skipped one tennis match:", str(e)[:100])
+    return out
+
+
+def _sp53_race(data, key):
+    out = []
+    for ev in (data.get("events") or [])[:40]:
+        try:
+            comps = ev.get("competitions") or []
+            sess = []
+            top = []
+            state = _sp53_state((ev.get("status") or {}).get("type"))
+            for c in comps[:10]:
+                cst = (c.get("status") or {}).get("type") or {}
+                nm = ((c.get("type") or {}).get("abbreviation") or (c.get("type") or {}).get("text") or "")
+                sess.append({"name": nm, "date": c.get("date", ""), "state": _sp53_state(cst), "status": cst.get("shortDetail") or ""})
+                if nm.lower() in ("race", "r") and _sp53_state(cst) in ("in", "post"):
+                    cc = sorted(c.get("competitors") or [], key=lambda x: int(x.get("order") or 99))
+                    top = [{"pos": int(x.get("order") or 0), "name": (x.get("athlete") or {}).get("displayName") or ""} for x in cc[:3]]
+                    state = _sp53_state(cst)
+            out.append({"id": str(ev.get("id", "")), "lg": key, "league": "Formula 1", "kind": "race", "name": ev.get("name", ""),
+                        "date": ev.get("date", ""), "state": state, "status": ((ev.get("status") or {}).get("type") or {}).get("shortDetail") or "",
+                        "sessions": sess, "top": top, "home": {"name": ev.get("name", ""), "logo": "", "score": ""}, "away": {"name": "", "logo": "", "score": ""},
+                        "venue": (((comps[0].get("venue") if comps else None) or {}).get("fullName") or "")[:80]})
+        except Exception as e:
+            print("sports: skipped one race:", str(e)[:100])
+    return out
+
+
+def _sp53_games(data, key):
+    if key in ("atp", "wta"):
+        return _sp53_tennis(data, key)
+    if key == "f1":
+        return _sp53_race(data, key)
+    out = []
+    for ev in (data.get("events") or [])[:300]:
+        try:
+            comp = (ev.get("competitions") or [{}])[0]
+            st = (comp.get("status") or ev.get("status") or {}).get("type") or {}
+            teams = {}
+            order = []
+            for c in comp.get("competitors") or []:
+                tm = c.get("team") or {}
+                row = {"name": tm.get("displayName") or tm.get("name") or "?", "abbr": tm.get("abbreviation") or "",
+                       "logo": tm.get("logo") or "", "score": str(c.get("score") if c.get("score") is not None else ""),
+                       "winner": bool(c.get("winner"))}
+                teams[c.get("homeAway") or ("home" if not order else "away")] = row
+                order.append(row)
+            if not order:
+                continue
+            home = teams.get("home") or (order[0] if order else {"name": "?", "abbr": "", "logo": "", "score": "", "winner": False})
+            away = teams.get("away") or (order[1] if len(order) > 1 else {"name": "?", "abbr": "", "logo": "", "score": "", "winner": False})
+            state = st.get("state") or "pre"
+            out.append({"id": str(ev.get("id", "")), "lg": key, "league": _SP53_LABEL.get(key, ""), "name": ev.get("name", ""),
+                        "date": ev.get("date", ""), "state": state if state in ("pre", "in", "post") else "pre",
+                        "status": st.get("shortDetail") or st.get("detail") or "", "home": home, "away": away,
+                        "venue": ((comp.get("venue") or {}).get("fullName") or "")[:80]})
+        except Exception as e:
+            print("sports: skipped one game:", str(e)[:100])
+    return out
+
+
+def _sp53_league(key, date=""):
+    ck = (key, date)
+    hit = _SP53_CACHE.get(ck)
+    now = time.time()
+    if hit and now - hit[0] < (25 if any(g["state"] == "in" for g in hit[1]) else 90):
+        return hit[1]
+    try:
+        games = _sp53_games(_sp53_fetch(_SP53_PATH[key], date), key)
+        _SP53_CACHE[ck] = (now, games)
+        if len(_SP53_CACHE) > 1500:
+            _SP53_CACHE.pop(next(iter(_SP53_CACHE)))
+        return games
+    except Exception as e:
+        print("sports fetch failed:", key, str(e)[:120])
+        if hit:
+            return hit[1]   # an older answer is better than nothing
+        raise
+
+
+@app.get("/api/sports")
+def api_sports53():
+    if denied():
+        return jsonify(error="locked"), 401
+    lg = str(request.args.get("lg", "live"))[:12]
+    date = re.sub(r"[^0-9]", "", str(request.args.get("date", "")))[:8]
+    if date and len(date) != 8:
+        date = ""
+    if lg == "leagues":
+        return jsonify(leagues=[{"key": k, "label": l} for k, l, _p in _SP53_LEAGUES])
+    if lg in ("live", "all"):
+        keys = [k for k, _l, _p in _SP53_LEAGUES]
+        games, failed = [], 0
+        with _TPE53(max_workers=6) as ex:
+            futs = [ex.submit(_sp53_league, k, date) for k in keys]
+            for f in futs:
+                try:
+                    games += f.result(timeout=20)
+                except Exception:
+                    failed += 1
+        if failed == len(keys):
+            return jsonify(error="The score feed did not answer. Try again in a minute."), 502
+        if lg == "live":
+            games = [g for g in games if g["state"] == "in"]
+        return jsonify(games=games, updated=time.strftime("%H:%M:%S UTC", time.gmtime()), partial=bool(failed))
+    if lg not in _SP53_PATH:
+        return jsonify(error="Unknown league."), 400
+    try:
+        games = _sp53_league(lg, date)
+    except Exception:
+        return jsonify(error="The score feed did not answer. Try again in a minute."), 502
+    return jsonify(games=games, updated=time.strftime("%H:%M:%S UTC", time.gmtime()))
+
+
+_SPORTS53_HTML = r"""
+<style>header.top #spBtn{order:4;justify-content:center;width:100%;border-radius:10px;padding:6px 8px;font-size:13px}
+.spchips{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}
+.spchips button,.spdays button{font:inherit;font-size:12.5px;padding:5px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.18);background:transparent;color:inherit;cursor:pointer}
+.spchips button.on,.spdays button.on{background:var(--accent,#F2A02E);color:var(--accent-ink,#2B1A00);border-color:transparent}
+.spdays{display:flex;gap:6px;margin:6px 0 10px}
+.spg{border:1px solid rgba(255,255,255,.12);border-radius:12px;padding:10px 12px;margin:8px 0}
+.spg .spm{display:flex;justify-content:space-between;font-size:12px;opacity:.8;margin-bottom:6px;gap:8px}
+.spg .spr{display:flex;align-items:center;gap:8px;padding:3px 0;font-size:15px}
+.spg .spr img{width:22px;height:22px;object-fit:contain}
+.spg .spr .spn{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.spg .spr b.sps{min-width:28px;text-align:right;font-size:17px}
+.spg .spr.win .spn{font-weight:700}
+.splive{color:#ff5a5a;font-weight:700}.splive:before{content:"";display:inline-block;width:8px;height:8px;border-radius:50%;background:#ff5a5a;margin-right:5px}
+.sph{margin:14px 0 4px;font-size:13px;letter-spacing:.04em;text-transform:uppercase;opacity:.7}
+</style>
+<script>
+(function(){
+const Q=s=>document.querySelector(s);
+const E=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const H={'Content-Type':'application/json','X-Access-Key':localStorage.ak||''};
+async function get(u){const r=await fetch(u,{headers:{'X-Access-Key':localStorage.ak||''}}),j=await r.json().catch(()=>({}));if(!r.ok||j.error)throw new Error(j.error||'Something went wrong.');return j}
+const btn=document.createElement('button');btn.type='button';btn.className='btn';btn.id='spBtn';btn.textContent='🏟 Sports';
+const host=Q('#chatTools');if(host)host.appendChild(btn);
+const LG=[['live','🔴 Live now'],['all','All games'],['epl','Premier League'],['laliga','La Liga'],['seriea','Serie A'],['bundes','Bundesliga'],['ligue1','Ligue 1'],['ucl','Champions League'],['uel','Europa League'],['isl','Indian Super League'],['mls','MLS'],['wc','World Cup'],['nba','NBA'],['nfl','NFL'],['nhl','NHL'],['mlb','MLB'],['eng2','Championship'],['por','Primeira Liga'],['ned','Eredivisie'],['ksa','Saudi Pro League'],['lib','Libertadores'],['afc','AFC Champions'],['wnba','WNBA'],['ncaab','College basketball'],['atp','Tennis ATP'],['wta','Tennis WTA'],['f1','Formula 1'],['cricket','🏏 Cricket']];
+function ymd(d){return d.getFullYear()+String(d.getMonth()+1).padStart(2,'0')+String(d.getDate()).padStart(2,'0')}
+function modal(){
+  const o=document.createElement('div');o.className='oqmod';
+  o.innerHTML='<div class="oqbox" role="dialog" style="width:min(720px,100%)"><button type="button" class="oqx" aria-label="Close">×</button><div id="spbox"></div></div>';
+  document.body.appendChild(o);
+  let timer=null;
+  const k=e=>{if(e.key==='Escape')close()},close=()=>{clearInterval(timer);o.remove();document.removeEventListener('keydown',k)};
+  document.addEventListener('keydown',k);o.addEventListener('click',e=>{if(e.target===o||e.target.closest('.oqx'))close()});
+  o._setTimer=f=>{clearInterval(timer);timer=setInterval(()=>{if(document.body.contains(o)&&!document.hidden)f()},30000)};
+  return o;
+}
+function raceHTML(g){
+  const t=new Date(g.date),when=isNaN(t)?'':t.toLocaleDateString([], {weekday:'short',day:'numeric',month:'short'});
+  const live=g.state==='in';
+  const ses=(g.sessions||[]).map(s=>{const d=new Date(s.date),w=isNaN(d)?'':d.toLocaleString([], {weekday:'short',hour:'2-digit',minute:'2-digit'});return '<div class="spm" style="margin:2px 0"><span>'+E(s.name)+'</span><span>'+(s.state==='in'?'<span class="splive">LIVE</span>':s.state==='post'?'Done':E(w))+'</span></div>'}).join('');
+  const top=(g.top||[]).map(x=>'<div class="spr"><span class="spn">'+x.pos+'. '+E(x.name)+'</span></div>').join('');
+  return '<div class="spg"><div class="spm"><span>Formula 1</span><span>'+(live?'<span class="splive">LIVE</span>':E(g.status||when))+'</span></div><div class="spr"><span class="spn"><b>'+E(g.name)+'</b></span></div>'+(g.venue?'<div class="spm"><span>'+E(g.venue)+'</span></div>':'')+top+ses+'</div>';
+}
+function gameHTML(g){
+  if(g.kind==='race')return raceHTML(g);
+  const t=new Date(g.date),when=isNaN(t)?'':t.toLocaleString([], {weekday:'short',hour:'2-digit',minute:'2-digit'});
+  const live=g.state==='in',post=g.state==='post';
+  const stat=live?'<span class="splive">'+E(g.status||'LIVE')+'</span>':post?E(g.status||'Full time'):E(when||g.status);
+  const row=(x)=>'<div class="spr'+(x.winner?' win':'')+'">'+(x.logo?'<img loading="lazy" src="'+E(x.logo)+'" alt="">':'')+'<span class="spn">'+E(x.name)+'</span><b class="sps">'+(g.state==='pre'?'':E(x.score))+'</b></div>';
+  return '<div class="spg"><div class="spm"><span>'+E(g.league||'')+'</span><span>'+stat+'</span></div>'+row(g.home)+row(g.away)+(g.venue?'<div class="spm" style="margin:4px 0 0"><span>'+E(g.venue)+'</span></div>':'')+'</div>';
+}
+function listHTML(games){
+  if(!games.length)return '<p class="oqmuted">No games here right now.</p>';
+  const grp=[['in','Live now'],['pre','Coming up'],['post','Finished']];
+  const ord=(a,b)=>String(a.date).localeCompare(String(b.date));
+  return grp.map(([s,l])=>{const a=games.filter(g=>g.state===s).sort(ord);return a.length?'<div class="sph">'+l+' ('+a.length+')</div>'+a.map(gameHTML).join(''):''}).join('');
+}
+function open(){
+  const o=modal(),box=o.querySelector('#spbox');
+  let lg=localStorage.splg||'live',day=0;
+  box.innerHTML='<h3>Sports</h3><p class="oqmuted">Live scores, who plays whom and when. Updates every 30 seconds. Times are in your local time.</p><div class="spchips" id="spc"></div><div class="spdays" id="spd"></div><div id="spo"><p class="oqmuted">Loading…</p></div><p class="oqmuted" id="spu"></p>';
+  const chips=Q('#spc'),days=Q('#spd'),out=Q('#spo'),upd=Q('#spu');
+  function paintBars(){
+    chips.innerHTML=LG.map(([k,l])=>'<button type="button" data-k="'+k+'" class="'+(k===lg?'on':'')+'">'+E(l)+'</button>').join('');
+    days.innerHTML=(lg==='cricket'||lg==='live')?'':[['-1','Yesterday'],['0','Today'],['1','Tomorrow']].map(([d,l])=>'<button type="button" data-d="'+d+'" class="'+(String(day)===d?'on':'')+'">'+l+'</button>').join('');
+    chips.querySelectorAll('button').forEach(b=>b.onclick=()=>{lg=b.dataset.k;localStorage.splg=lg;paintBars();load(true)});
+    days.querySelectorAll('button').forEach(b=>b.onclick=()=>{day=+b.dataset.d;paintBars();load(true)});
+  }
+  async function load(first){
+    if(first)out.innerHTML='<p class="oqmuted">Loading…</p>';
+    try{
+      if(lg==='cricket'){
+        const r=await fetch('/news',{method:'POST',headers:{'Content-Type':'application/json','X-Access-Key':localStorage.ak||''},body:JSON.stringify({cat:'search',q:'live cricket score today'})});
+        const j=await r.json().catch(()=>({}));if(!r.ok||j.error)throw new Error(j.error||'Cricket headlines did not load.');
+        out.innerHTML='<p class="oqmuted">Cricket: latest score headlines (no ball-by-ball feed). Tap one to open the full scorecard.</p>'+(j.items||[]).slice(0,25).map(x=>'<div class="spg"><a href="'+E(x.link)+'" target="_blank" rel="noopener noreferrer" style="color:inherit;text-decoration:none"><div>'+E(x.title)+'</div><div class="spm" style="margin-top:4px"><span>'+E(x.source||'')+'</span><span>'+E((x.time||'').slice(0,22))+'</span></div></a></div>').join('');
+        upd.textContent='';return;
+      }
+      const d=new Date();d.setDate(d.getDate()+day);
+      const j=await get('/api/sports?lg='+encodeURIComponent(lg)+(lg==='live'?'':'&date='+ymd(d)));
+      out.innerHTML=(lg==='live'&&!j.games.length?'<p class="oqmuted">No game is live at this moment. Pick a league or "All games" to see today\'s fixtures.</p>':listHTML(j.games))+(j.partial?'<p class="oqmuted">Some leagues did not answer. Showing the rest.</p>':'');
+      upd.textContent='Updated '+j.updated;
+    }catch(e){if(first||!out.querySelector('.spg'))out.innerHTML='<p>'+E(e.message)+'</p>'}
+  }
+  paintBars();load(true);o._setTimer(()=>load(false));
+}
+btn.onclick=open;
+})();
+</script>
+"""
+try:
+    _i53 = PAGE.rfind("</body>")
+    if _i53 > 0:
+        PAGE = PAGE[:_i53] + _brand17(_SPORTS53_HTML) + PAGE[_i53:]
+    print("Pack 53 ready: Sports (live scores, fixtures)")
+except Exception as _e53:
+    print("Pack 53: could not add Sports:", _e53)
+# ================= END PACK 53 =================
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "ingest":
         ingest(sys.argv[2:])
