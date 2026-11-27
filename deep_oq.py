@@ -6617,7 +6617,8 @@ function speakText(raw,btn){
       if(rs.status===404){add('<div class="agplan">'+esc(s.error||'Task lost.')+'</div>');return end()}
       (s.events||[]).forEach(draw);since=s.next;tm.textContent=s.seconds+' s';
       if(s.state!=='working'){
-        if(s.state==='error')add('<div class="agplan">'+esc(s.error||'The agent could not finish.')+'</div>');
+        else if(s.state==='error'){add('<div class="agplan">'+esc(s.error||'The agent could not finish.')+'</div>');
+        if(/restarted/.test(s.error||'')&&!go.retried){go.retried=true;end();return go()}}
         else if(s.state==='stopped')add('<div class="agplan">Stopped.</div>');
         else{
           fin.hidden=false;
@@ -6750,7 +6751,7 @@ const fileIds=()=>agFiles.filter(f=>f.id).map(f=>f.id);
     all.forEach(x=>x.disabled=false);b.textContent=old;
   });
   $('#agFiles').onclick=e=>{const b=e.target.closest('[data-agrm]');if(b){agFiles.splice(+b.dataset.agrm,1);drawAgFiles()}};
-  run.onclick=go;
+  run.onclick=()=>{go.retried=false;go()};
   goal.addEventListener('keydown',e=>{if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();go()}});
   stop.onclick=()=>{if(jid){stop.disabled=true;api('/agent/'+jid+'/stop',{}).finally(()=>{stop.disabled=false})}};
 })();
@@ -11749,6 +11750,7 @@ def _agent_run(jid, goal, history, opts=None):
         job["error"] = "The agent could not finish right now. Please try again."
     finally:
         job["done_at"] = time.time()
+        _aj_save(jid, job)
 
 
 def _nb_build(srcs, budget=26000):
@@ -11876,19 +11878,59 @@ def agent_start():
         _ajobs[jid] = {"t": now, "user": user, "state": "working", "events": [], "images": [], "apps": [], "final": "", "plan": "", "fids": _af_owned(d.get("files"))}
     threading.Thread(target=_agent_run, args=(jid, goal, d.get("history") or [], opts), daemon=True).start()
     return jsonify(job=jid)
+if USE_PG:
+    _pg("CREATE TABLE IF NOT EXISTS oq_ajobs(id TEXT PRIMARY KEY, username TEXT, data TEXT, ts DOUBLE PRECISION)")
+else:
+    with DB:
+        DB.execute("CREATE TABLE IF NOT EXISTS ajobs(id TEXT PRIMARY KEY, username TEXT, data TEXT, ts REAL)")
 
+
+def _aj_save(jid, j):
+    try:
+        keep = {k: j.get(k) for k in ("t", "user", "state", "events", "final", "plan", "error")}
+        if j.get("state") != "working":      # big pictures and apps only once finished
+            keep["images"], keep["apps"] = j.get("images", []), j.get("apps", [])
+        _q16("INSERT OR REPLACE INTO ajobs(id,username,data,ts) VALUES(?,?,?,?)",
+             "INSERT INTO oq_ajobs(id,username,data,ts) VALUES(%s,%s,%s,%s) "
+             "ON CONFLICT (id) DO UPDATE SET data=EXCLUDED.data, ts=EXCLUDED.ts",
+             (jid, j.get("user", ""), json.dumps(keep), time.time()))
+    except Exception as e:
+        print("agent save failed:", str(e)[:120])
+
+
+def _aj_load(jid):
+    try:
+        r = _q16("SELECT data FROM ajobs WHERE id=?", "SELECT data FROM oq_ajobs WHERE id=%s", (jid,), True)
+        return json.loads(r[0][0]) if r else None
+    except Exception as e:
+        print("agent load failed:", str(e)[:120])
+        return None
 
 @app.get("/agent/<jid>")
 def agent_status(jid):
+    if denied():
+        return jsonify(error="locked"), 401
+    me = login_session.get("user") or ""
     j = _ajobs.get(jid)
-    if denied() or not j or j["user"] != (login_session.get("user") or ""):
+    from_db = False
+    if j is None:
+        j = _aj_load(jid)
+        from_db = True
+        if j and j.get("state") == "working":
+            j["state"] = "error"
+            j["error"] = "The server restarted while the agent was working. Starting it again."
+    if not j or j.get("user") != me:
         return jsonify(error="Agent task not found. The server may have restarted - run it again."), 404
+    if not from_db:
+        sig = (len(j["events"]), j["state"])
+        if j.get("_sig") != sig:           # save only when something changed
+            j["_sig"] = sig
+            _aj_save(jid, j)
     since = max(0, int(request.args.get("since", "0") or 0))
     out = dict(state=j["state"], events=j["events"][since:], next=len(j["events"]), seconds=int(time.time() - j["t"]))
     if j["state"] != "working":
-        out.update(final=j["final"], images=j["images"], apps=j["apps"], error=j.get("error"))
+        out.update(final=j.get("final", ""), images=j.get("images", []), apps=j.get("apps", []), error=j.get("error"))
     return jsonify(out)
-
 
 @app.post("/agent/<jid>/stop")
 def agent_stop(jid):
