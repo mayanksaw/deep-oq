@@ -23037,7 +23037,7 @@ try:
     _i50 = PAGE.rfind("</body>")
     if _i50 > 0:
         PAGE = PAGE[:_i50] + _brand17(_HUNT50_HTML) + PAGE[_i50:]
-    print("Pack 50 ready: Error Hunter")
+    print("Pack 50 ready: Mistake Hunter game")
 except Exception as _e50:
     print("Pack 50 failed:", _e50)
 # ================= END PACK 50 =================
