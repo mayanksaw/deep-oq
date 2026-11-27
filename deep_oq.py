@@ -21101,6 +21101,7 @@ def _pw_worker():
         profile = os.path.join(os.path.expanduser("~"), ".oq_edge_profile")
         ctx = p.chromium.launch_persistent_context(
             profile, channel="msedge", headless=False,
+            chromium_sandbox=True,
             ignore_default_args=["--enable-automation"],
             args=["--autoplay-policy=no-user-gesture-required",
                   "--disable-blink-features=AutomationControlled"])
