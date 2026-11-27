@@ -24797,6 +24797,88 @@ AGENT_SYSTEM += ("\n\nSTRONG RESEARCH: for any goal that needs facts from the we
                  "then a short comparison or explanation if useful, then 'Sources:' with the URLs you read. No long story.")
 print("Pack 55 ready: Agent reads many pages at once (toolbox read_many)")
 # ================= END PACK 55 =================
+# ================= PACK 56: FIX RATE LIMITS (413 / 404 / 429) =================
+# 1. Dead models (404) are remembered and never tried again.
+# 2. Prompts are trimmed to fit Groq's free 8000 tokens-per-minute limit, and the output size is capped.
+# 3. A 413 "too large" is retried once with a smaller prompt.
+# 4. A 429 "rate limit" waits and retries instead of killing the Agent job.
+
+OQ_OUT = 3000                                   # was 32768; the free tier cannot afford it
+FAST_CANDIDATES[:] = [m for m in FAST_CANDIDATES if m != "llama-3.1-8b-instant"]
+_DEADM56 = set()
+_IN_CHARS56 = 15000                              # about 4300 tokens of input; leaves room for the answer
+
+
+def _trim56(messages, limit):
+    msgs = [dict(m) for m in messages]
+
+    def size():
+        return sum(len(m["content"]) for m in msgs if isinstance(m.get("content"), str))
+    guard = 0
+    while size() > limit and guard < 12:
+        guard += 1
+        # shrink the biggest message, but touch system messages last
+        cand = [m for m in msgs if isinstance(m.get("content"), str) and len(m["content"]) > 1500]
+        if not cand:
+            break
+        non_sys = [m for m in cand if m.get("role") != "system"]
+        m = max(non_sys or cand, key=lambda x: len(x["content"]))
+        over = size() - limit
+        keep = max(1200, len(m["content"]) - over - 200)
+        c = m["content"]
+        head, tail = int(keep * 0.6), int(keep * 0.4)
+        m["content"] = c[:head] + "\n[...middle trimmed to fit the free limit...]\n" + c[-tail:]
+    return msgs
+
+
+_call_base56 = _call
+
+
+def _call(model, messages, temperature, max_tokens, effort=None):
+    if model in _DEADM56:
+        raise RuntimeError("model unavailable (skipped)")
+    msgs = _trim56(messages, _IN_CHARS56)
+    max_tokens = min(max_tokens, 3000)
+    try:
+        return _call_base56(model, msgs, temperature, max_tokens, effort)
+    except Exception as e:
+        t = str(e).lower()
+        if "model_not_found" in t or "does not exist" in t:
+            _DEADM56.add(model)
+            print("Pack 56: model", model, "does not exist, will not try it again")
+        elif "413" in t or "request too large" in t:
+            print("Pack 56: prompt too large, retrying smaller")
+            return _call_base56(model, _trim56(messages, _IN_CHARS56 // 2), temperature, min(max_tokens, 1800), effort)
+        raise
+
+
+_chat_base56 = chat
+
+
+def chat(messages, temperature=0.3, max_tokens=4096, smart=False, prefer=None):
+    last = None
+    for attempt in range(4):
+        try:
+            return _chat_base56(messages, temperature, max_tokens, smart, prefer)
+        except Exception as e:
+            last = e
+            t = str(e).lower()
+            if not any(w in t for w in ("429", "rate limit", "rate_limit", "too many requests", "busy")):
+                raise
+            if attempt == 3:
+                break
+            wait = min(25, 8 * (attempt + 1))
+            m = re.search(r"try again in (\d+(?:\.\d+)?)\s*s", t)
+            if m:
+                wait = min(25, float(m.group(1)) + 1)
+            print("Pack 56: rate limited, waiting %.0fs then retrying" % wait)
+            time.sleep(wait)
+    raise last
+
+
+AGENT_MAX_SECONDS = 600       # the Agent may now wait out a rate limit without being cut off
+print("Pack 56 ready: 413/404/429 handling")
+# ================= END PACK 56 =================
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "ingest":
         ingest(sys.argv[2:])
