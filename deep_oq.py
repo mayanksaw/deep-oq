@@ -23041,191 +23041,1206 @@ try:
 except Exception as _e50:
     print("Pack 50 failed:", _e50)
 # ================= END PACK 50 =================
-# ================= PACK 51: OFF-SCREEN MODE (black screen, AI still listens: open palm or say "Deep OQ") =================
+# ================= PACK 51: 1,020 HAND-MADE AI TOOLS (51 categories x 20 different tools, all free) =================
 # PASTE THIS WHOLE BLOCK in deep_oq.py just ABOVE the line:   if __name__ == "__main__":
-# It must stay below Pack 35 (Pack 35 removes the old gesture code; this block is new and is not removed).
-_OFF51_HTML = r"""
-<style>
-#offBtn.rec{background:var(--accent);color:var(--accent-ink)}
-#oqoff{position:fixed;inset:0;z-index:100010;background:#000;display:none;cursor:pointer;touch-action:manipulation;
- -webkit-user-select:none;user-select:none;font:600 13px var(--ui)}
-#oqoff.on{display:block}
-#oqoff .oh{position:absolute;left:16px;right:16px;bottom:24px;text-align:center;color:#000;transition:color .4s;line-height:1.6}
-#oqoff.hint .oh{color:#9aa3c7}
-#oqoff .od{position:absolute;top:14px;right:14px;width:5px;height:5px;border-radius:50%;background:#0b1a14}
-#oqoff.live .od{background:#0f6b48}
-#oqoffv{position:fixed;left:0;top:0;width:64px;height:48px;opacity:.01;pointer-events:none;z-index:1}
-</style>
-<script>
-(function(){
-const vc=document.getElementById('vcBtn');
-if(!vc)return;
-const WAKE=/\b(hey |ok |okay )?deep\s?(o\s?q|oak|ok|okay|cue|queue|kyu)\b|\bwake up\b/i;
-const LIB='https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14';
-const MODEL='https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
-const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-const CAM=!!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia);
+# It must stay BELOW Pack 38 (it reuses Pack 38's safety text and extends the same tools page).
+# Every tool is its own written instruction (not a template mix), e.g. "Contract Red Flag Finder", "Pre-mortem Planner", "Bug Finder".
+# Name format:  k~<category>_<tool>     Search them on the AI Tools page by typing any word, or tap a category chip.
 
-const btn=document.createElement('button');
-btn.type='button';btn.className='mic';btn.id='offBtn';btn.textContent='🌙';
-btn.title='Off-screen mode: screen goes black, show your open palm or say "Deep OQ" to start';
-btn.setAttribute('aria-label','Off-screen mode');
-vc.parentNode.insertBefore(btn,vc);
-
-const ov=document.createElement('div');ov.id='oqoff';
-ov.innerHTML='<i class="od"></i><div class="oh"></div>';
-const hint=ov.querySelector('.oh');
-const vid=document.createElement('video');vid.id='oqoffv';vid.muted=true;vid.playsInline=true;vid.setAttribute('playsinline','');
-document.body.append(vid,ov);
-
-let on=false,stream=null,landmarker=null,timer=null,poll=null,lock=null,sr=null,noSR=false;
-let last='',run=0,coolUntil=0,hideT=null,lastTap=0;
-
-const voiceOn=()=>!!document.querySelector('.vc');
-function say(t,ms){
-  hint.textContent=t;ov.classList.add('hint');
-  clearTimeout(hideT);hideT=setTimeout(()=>ov.classList.remove('hint'),ms||4000);
-}
-function buzz(p){try{if(navigator.vibrate)navigator.vibrate(p)}catch(e){}}
-
-/* ---- keep the page alive: the screen is black, but the phone must not really sleep ---- */
-async function keep(){
-  try{if('wakeLock' in navigator&&!lock&&!document.hidden){
-    lock=await navigator.wakeLock.request('screen');
-    lock.addEventListener('release',()=>{lock=null});
-  }}catch(e){}
-}
-function unkeep(){try{if(lock)lock.release()}catch(e){}lock=null}
-
-/* ---- trigger: start voice chat (the screen stays black, the AI talks) ---- */
-function trigger(why){
-  if(voiceOn()||Date.now()<coolUntil)return;
-  coolUntil=Date.now()+2500;
-  stopSpeech();buzz([25]);
-  ov.classList.add('live');
-  vc.click();
-}
-
-/* ---- hand gesture (same detector as before): open palm = start, fist = stop ---- */
-function shape(lm){
-  const d=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y),w=lm[0];
-  let ext=0,curl=0;
-  [[8,6],[12,10],[16,14],[20,18]].forEach(([t,p])=>{
-    const r=d(w,lm[t])/d(w,lm[p]);
-    if(r>1.15)ext++;
-    if(r<1.05)curl++;
-  });
-  if(ext===4)return 'open';
-  if(ext===0&&curl>=3)return 'fist';
-  return 'other';
-}
-function step(){
-  if(!on||!landmarker||vid.readyState<2)return;
-  let res;
-  try{res=landmarker.detectForVideo(vid,performance.now())}catch(e){return}
-  const lm=res&&res.landmarks&&res.landmarks[0];
-  const s=lm?shape(lm):'none';
-  if(s===last)run++;else{last=s;run=1}
-  if(run<5||Date.now()<coolUntil)return;
-  if(s==='open'&&!voiceOn())trigger('palm');
-  else if(s==='fist'&&voiceOn()){
-    coolUntil=Date.now()+2000;buzz([15,30,15]);
-    const e=document.querySelector('.vc .vc-end');if(e)e.click();
-  }
-}
-async function loadModel(){
-  const T=await import(LIB+'/vision_bundle.mjs');
-  const fs=await T.FilesetResolver.forVisionTasks(LIB+'/wasm');
-  const mk=d=>T.HandLandmarker.createFromOptions(fs,{
-    baseOptions:{modelAssetPath:MODEL,delegate:d},runningMode:'VIDEO',numHands:1});
-  try{return await mk('GPU')}catch(e){return await mk('CPU')}
-}
-async function openCam(){
-  if(!CAM||stream)return;
-  try{
-    stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:{ideal:480},height:{ideal:360}},audio:false});
-    vid.srcObject=stream;await vid.play().catch(()=>{});
-    if(!landmarker)landmarker=await loadModel();
-    clearInterval(timer);timer=setInterval(step,100);
-  }catch(e){
-    closeCam();
-    say('Camera not available. Say "Deep OQ" to wake me.',6000);
-  }
-}
-function closeCam(){
-  clearInterval(timer);timer=null;
-  if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}
-  vid.srcObject=null;
-}
-
-/* ---- voice wake word: say "Deep OQ" ---- */
-function startSpeech(){
-  if(!SR||sr||noSR||!on||voiceOn())return;
-  try{
-    sr=new SR();sr.continuous=true;sr.interimResults=true;sr.lang='en-IN';
-    sr.onresult=e=>{
-      let t='';
-      for(let i=e.resultIndex;i<e.results.length;i++)t+=e.results[i][0].transcript+' ';
-      if(WAKE.test(t))trigger('voice');
-    };
-    sr.onerror=e=>{if(e.error==='not-allowed'||e.error==='service-not-allowed')noSR=true};
-    sr.onend=()=>{sr=null;if(on&&!voiceOn()&&!noSR)setTimeout(startSpeech,500)};
-    sr.start();
-  }catch(e){sr=null}
-}
-function stopSpeech(){
-  if(sr){const s=sr;sr=null;s.onend=null;try{s.abort()}catch(e){}}
-}
-
-/* ---- turn the mode on / off ---- */
-async function start(){
-  on=true;noSR=false;last='';run=0;coolUntil=0;
-  btn.classList.add('rec');btn.setAttribute('aria-pressed','true');
-  ov.classList.add('on');ov.classList.toggle('live',voiceOn());
-  say('Off-screen mode. Show your open palm ✋ or say "Deep OQ". Double-tap to turn the screen on.',6000);
-  keep();
-  /* the voice chat button needs the mic, so ask for it once now, while the tap is still fresh */
-  poll=setInterval(()=>{
-    if(!on)return;
-    if(voiceOn()){stopSpeech();ov.classList.add('live')}
-    else{ov.classList.remove('live');startSpeech()}
-  },600);
-  startSpeech();
-  await openCam();
-}
-function stop(){
-  on=false;
-  clearInterval(poll);poll=null;
-  stopSpeech();closeCam();unkeep();
-  ov.classList.remove('on','hint','live');
-  btn.classList.remove('rec');btn.setAttribute('aria-pressed','false');
-}
-
-btn.onclick=()=>{on?stop():start()};
-ov.addEventListener('click',()=>{
-  const n=Date.now();
-  if(n-lastTap<450){lastTap=0;stop();return}
-  lastTap=n;
-  say(voiceOn()?'Close your fist ✊ to stop. Double-tap to turn the screen on.':'Show your open palm ✋ or say "Deep OQ". Double-tap to turn the screen on.',4000);
-});
-
-/* when the browser itself pauses the page (app switched or the power button pressed) the camera stops; bring it back */
-document.addEventListener('visibilitychange',()=>{
-  if(!on)return;
-  if(document.hidden){closeCam();stopSpeech()}
-  else{keep();openCam();startSpeech()}
-});
-})();
-</script>
+_K_RAW = r"""
+## Writing and Editing
+Essay Outliner | Build a detailed essay outline with thesis, topic sentences, evidence slots and a conclusion.
+Paragraph Polisher | Rewrite the paragraph for clarity and flow, keep the meaning, then list what you changed.
+Grammar Fixer | Correct every grammar, spelling and punctuation error and explain each fix briefly.
+Tone Changer | Rewrite the text in the tone requested (formal, friendly, firm, warm) without changing facts.
+Text Shortener | Cut the text to half its length while keeping every key point.
+Text Expander | Expand the short text into a full, well-structured piece with examples.
+Active Voice Converter | Convert passive sentences to active voice and show before and after.
+Plain English Translator | Rewrite jargon-heavy text in plain language a 12 year old can follow.
+Headline Generator | Write 15 headlines in different styles (curiosity, how-to, number, question) for the topic.
+Intro Hook Writer | Write 6 different opening hooks for the piece (story, stat-free question, bold claim, scene).
+Conclusion Writer | Write 3 strong conclusions: one summarising, one with a call to action, one reflective.
+Thesis Statement Maker | Produce 5 arguable thesis statements for the topic and say which is strongest and why.
+Transition Finder | Suggest smooth transitions between the given paragraphs or sections.
+Repetition Remover | Find repeated words and ideas in the text and rewrite to remove them.
+Readability Scorer | Judge the reading level, long sentences and weak spots, then give a rewritten version.
+Summary Writer | Summarise the text in one line, one paragraph and five bullet points.
+Paraphraser | Paraphrase the text fully in new words and structure while keeping the meaning exact.
+Proofreading Checklist | Proofread the text and return a table of issue, location, fix and reason.
+Style Guide Maker | Create a one-page style guide (voice, words to use or avoid, formatting) from the sample text.
+Feedback Giver | Act as a kind but honest editor: list strengths, top 5 problems and a revision plan.
+## Email and Messages
+Cold Email Writer | Write a short respectful cold email with a clear ask and two follow-up versions.
+Follow-up Email | Write a polite follow-up that adds value instead of just asking for a reply.
+Apology Message | Write a sincere apology that owns the mistake, avoids excuses and offers a fix.
+Complaint Email | Write a firm, polite complaint with facts, timeline and the exact resolution wanted.
+Leave Request | Write a leave application with dates, reason and handover plan in the right tone.
+Resignation Letter | Write a graceful resignation letter with notice period and handover offer.
+Thank You Note | Write a specific, heartfelt thank you note that mentions what the person did.
+Reminder Message | Write a friendly reminder that is clear but not pushy, in three levels of firmness.
+Meeting Request | Write a meeting request with purpose, proposed times and expected duration.
+Email Subject Lines | Write 12 subject lines that get opened, with the reason each works.
+Reply Drafter | Draft a reply to the pasted message, in three tones, covering every point raised.
+Difficult News Message | Write a message that delivers bad news clearly, with empathy and next steps.
+Negotiation Email | Write an email negotiating price or terms with a clear anchor and polite pushback.
+Introduction Email | Write a double-opt-in introduction between two people with context for both.
+Out of Office Message | Write 3 out-of-office replies (short, detailed, urgent contact) for the dates given.
+Reference Request | Write a request to a teacher or manager for a recommendation letter, with a helpful brief for them.
+Customer Reply | Write an empathetic customer service reply that solves the problem and keeps the customer.
+WhatsApp Message Polisher | Rewrite the message to sound clear and natural for WhatsApp, in Hinglish or English as asked.
+Email Cleaner | Shorten and restructure a rambling email into a clear one with a bold action line.
+Message Tone Checker | Read the message as the receiver would and flag anything that sounds rude or unclear, then fix it.
+## Social Media
+Instagram Caption Maker | Write 10 captions with hooks and hashtag sets for the post idea.
+Reel Script Writer | Write a 30 second reel script with hook, three beats, on-screen text and call to action.
+Hashtag Strategist | Build a hashtag plan with broad, niche and tiny tags and how to rotate them.
+Content Calendar 30 Days | Create a 30 day content calendar with post type, idea and goal for each day.
+Bio Writer | Write 8 profile bios for the niche in different styles, under the character limit.
+LinkedIn Post Writer | Write a LinkedIn post with a strong first line, short paragraphs and a question ending.
+Twitter Thread Writer | Write a 8 post thread with a hook, value in each post and a closing call to action.
+Comment Reply Ideas | Write 10 replies to a comment that build engagement and sound human.
+Viral Idea Finder | List 15 post ideas using proven formats (myth, mistake, before-after, behind the scenes).
+Carousel Planner | Plan a 8 slide carousel: slide-by-slide text, design hint and final call to action.
+Poll and Quiz Ideas | Write 10 interactive poll or quiz ideas that fit the niche.
+Story Sequence Planner | Plan a 6 frame story sequence with stickers, questions and a goal.
+Trend Adapter | Explain how to adapt a trending format to the brand without looking forced.
+Profile Audit | Audit the profile described and give a prioritised list of improvements.
+Engagement Booster Plan | Give a 7 day plan to raise comments and saves with daily tasks.
+Content Pillars Builder | Define 4 content pillars with example posts for each.
+Giveaway Planner | Plan a fair giveaway with rules, mechanics, timeline and a compliance reminder.
+Caption Translator | Translate and adapt the caption into Hindi, English and Hinglish with the same feel.
+Posting Time Planner | Explain how to find the best posting times for the audience and set up a test.
+Social Crisis Reply | Draft calm public and private replies to a negative viral comment or complaint.
+## Marketing and Ads
+Ad Copy Writer | Write 8 ad variations (headline, body, call to action) for different audiences.
+Landing Page Copy | Write landing page copy: headline, subhead, benefits, proof slots, FAQ and call to action.
+USP Finder | Find 5 possible unique selling points by comparing the offer with typical alternatives.
+Brand Voice Builder | Define a brand voice with traits, do and do not examples and sample lines.
+Tagline Maker | Write 20 taglines in different styles and shortlist 3 with reasons.
+Product Description Writer | Write a product description with benefits first, features second and a persuasive close.
+Marketing Plan 90 Days | Write a 90 day marketing plan: goals, channels, budget split (placeholder), weekly actions.
+Target Audience Profiler | Describe 3 target audience segments with needs, objections and where they spend time.
+A/B Test Planner | Design an A/B test: hypothesis, variants, sample size method, metric and stop rule.
+Email Campaign Planner | Plan a 5 email campaign with subject, purpose, content and timing for each.
+Customer Survey Builder | Write a 10 question survey that avoids leading questions and explain how to read results.
+Brand Name Ideas | Create 30 brand names across styles, with a check-list for availability and trademark research.
+Offer Builder | Design an irresistible offer: bundle, bonus, guarantee and urgency that is honest.
+Funnel Mapper | Map a marketing funnel with stages, content at each stage and the metric to watch.
+Press Release Writer | Write a press release with headline, dateline, quotes slots and boilerplate.
+Pitch Deck Narrative | Write the story for a 10 slide pitch deck with what goes on each slide.
+Local Business Promo Ideas | Give 15 low-cost promotion ideas for a local shop or service.
+Influencer Outreach Message | Write an outreach message and a simple collaboration brief for a creator.
+Campaign Post-mortem | Analyse a campaign from the numbers pasted, find causes and list next tests.
+Competitor Ad Angle Finder | Suggest angles to differentiate from typical competitor ads without copying anyone.
+## SEO and Blogging
+Keyword Idea Generator | List 40 keyword ideas grouped by search intent for the topic.
+Blog Post Outline SEO | Write an SEO outline with H1, H2s, questions to answer and internal link slots.
+Meta Description Writer | Write 6 meta titles and descriptions within length limits.
+Blog Intro Writer | Write a blog intro that states the promise, builds trust and previews the content.
+FAQ Schema Writer | Write 8 FAQs with short answers and the matching FAQ JSON-LD.
+Content Brief Maker | Produce a writer brief: goal, audience, outline, sources to cite, tone and do-nots.
+Topic Cluster Planner | Plan a topic cluster: one pillar page and 10 supporting articles with links.
+Long Tail Finder | Find 30 long-tail question phrases people actually type about the topic.
+Content Refresh Plan | Tell how to update an old post: what to check, add, cut and re-promote.
+On-page SEO Checklist | Write a checklist to check a page for title, headings, images, links and speed.
+Blog Title Rewriter | Rewrite the title in 10 ways that are clear and click-worthy but honest.
+Alt Text Writer | Write useful alt text for each image described.
+Internal Linking Planner | Suggest which pages should link to which and with what anchor text.
+Guest Post Pitch | Write a guest post pitch with 3 topic ideas and why they fit that site.
+Blog Monetisation Plan | List honest ways to earn from the blog with steps to start each.
+Newsletter Writer | Write a newsletter edition with subject, intro, 3 sections and sign-off.
+Snippet Optimiser | Rewrite the answer paragraph so it could win a featured snippet.
+Content Gap Finder | List subtopics a complete article should cover that a thin article would miss.
+Evergreen Idea Finder | List 25 evergreen article ideas for the niche that stay useful for years.
+Readability Fixer for Web | Break the text into scannable web format with headings, bullets and short paragraphs.
+## Sales and Customer Support
+Sales Pitch Script | Write a 60 second sales pitch and a longer discovery-call script.
+Objection Handler | List the 10 most likely objections and a respectful response to each.
+Follow-up Sequence | Write a 5 touch follow-up sequence over 3 weeks with a different value each time.
+Discovery Questions | Write 15 discovery questions that uncover real needs and budget.
+Proposal Email | Write a proposal cover email that summarises value and next steps.
+Customer FAQ Builder | Write a customer FAQ from the product details with clear short answers.
+Support Macro Writer | Write 10 reusable support replies for common issues in a warm tone.
+Refund Policy Writer | Write a fair, clear refund and return policy marked as a template.
+Upsell Message | Write a non-pushy upsell message that is genuinely helpful to the customer.
+Churn Win-back Message | Write 3 win-back messages for customers who left, with different incentives.
+Testimonial Request | Write a request for a testimonial and a guide that makes it easy to answer.
+Customer Interview Guide | Write a guide to interview customers and a way to find patterns.
+Cold Call Opener | Write 5 cold call openers that earn 30 more seconds.
+Pricing Objection Reply | Write replies to "it is too expensive" that focus on value without discounting first.
+Support Escalation Template | Write an escalation template that gives the next team everything they need.
+Customer Persona Cards | Build 3 persona cards from the data and what to say to each.
+Lead Qualification Checklist | Write BANT style lead qualification questions and a scoring rubric.
+Sales Call Review | Review the call notes pasted: what went well, missed chances and coaching tips.
+Contract Follow-up | Write a polite message to move a stalled deal forward.
+Customer Onboarding Plan | Write a 14 day onboarding plan so new customers get value fast.
+## Startup and Business
+Business Idea Validator | Test the idea: problem, customer, alternatives, riskiest assumption and a cheap experiment.
+Business Plan Outline | Write a complete business plan outline with what to fill in each section.
+Lean Canvas Filler | Fill a Lean Canvas for the idea and flag the weakest boxes.
+Startup Name and Pitch | Give 10 names and a 30 second elevator pitch for the idea.
+MVP Scoper | Decide the smallest version worth building, what to cut and how to test it in 30 days.
+Revenue Model Options | Compare 6 revenue models for the idea with pros, cons and fit.
+Unit Economics Explainer | Explain unit economics with a worked example from the numbers given, label assumptions.
+Pitch Q and A Prep | List 25 tough investor questions and strong, honest answers.
+Hiring First Employees | Advise who to hire first, roles, how to find and what to test for.
+Founder Agreement Checklist | List topics a founders agreement must cover. Say to use a lawyer to finalise.
+Market Size Method | Explain how to estimate market size bottom-up with an example, using clearly marked assumptions.
+Customer Discovery Plan | Plan 20 customer conversations: who, where to find them and what to ask.
+Small Business Starter Guide | Give a step-by-step guide to start a small business of this type in India with usual registrations to check.
+Franchise Evaluation | Give questions and red flags to evaluate a franchise offer.
+Side Hustle Ideas | List 25 side hustle ideas matched to the skills and hours given, with first steps.
+Growth Experiments | Suggest 15 growth experiments ranked by effort and expected impact.
+Business Risk Review | List top risks for the business and how to reduce each.
+Pivot Decision Guide | Give a framework to decide whether to pivot, with questions and signals.
+Partnership Proposal | Write a partnership proposal with benefits for both sides and a pilot plan.
+Weekly Founder Review | Create a weekly review template for a founder with metrics, wins, blockers and decisions.
+## Personal Finance General Information
+Monthly Budget Builder | Build a monthly budget using the 50 30 20 idea adapted to the income and goals given.
+Expense Tracker Design | Design a simple expense tracking system with categories and a weekly review habit.
+Emergency Fund Planner | Explain how large an emergency fund should be and a plan to build it step by step.
+Debt Payoff Plan | Compare avalanche and snowball methods on the debts listed with a month-by-month outline.
+Saving Challenge Ideas | Give 10 saving challenges that fit the lifestyle described.
+Financial Goal Planner | Turn goals into monthly saving targets and a timeline, showing the arithmetic.
+SIP Concept Explainer | Explain how SIP works with a worked example and its risks. General information only.
+Mutual Fund Basics | Explain types of mutual funds, costs and risks in simple words. No recommendations.
+Insurance Basics Guide | Explain term, health and other basic insurance types and what to compare.
+Loan Comparison Helper | Compare loan offers on rate, fees, tenure and total cost with a method to calculate EMI.
+Credit Score Explainer | Explain what affects a credit score and habits that improve it.
+Inflation Impact Calculator Guide | Show how inflation reduces buying power with a worked example and why it matters.
+Retirement Basics | Explain retirement planning steps and how to estimate the needed corpus with assumptions.
+Money Habits Audit | Review the spending habits described and suggest 5 realistic changes.
+Student Money Guide | Give money tips for a student: pocket money, saving, scams and first bank account.
+Family Budget Meeting Agenda | Write an agenda to discuss money calmly with a partner or family.
+Scam Awareness Guide | List common financial scams in India, warning signs and what to do if targeted.
+Big Purchase Decision | Give a framework to decide on a big purchase: need, cost over time and alternatives.
+Salary Negotiation Prep | Prepare points, a range method and a script for a salary talk.
+Net Worth Tracker Design | Explain how to calculate net worth and set up a simple monthly tracker.
+## Accounting and Tax India General Information
+GST Basics Explainer | Explain GST basics for a small business: registration, invoices, returns. Say to confirm with official sources.
+Invoice Format Builder | Create a clear invoice format with required fields and notes for a small business.
+Bookkeeping Starter | Explain simple bookkeeping for a shop: books to keep, daily routine and month end steps.
+Profit and Loss Explainer | Explain a profit and loss statement with a worked example from the numbers given.
+Balance Sheet Explainer | Explain balance sheet items with a simple worked example.
+Cash Flow Planner | Build a 12 month cash flow forecast structure and how to fill it.
+Income Tax Basics | Explain income tax concepts (slabs, deductions, filing) generally and tell the user to check the current rules on the official portal.
+Expense Category Guide | Suggest how to categorise business expenses for clean books.
+Break-even Calculator Guide | Explain break-even analysis and compute it from the numbers given.
+Pricing with Margin | Compute selling price from cost and target margin, showing every step.
+Invoice Follow-up Message | Write polite payment reminders from friendly to firm.
+Audit Preparation Checklist | List documents and checks to prepare for an audit or tax review.
+Ledger Mistake Finder | List common bookkeeping errors and how to find them in the data pasted.
+Depreciation Explainer | Explain straight-line and reducing balance depreciation with an example.
+Working Capital Basics | Explain working capital and ways to improve it with practical steps.
+Budget vs Actual Review | Compare budget and actual figures pasted, explain variances and actions.
+Accounting Terms Dictionary | Explain the accounting terms listed in simple words with examples.
+Small Business Compliance Calendar | List the kinds of yearly and monthly filings a small business usually tracks, to be confirmed officially.
+Expense Policy Draft | Draft a simple employee expense policy as a template.
+Financial Ratio Explainer | Explain key ratios and calculate those possible from the data pasted.
+## Legal Documents and Rights General Information
+Rent Agreement Checklist | List clauses a rent agreement should have and traps for tenant and landlord. Not legal advice.
+Consumer Rights Guide | Explain consumer rights in India and how to file a complaint step by step.
+RTI Application Helper | Draft an RTI application for the information described and explain where to submit.
+Legal Notice Outline | Outline a legal notice with facts and demands as a template to review with a lawyer.
+Contract Red Flag Finder | Read the contract text pasted and flag unclear, one-sided or risky clauses in plain language.
+NDA Explainer | Explain what an NDA covers and key points to check before signing.
+Freelance Contract Checklist | List what a freelance contract should include: scope, payment, revisions, rights.
+Terms and Conditions Template | Draft simple website terms as a template with a warning to get legal review.
+Privacy Policy Template | Draft a basic privacy policy template with a warning to get legal review.
+Police Complaint Guide | Explain how to file a complaint or FIR and what to do if refused, in general terms.
+Workplace Rights Basics | Explain common employee rights topics and where to get official help.
+Tenant Rights Basics | Explain common tenant rights and steps when there is a dispute, in general terms.
+Cyber Crime Reporting Guide | Explain how to report online fraud or cyber crime in India with evidence to keep.
+Will Basics | Explain what a will is, why it matters and typical steps, advising a lawyer to draft.
+Document Checklist for Any Process | List documents usually needed for the process described and how to verify with the office.
+Legal Terms Simplifier | Explain the legal terms pasted in plain words with examples.
+Dispute Letter Writer | Write a calm formal letter to settle a dispute with facts and a deadline.
+Copyright Basics | Explain copyright basics for creators and common mistakes, in general terms.
+Trademark Basics | Explain what a trademark protects and the usual steps, advising a professional.
+Meeting Minutes Writer | Turn the notes into formal minutes with decisions, owners and dates.
+## HR and Workplace
+Job Description Writer | Write a clear job description with duties, skills and success measures.
+Interview Question Bank | Write structured interview questions with scoring guides for the role.
+Performance Review Writer | Write balanced review comments from the points given, with examples and goals.
+Employee Handbook Outline | Outline an employee handbook with sections and what each should say.
+Team Meeting Planner | Plan a productive team meeting with agenda, timing and outcomes.
+Conflict Resolution Script | Give a script for mediating a conflict between two colleagues.
+Feedback Script | Write a script for giving difficult feedback using facts, impact and request.
+Onboarding Checklist | Create an onboarding checklist for the first day, week and month.
+Exit Interview Questions | Write exit interview questions that reveal useful truths.
+Team Building Activities | Give 15 team activities for the group size and budget given.
+Recognition Message Writer | Write specific recognition messages that name the behaviour and its impact.
+Workload Balance Review | Analyse the workload list and suggest a fairer distribution.
+Hiring Scorecard | Create a hiring scorecard with weighted criteria and evidence prompts.
+Remote Team Rules | Write working agreements for a remote team: hours, communication, response times.
+Performance Improvement Plan Draft | Draft a fair improvement plan with goals, support and review dates, as a template.
+Training Needs Analysis | Design a short survey and method to find skill gaps.
+Culture Values Writer | Write 5 company values with behaviours that show them and the opposite.
+Delegation Planner | Plan what to delegate, to whom, with clear outcomes and check-ins.
+Meeting Cost Calculator Guide | Explain how to compute meeting cost and when to cancel meetings.
+Workplace Policy Q and A | Write plain answers to common employee policy questions as a template.
+## Resume and Interviews
+Resume Builder | Write a resume from the details given with strong action bullets and clean sections.
+Resume Bullet Improver | Rewrite weak bullets into achievement bullets with numbers where the user supplied them.
+Cover Letter Writer | Write a tailored cover letter using the job text and the background given.
+LinkedIn Headline and About | Write 5 headlines and an About section that are clear and keyword rich.
+Interview Answer Coach | Coach an answer using the STAR method and give a polished sample.
+Tell Me About Yourself | Write a 60 second answer for the role with three versions.
+Mock Interview Questions | Ask 15 likely questions for the role and what a good answer covers.
+Weakness Answer Builder | Craft an honest weakness answer with growth steps that is not a cliché.
+Salary Expectation Answer | Prepare a polite way to answer the salary question in different situations.
+Questions to Ask Employer | List 15 smart questions to ask in an interview.
+Career Change Story | Write a clear story explaining a career switch with transferable skills.
+Fresher Resume Guide | Help a fresher with no experience show projects, skills and activities well.
+ATS Keyword Matcher | Compare the resume and job text and list missing keywords to add truthfully.
+Portfolio Plan | Plan a portfolio: projects to include, structure of each case and presentation tips.
+Gap Year Explanation | Write honest ways to explain a gap in the resume.
+Group Discussion Guide | Give a GD plan: how to start, structure points, handle interruptions, conclude.
+HR Round Prep | Prepare for HR round topics with sample answers and traps to avoid.
+Follow-up After Interview | Write a thank you and follow-up message after an interview.
+Offer Letter Review | Explain parts of the offer letter pasted and questions to ask before accepting.
+Career Path Mapper | Map 3 possible career paths with skills, steps and rough timelines.
+## Study Skills
+Study Timetable Maker | Make a weekly timetable with subjects, breaks and revision from the details given.
+Memory Technique Picker | Suggest memory techniques that fit the content and show how to apply them.
+Flashcard Maker | Turn the notes into 25 question and answer flashcards.
+Notes Summariser | Convert the notes into a one page revision sheet with key terms.
+Spaced Revision Planner | Build a spaced repetition schedule for the topics and exam date.
+Exam Stress Plan | Give practical steps for exam week: sleep, food, routine and mindset. General wellbeing only.
+Concentration Boosters | Give 12 evidence-informed ways to stay focused while studying.
+Mind Map Builder | Create a text mind map of the topic with branches and sub-branches.
+Practice Question Maker | Write 15 mixed difficulty practice questions with an answer key.
+Mistake Log Template | Create a mistake notebook method and sample entries to learn from errors.
+Feynman Explainer | Explain the topic simply, find the gaps in understanding and give review questions.
+Reading Strategy | Teach how to read a chapter actively using SQ3R with an example.
+Last Minute Revision Plan | Make a last 3 day revision plan that prioritises high value topics.
+Exam Answer Structure | Show how to structure answers for the given exam type with an example.
+Study Group Plan | Plan a study group session with roles, tasks and a quiz round.
+Procrastination Breaker | Give a 10 minute starter plan and rules to begin studying when stuck.
+Goal Setting for Students | Turn the exam goal into weekly targets and tracking habits.
+Note Taking Methods | Compare Cornell, outline and mind map and show the notes in the best one.
+Quiz Me | Ask me one question at a time on the topic, check my answer and adapt the difficulty.
+Teacher Explanation Planner | Plan a short lesson on the topic with hook, explanation, example and check questions.
+## School Maths
+Step by Step Solver | Solve the maths problem step by step with reasons and a final check.
+Concept Explainer Maths | Explain the maths concept with intuition, a visual description and two examples.
+Word Problem Translator | Turn the word problem into equations and solve it showing every step.
+Formula Sheet Maker | List the key formulas for the chapter with when to use each and a mini example.
+Algebra Practice | Write 10 algebra problems from easy to hard with worked solutions.
+Geometry Helper | Explain the geometry problem with a described diagram, theorems used and proof steps.
+Trigonometry Helper | Explain the trigonometry idea and solve the problem using clear identities.
+Fractions and Decimals Coach | Teach fractions and decimals with examples and 8 practice sums.
+Percentage Tricks | Show quick percentage methods with worked examples and practice.
+Ratio and Proportion Helper | Explain and solve ratio problems with simple models.
+Statistics Basics | Explain mean, median, mode and spread and compute them from the data pasted.
+Probability Basics | Explain probability with simple experiments and solve the problem given.
+Mental Maths Tricks | Teach 10 mental maths shortcuts with practice.
+Mistake Finder Maths | Check the maths solution pasted and find the first wrong step and fix it.
+Number System Guide | Explain number types and properties with examples and quick tests.
+Mensuration Helper | Give mensuration formulas and solve the shape problem step by step.
+Calculus Intro | Explain limits, derivatives or integrals simply with examples as the question needs.
+Matrices Helper | Explain matrix operations and solve the problem shown step by step.
+Maths Olympiad Practice | Write 8 olympiad-style problems with hints before full solutions.
+Maths Story Maker | Explain the concept through a short story and then two practice problems.
+## Science
+Physics Problem Solver | Solve the physics problem with given and unknown values, formula choice, units and a sanity check.
+Chemistry Equation Balancer | Balance the equation step by step and explain the type of reaction.
+Biology Concept Explainer | Explain the biology topic with a simple analogy, key terms and a diagram described in words.
+Science Fair Project Ideas | Suggest 15 project ideas for the grade with materials and the question each answers.
+Experiment Planner | Plan a safe experiment: hypothesis, variables, steps, data table and how to conclude.
+Lab Report Writer | Structure a lab report from the data given: aim, method, results, discussion, conclusion.
+Periodic Table Helper | Explain trends and properties of the elements asked with simple reasoning.
+Unit Converter and Checker | Convert the units shown step by step and check the result by estimation.
+Astronomy Explainer | Explain the space topic simply with scale comparisons and why it matters.
+Earth Science Explainer | Explain geology or weather topics with causes and everyday examples.
+Human Body Explainer | Explain how the body system works with a simple flow description.
+Scientific Method Coach | Teach the scientific method with the user's own question as the example.
+Physics Concept Intuition | Explain the physics idea with intuition first, equations second.
+Chemistry Memory Aids | Create mnemonics and tables for reactions, groups or reagents listed.
+Science Quiz Maker | Write 15 science questions with answers on the topic and level.
+Everyday Science Why | Explain why an everyday thing happens using real science.
+Numerical Practice Pack | Write 10 numericals with answers from easy to hard on the chapter.
+Graph Reading Coach | Teach how to read the graph described and what conclusion is valid.
+Error Analysis Guide | Explain errors in measurement and how to compute and report them.
+Science Myth Buster | Check the claim against well-established science and explain what is true or not.
+## English and Languages
+Vocabulary Builder | Teach 15 words on the theme with meaning, example sentence and memory trick.
+Spoken English Coach | Give a conversation practice with corrections and better phrases.
+Hindi to English Translator | Translate naturally and explain tricky choices of words.
+English to Hindi Translator | Translate naturally into clear everyday Hindi and note any nuance.
+Hinglish Converter | Convert the text between English, Hindi and Hinglish while keeping the tone.
+Sentence Corrector with Reasons | Correct the sentences and teach the grammar rule behind each mistake.
+Idioms and Phrases Teacher | Explain idioms with meaning, origin if sure, and example use.
+Grammar Lesson Maker | Teach the grammar topic with rules, examples, common errors and exercises.
+Pronunciation Guide | Explain pronunciation of the words with syllables and simple respelling.
+Letter Writing Formats | Show the format of formal and informal letters with a model.
+Comprehension Practice | Create a passage with 8 questions and an answer key at the level asked.
+Essay Practice Topics | Give 20 essay topics with a tip on angle for each.
+Debate Phrases | Give useful phrases to agree, disagree, interrupt politely and conclude.
+Language Learning Plan | Make a 30 day plan to learn the language with daily tasks.
+Synonyms and Antonyms Finder | Give synonyms and antonyms grouped by shade of meaning and use.
+Common Mistakes Finder | List the common mistakes for learners of this language and how to avoid them.
+Story to Learn English | Write a short story using the target words and then quiz on them.
+Tenses Trainer | Teach tenses with timelines and 12 practice sentences.
+Writing Feedback Coach | Give feedback on the writing: grammar, vocabulary, organisation and a rewrite.
+Interview English Phrases | Give polished phrases for interviews and meetings with when to use each.
+## Competitive Exams India
+Exam Strategy Planner | Make a strategy for the exam given: syllabus split, timeline, mock plan and revision cycles.
+Previous Year Pattern Analyser | Explain how to analyse previous papers for patterns and build a priority list.
+Current Affairs Notes Maker | Turn the news text into exam notes with key facts and likely questions.
+Mock Test Question Maker | Write exam-style questions with answers and explanations on the topic.
+Reasoning Practice | Write reasoning puzzles with step by step solving methods.
+Quant Shortcuts | Teach quant shortcuts for the topic with practice.
+General Knowledge Quiz | Ask GK questions on the topic with answers, using only well-established facts.
+Syllabus Breakdown | Break the syllabus into units with weight, difficulty and time needed.
+Answer Writing Coach | Coach structured answers for descriptive exams with an example.
+Optional Subject Chooser | Give a framework to choose an optional subject with questions to ask.
+Daily Routine for Aspirants | Create a realistic daily routine with deep work, revision and rest.
+Interview Preparation for Services | Prepare for a service interview with DAF based questions and answer structure.
+Polity Concept Notes | Make short notes on the polity topic with articles and key points to verify in the official text.
+Geography Map Practice | Create a map-based revision plan and practice questions.
+History Timeline Builder | Build a timeline of events with causes and consequences for the period.
+Economy Concept Explainer | Explain the economy concept simply with an India example.
+Essay Paper Plan | Plan an essay on the topic with dimensions, examples and a flow.
+Ethics Case Study Helper | Give a method to answer ethics case studies with a sample structure.
+Banking Exam Plan | Give a section-wise plan for banking exams with time targets.
+SSC Exam Plan | Give a section-wise plan for SSC exams with time targets and practice style.
+## Coding Help
+Code Explainer | Explain the code line by line in simple words and what it returns.
+Bug Finder | Find the bug in the code, explain the cause and give the fixed version.
+Code Reviewer | Review the code for correctness, readability, security and performance with prioritised fixes.
+Code Converter | Convert the code between the languages named, keeping behaviour and idioms.
+Function Writer | Write a clean, tested function for the description with edge cases handled.
+Unit Test Writer | Write unit tests for the code covering normal, edge and error cases.
+Regex Builder | Write and explain a regex for the pattern with test cases.
+SQL Query Writer | Write the SQL for the question with the schema given and explain it.
+Algorithm Explainer | Explain the algorithm with a worked trace, complexity and when to use it.
+Data Structure Chooser | Pick the best data structure for the need and explain trade-offs.
+Refactor Helper | Refactor the code to be cleaner without changing behaviour and list the changes.
+Error Message Decoder | Explain the error message, likely causes and how to fix it step by step.
+API Design Helper | Design a REST API for the need: endpoints, payloads, status codes and errors.
+Git Helper | Give the exact git commands for the situation described and what each does.
+Shell Command Writer | Write the shell command for the task and explain each part, warning about dangerous flags.
+Coding Practice Problems | Write 8 practice problems with hints and solutions for the topic and level.
+Complexity Analyser | Analyse the time and space complexity of the code with reasoning.
+Docstring Writer | Write clear docstrings and comments for the code.
+README Writer | Write a README with description, install, usage, examples and contribution notes.
+Debugging Strategy Coach | Teach a systematic debugging process using the problem described.
+## Web Development
+HTML Page Builder | Write a clean semantic HTML page for the description with accessible markup.
+CSS Layout Helper | Write CSS for the layout described using flexbox or grid and explain it.
+Responsive Design Fixer | Find and fix responsive problems in the HTML and CSS pasted.
+JavaScript Snippet Writer | Write a JavaScript snippet for the behaviour with comments and edge cases.
+React Component Writer | Write a React component with props, state and a usage example.
+Landing Page Builder | Write a complete single-file landing page with sections and styling.
+Form Validation Helper | Write client side validation for the form with clear error messages.
+Web Accessibility Audit | Check the markup for accessibility issues and give fixes.
+Website Speed Tips | Give prioritised steps to speed up the site described.
+Flask App Starter | Write a minimal Flask app with routes, templates and run instructions.
+FastAPI App Starter | Write a minimal FastAPI app with models, routes and run instructions.
+Database Schema Designer | Design tables, keys and relations for the app described with SQL.
+Authentication Flow Explainer | Explain a secure login flow and common mistakes to avoid.
+CORS and Deployment Helper | Explain the CORS or deployment error and the fix for the setup given.
+Portfolio Website Plan | Plan a developer portfolio site with pages, content and sample copy.
+UI Colour Palette Maker | Create a colour palette with hex codes, usage rules and contrast notes.
+Font Pairing Advisor | Suggest font pairings with when to use each and fallback stacks.
+Navigation Planner | Design site navigation and page hierarchy for the content given.
+Cookie and Privacy Banner Text | Write plain banner text and explain what a compliant implementation needs.
+Chrome Extension Starter | Write a basic Chrome extension manifest and script for the idea.
+## Data and Excel
+Excel Formula Writer | Write the Excel formula for the need and explain each part with an example.
+Pivot Table Guide | Explain how to build the pivot table to answer the question step by step.
+Data Cleaning Plan | Give steps to clean the data problems described, with formulas or code.
+Chart Chooser | Pick the best chart for the data and message, and explain how to build it.
+Dashboard Layout Planner | Plan a dashboard layout with the questions each chart answers.
+Data Analysis Questions | List the questions worth asking of the dataset described.
+Python Pandas Helper | Write pandas code for the data task and explain each line.
+Statistics Test Chooser | Choose the right statistical test for the situation and explain assumptions.
+Data Interpretation Coach | Interpret the numbers pasted without overclaiming and list limits.
+Survey Data Analysis Plan | Plan how to analyse survey data including cleaning, summaries and charts.
+Google Sheets Automation | Suggest formulas and Apps Script ideas to automate the sheet task.
+Data Story Writer | Turn the findings into a clear story for non-technical readers.
+SQL Practice for Analysts | Write analyst SQL exercises with a schema and answers.
+Spreadsheet Template Designer | Design a spreadsheet template for the use case with columns and formulas.
+Outlier Handling Guide | Explain how to detect and treat outliers with a clear decision rule.
+Forecasting Basics | Explain simple forecasting methods and how to check accuracy on the data given.
+KPI Definition Writer | Define each KPI with formula, source and how to avoid misreading it.
+Data Privacy Checklist | List checks before sharing or analysing personal data.
+Excel Error Fixer | Explain the Excel error and fix the formula pasted.
+Report Summary Writer | Summarise the data report in a one page executive summary.
+## AI and Prompts
+Prompt Improver | Rewrite the prompt to be clearer with role, context, task, format and examples.
+Prompt Template Builder | Create a reusable prompt template with placeholders for the task.
+Role Prompt Writer | Write a system prompt for an assistant with the role, rules and style given.
+Chain of Prompts Planner | Break the big task into a sequence of prompts with inputs and outputs.
+AI Use Case Finder | List practical AI uses in the work described with risk and review needs.
+AI Output Checker | Review the AI output pasted for errors, made-up facts and weak reasoning.
+Few-shot Example Maker | Write 5 high quality examples to include in a prompt for the task.
+Image Prompt Writer | Write detailed image prompts with subject, style, lighting and composition.
+AI Study Helper Prompts | Give prompts for learning a subject with AI without cheating.
+Customer Bot Script Designer | Design the flows and replies for a customer chatbot.
+Evaluation Test Set Maker | Write test cases to check an AI feature including tricky ones.
+AI Safety Check | List misuse and privacy risks for the AI feature and mitigation steps.
+AI Tool Chooser | Give a framework to choose between AI tools for the need with questions to test.
+Persona Writer for Bots | Write a bot persona with tone, boundaries and sample conversations.
+Knowledge Base Structure | Design how to organise documents for a retrieval based assistant.
+Summarisation Prompt Pack | Write prompts to summarise different document types well.
+Translation Prompt Pack | Write prompts for accurate translation with tone and glossary control.
+Coding Assistant Prompts | Write prompts that get reliable code with tests from an assistant.
+Hallucination Reduction Tips | Give prompt techniques to reduce made-up answers and how to verify.
+AI Automation Idea Planner | Plan an automation using AI for the repetitive task described.
+## Cybersecurity and Privacy
+Password Strategy Guide | Explain strong passwords, managers and 2FA setup for a normal user.
+Phishing Spotter | Analyse the message pasted for phishing signs and say what to do. Never ask for secrets.
+Account Security Checklist | Give a checklist to secure email, bank and social accounts.
+Safe Browsing Guide | Teach safe browsing habits with examples of risky sites and downloads.
+Public Wi-Fi Safety | Explain risks of public Wi-Fi and safe ways to use it.
+Data Breach Response | Give steps to take after an account or data leak.
+Phone Security Setup | Give steps to secure an Android or iPhone including updates and permissions.
+Parental Controls Guide | Explain parental control options and how to talk with children about online safety.
+Fake News Checker | Give a method to verify the claim and sources, then assess the text pasted.
+Scam Call Script Defence | Explain common scam call scripts and how to respond safely.
+Privacy Settings Audit | Walk through privacy settings to review on the platform named.
+Small Business Security Plan | Give a practical security plan for a small business without a big budget.
+Backup Strategy | Explain the 3-2-1 backup rule and a simple setup.
+Secure Coding Checklist | List secure coding practices for the language or framework named.
+Incident Report Template | Write a template to record a security incident with timeline and actions.
+Digital Footprint Cleanup | Give steps to find and reduce personal information online.
+VPN Explainer | Explain what a VPN does and does not do, and when it helps.
+Social Engineering Awareness | Explain social engineering tricks and a training exercise for a team.
+Safe Online Shopping | Give checks before paying on a website or app.
+Security Question Alternatives | Explain safer alternatives to guessable security questions.
+## Health and Fitness General Information
+Beginner Workout Plan | Make a 4 week beginner plan with exercises, sets, rest and progress rules. Advise a doctor check if unsure.
+Home Workout Without Equipment | Write a home routine of 6 exercises with form tips and scaling.
+Stretching Routine | Give a 10 minute stretching routine with holds and breathing.
+Walking Plan | Make a progressive walking plan for the fitness level given.
+Posture Corrector Routine | Give desk posture habits and gentle exercises.
+Sleep Hygiene Guide | Give sleep habits with a sample evening routine.
+Hydration Planner | Explain hydration basics and a simple daily plan.
+Warm-up and Cool-down | Write warm-up and cool-down routines for the sport named.
+Yoga Sequence Maker | Write a beginner yoga sequence with poses, breath and safety notes.
+Running Starter Plan | Make a couch to 5K style plan with weekly steps.
+Fitness Goal Planner | Set realistic fitness goals with measures, timeline and habits.
+Injury Prevention Tips | Give general prevention tips for the activity and when to see a professional.
+Symptom Question Prep | Help prepare questions and notes for a doctor visit. No diagnosis.
+First Aid Basics | Explain basic first aid steps for common situations and when to call emergency services.
+Health Myth Checker | Check the health claim against well-established knowledge and say what is uncertain.
+Healthy Habit Tracker | Design a simple habit tracker for the health goals given.
+Office Exercise Breaks | Give 2 minute desk exercise breaks to do through the day.
+Senior Fitness Basics | Give gentle general exercise ideas for older adults and safety cautions.
+Kids Activity Ideas | Give fun active games for children by age.
+Medical Report Explainer | Explain the terms in a report in plain words and questions to ask the doctor. Do not diagnose.
+## Nutrition and Cooking
+Meal Plan Weekly | Make a 7 day vegetarian or non-vegetarian meal plan as asked with a shopping list.
+Healthy Swap Ideas | Suggest healthier swaps for the foods listed that keep the taste.
+Recipe Writer | Write a clear recipe with ingredients, steps, time and tips from the dish and ingredients given.
+Leftover Recipe Finder | Suggest recipes using the leftovers and pantry items listed.
+Budget Meal Ideas | Give tasty meals on a tight budget with a price saving plan.
+Tiffin Box Ideas | Give 15 tiffin ideas for school or office with prep tips.
+Protein Source Guide | Explain protein sources for vegetarians and others with simple portions.
+Food Label Reader | Teach how to read labels and judge the product details pasted.
+Cooking Technique Teacher | Explain the technique with steps, common mistakes and fixes.
+Festival Menu Planner | Plan a festival menu with timings and make-ahead tasks.
+Kitchen Substitutions | Give substitutes for the missing ingredient and effect on the dish.
+Meal Prep Plan | Plan a Sunday meal prep to cover the week with storage times.
+Diet Myths Checker | Check the diet claim against well-established nutrition knowledge.
+Kids Healthy Snacks | Give healthy snack ideas that children accept.
+Regional Recipe Explorer | Describe authentic dishes from the region with the main ingredients and method.
+Food Safety Guide | Give food storage and hygiene rules for the situation.
+Baking Basics | Explain baking basics and troubleshoot the problem described.
+Cooking Time Scaler | Scale the recipe up or down and adjust times and pans.
+Grocery List Builder | Build an organised grocery list from the meal plan.
+Cooking for One | Give easy small-batch recipes and storage tips.
+## Mental Wellness and Habits
+Habit Builder | Design a tiny habit with a trigger, action and reward and a 21 day tracker.
+Stress Relief Exercises | Give breathing and grounding exercises with simple steps. General wellbeing only.
+Journaling Prompts | Give 30 reflective journaling prompts on the theme.
+Gratitude Practice Plan | Give a 2 week gratitude routine with prompts.
+Morning Routine Designer | Design a realistic morning routine for the time and goals given.
+Evening Wind-down Routine | Design a screen-light evening routine for better sleep.
+Digital Detox Plan | Make a gradual plan to reduce phone use with rules and swaps.
+Motivation Plan | Give practical ways to start when motivation is low, focused on small steps.
+Self-talk Reframer | Reframe the negative thought pasted into a balanced, honest version.
+Confidence Builder Exercises | Give a 14 day confidence plan with small challenges.
+Time for Yourself Planner | Plan weekly time for rest and hobbies around a busy schedule.
+Anger Cool-down Steps | Give steps to pause and respond calmly in heated moments.
+Study Burnout Recovery | Give recovery steps and a lighter plan for a burned out student.
+Mindfulness for Beginners | Teach a 5 minute mindfulness practice step by step.
+Goal Reflection Questions | Write questions to reflect on progress and next steps.
+Loneliness Ideas | Give kind, practical ways to meet people and feel connected.
+Decision Fatigue Fixes | Give ways to reduce daily decisions and save energy.
+Weekly Review Ritual | Give a 20 minute weekly review structure.
+Support Conversation Starter | Give gentle ways to ask a friend how they are and to listen.
+When to Seek Help Guide | Explain signs that suggest talking to a professional and how to start, including that emergency help exists.
+## Parenting and Family
+Bedtime Story Maker | Write a calming bedtime story with the child's name and theme.
+Kids Learning Games | Give games to teach the skill at home with simple materials.
+Homework Routine Plan | Build a homework routine that reduces fights.
+Screen Time Plan | Make a family screen time agreement with rules and reasons.
+Talking to Teens Guide | Give conversation starters and listening tips for talking to teenagers.
+Chore Chart Maker | Create an age-appropriate chore chart with rewards that are not only money.
+Birthday Party for Kids | Plan the party with games, food and a timeline.
+Family Activity Ideas | Give 20 low-cost family activities by time available.
+Sibling Conflict Helper | Give steps to handle sibling fights fairly.
+School Choice Questions | List questions to ask when choosing a school.
+Newborn Basics Checklist | Give a general checklist of things to prepare and see a doctor for medical questions.
+Toddler Tantrum Tips | Give calm strategies for tantrums by cause.
+Teaching Values Stories | Write short stories that teach a value with a discussion question.
+Family Meeting Agenda | Write an agenda for a family meeting where everyone is heard.
+Elder Care Planning | Give a checklist of things to arrange for caring for an elderly parent.
+Child Safety at Home | Give a checklist to make the home safer by age.
+Exam Support for Parents | Give ways parents can help during exams without adding stress.
+Reading Habit for Kids | Make a plan to build a reading habit with book ideas by age.
+Family Budget for Kids | Teach children about money with simple activities.
+Co-parenting Message Writer | Write calm, child-focused messages between parents.
+## Relationships and Communication
+Difficult Conversation Script | Write a script for a hard conversation: opening, key points, listening and a calm close.
+Friendship Repair Message | Write a sincere message to repair a strained friendship without blame.
+Active Listening Practice | Teach active listening with examples and a practice exercise.
+Boundary Setting Phrases | Give kind, firm phrases to set boundaries in the situation described.
+Conflict Resolution Steps | Give a step-by-step way to resolve the disagreement fairly.
+Compliment Ideas | Give genuine, specific compliments for the person and situation.
+Wedding Speech Writer | Write a warm wedding speech from the facts given with a light touch of humour.
+Condolence Message | Write a gentle, sincere condolence message avoiding clichés.
+Birthday Wish Writer | Write personal birthday wishes in different tones for the relationship.
+Anniversary Message | Write a heartfelt anniversary message from the details given.
+Saying No Politely | Write polite ways to decline a request without guilt.
+Asking for Help | Write a clear way to ask for help that makes it easy to say yes.
+Apology Coach | Coach a real apology: acknowledge, take responsibility, repair, change.
+Small Talk Starters | Give conversation starters for the event and how to keep talks going.
+Networking Message | Write a genuine networking message that offers value first.
+Neighbour Issue Letter | Write a friendly but clear note about a neighbour problem.
+Family Argument Mediator | Suggest a neutral way to discuss the family disagreement so each side is heard.
+Online Dating Profile Writer | Write an honest, warm profile and opening messages. Safety tips included.
+Long Distance Friendship Ideas | Give ways to stay close across distance with activities.
+Emotional Intelligence Quiz | Give 10 scenario questions to build emotional awareness with discussion points.
+## Travel
+Trip Itinerary Planner | Plan a day-by-day itinerary for the place, days, budget and interests given.
+Packing List Maker | Make a packing list for the destination, season and trip type.
+Budget Trip Planner | Plan the trip on the budget with a cost split to verify with current prices.
+Train and Bus Travel Tips | Give planning tips for long train or bus journeys in India.
+Solo Travel Safety | Give safety tips and planning steps for solo travellers.
+Pilgrimage Trip Planner | Plan a respectful pilgrimage trip with timing, customs and things to book ahead.
+Weekend Getaway Ideas | Suggest weekend trips from the city named with reasons.
+Travel Document Checklist | List documents to carry and check for domestic or international travel.
+Local Food Guide | Describe the local dishes of the place to try and etiquette.
+Hill Station Trip Plan | Plan a hill trip with weather, altitude and road cautions.
+Family Trip with Kids | Plan a kid-friendly trip with rest breaks and activities.
+Road Trip Planner | Plan the route, stops, car checks and playlist ideas.
+Travel Phrasebook | Give 30 useful phrases in the language with pronunciation.
+Visa Process Overview | Explain the general visa process steps and tell the user to check the official embassy site.
+Travel Insurance Questions | List what to compare and ask in travel insurance.
+Photography Spots Planner | Plan the best times and spots for photos at the place.
+Travel Journal Template | Create a journal template with daily prompts.
+Budget Splitting for Groups | Set up a fair way to split trip costs with a table.
+Airport Day Checklist | Give a timeline and checklist for the airport day.
+Offbeat Destination Finder | Suggest lesser known destinations that match the interests.
+## Home and DIY
+Home Cleaning Schedule | Build a daily, weekly and monthly cleaning schedule.
+Small Space Organiser | Give storage ideas for the small room described.
+DIY Repair Guide | Give safe step-by-step instructions for the minor repair, with when to call a professional.
+Room Decor Ideas | Give decor ideas for the room with budget levels.
+Vastu-neutral Layout Tips | Give furniture layout tips for flow and light.
+Garden Starter | Plan a balcony or small garden with plants, soil, light and watering.
+Pest Control Tips | Give common safe preventive tips and when to call an expert.
+Moving House Checklist | Create a moving checklist by weeks before and after.
+Electricity Saving Tips | Give practical ways to reduce the power bill with estimated impact categories.
+Water Saving Ideas | Give ways to save water at home.
+Home Budget Renovation | Plan a renovation budget with priorities and contingency.
+Appliance Buying Guide | List what to check when buying the appliance.
+Declutter Plan | Give a 7 day declutter plan with rules for keeping or giving away.
+Cleaning Product Safety | Explain which cleaning products should never be mixed and why.
+Home Maintenance Calendar | List seasonal maintenance tasks for the home.
+Paint Colour Chooser | Suggest colours and combinations with the effect on the mood and light.
+Furniture Measurement Guide | Explain how to measure the space before buying furniture.
+Safe Home Checklist | Give a home safety checklist: fire, electrical, gas, children.
+Rental Home Inspection | List things to inspect before renting a home.
+Stain Removal Guide | Give stain removal steps by type of stain and fabric.
+## Farming and Agriculture
+Crop Planner | Suggest crop planning steps for the season and soil described and to confirm locally.
+Soil Health Basics | Explain soil health, testing and improvement methods.
+Organic Farming Starter | Explain how to begin organic farming with steps and cautions.
+Pest and Disease Guide | Describe common pests and diseases for the crop and integrated control steps.
+Irrigation Planning | Compare irrigation methods and suggest suitable ones for the setting.
+Farm Budget Planner | Build a crop budget structure with costs, yield assumptions and profit calculation.
+Government Scheme Finder Farming | Explain how to search for farm schemes and what documents are usually needed, to verify officially.
+Dairy Farming Basics | Explain starting a small dairy with basic costs and care points.
+Poultry Basics | Explain starting small poultry with housing, feed and health basics.
+Kitchen Garden Plan | Plan a vegetable kitchen garden by season.
+Compost Making Guide | Give composting steps and troubleshooting.
+Post Harvest Storage | Give storage and loss reduction tips for the crop.
+Farm Marketing Ideas | Give ways to sell directly, add value and find buyers.
+Weather Risk Planning | Explain how to plan for weather risk and insurance questions to ask.
+Fertiliser Basics | Explain nutrients and fertiliser types in general with soil test advice.
+Beekeeping Basics | Explain starting beekeeping with equipment and safety.
+Fish Farming Basics | Explain starting small fish farming with key requirements.
+Agri Startup Ideas | List agri business ideas matched to resources with first steps.
+Seasonal Calendar | Draft a month-wise farm task calendar to adapt locally.
+Farmer Loan Basics | Explain what to compare in a farm loan and documents to prepare.
+## Government Schemes and Documents India
+Document Checklist Finder | List the documents usually required for the application and how to verify on the official site.
+Aadhaar Update Guide | Explain generally how to update Aadhaar details and where to check official steps.
+PAN Card Guide | Explain general steps for PAN application or correction and where to verify.
+Passport Process Overview | Explain the general passport process and documents, verifying on the official portal.
+Driving Licence Process | Explain the general steps to get a licence and documents, verifying locally.
+Scholarship Search Guide | Explain how to find scholarships and prepare a strong application.
+Application Letter Writer | Write a formal application letter to an office for the request.
+Grievance Letter Writer | Write a grievance letter to a department with facts and a request.
+Ration Card Basics | Explain general ration card steps and where to check locally.
+Voter ID Basics | Explain general steps to register or correct voter details, verifying on the official portal.
+Birth Certificate Guide | Explain the general process and documents, verifying locally.
+Income Certificate Guide | Explain the general process and documents, verifying locally.
+Caste Certificate Guide | Explain the general process and documents, verifying locally.
+Bank Account Opening Guide | Explain documents and steps for opening an account.
+Pension Basics | Explain general pension schemes concepts and how to check eligibility officially.
+Government Job Application Guide | Explain how to read a notification and prepare the application.
+Online Form Filling Tips | Give tips to avoid mistakes in online forms and uploads.
+E-sign and DigiLocker Guide | Explain what they are and how to use them safely.
+Complaint to Department Guide | Explain how to find the right authority and escalate a complaint.
+Citizen Rights Awareness | Explain common citizen service rights and how to use them.
+## Creative Writing and Stories
+Story Idea Generator | Give 15 original story ideas with a hook, conflict and ending twist for the genre.
+Character Creator | Create a character with background, wants, fears, flaws and voice.
+Plot Outline Builder | Build a 3 act outline with turning points for the premise.
+Dialogue Polisher | Rewrite the dialogue to sound natural and give each speaker a voice.
+World Building Guide | Build a fictional world with geography, culture, rules and conflicts.
+Short Story Writer | Write an original short story on the theme and word count given.
+Scene Writer | Write the scene with setting, tension and a clear beat structure.
+Plot Twist Ideas | Suggest 10 plot twists that fit the story pasted.
+Writer's Block Breaker | Give 10 prompts and exercises to restart the writing.
+Villain Designer | Design a believable villain with a motive that makes sense.
+Story Title Ideas | Give 20 original titles for the story.
+Fable Writer | Write an original fable with a moral for children.
+Horror Story Starter | Write a tense, non-graphic horror opening for the setting.
+Comedy Sketch Writer | Write a short clean comedy sketch with the characters and premise.
+Mystery Plot Builder | Build a mystery with clues, red herrings and a fair solution.
+Fan-free Original Fantasy | Write an original fantasy scene with its own names and magic rules.
+First Chapter Feedback | Give feedback on the first chapter: hook, pace, voice and fixes.
+Monologue Writer | Write a dramatic monologue for the character and moment.
+Screenplay Formatter | Format the scene as a screenplay with correct elements.
+Children's Picture Book Plan | Plan a 12 spread picture book with text and illustration notes.
+## Design and Art Ideas
+Logo Concept Ideas | Describe 10 original logo concepts with shapes, colour and meaning, for the brand.
+Poster Layout Planner | Plan a poster layout with hierarchy, text and colours.
+Colour Scheme Finder | Suggest colour schemes with hex codes and mood.
+Drawing Prompt List | Give 30 drawing prompts of varied difficulty.
+Art Style Explorer | Explain art styles and how to practise one step by step.
+Design Critique | Critique the design described on hierarchy, contrast, spacing and give fixes.
+Brand Style Guide | Draft a brand style guide with logo use, colours, type and tone.
+Rangoli and Craft Ideas | Give creative festival craft or rangoli ideas with materials.
+Sketching Practice Plan | Make a 30 day sketching plan with daily exercises.
+UI Mockup Description | Describe a clean app screen layout with components and flows.
+Infographic Planner | Plan an infographic: story, sections, data, icons.
+Packaging Design Ideas | Give packaging concepts that fit the product and shelf.
+Photo Composition Tips | Teach composition rules with examples for the subject.
+T-shirt Design Ideas | Give original T-shirt slogan and graphic ideas.
+Interior Moodboard | Describe a moodboard with materials, palette and textures.
+Canva Template Plan | Plan a Canva template set with sizes and styles.
+Typography Basics | Explain typography choices for the project.
+Illustration Idea Finder | Give illustration ideas for the article or book text.
+Craft Project Planner | Plan a craft project with materials, steps and time.
+Design Portfolio Review | Review the portfolio described and give improvement priorities.
+## Video and YouTube
+YouTube Video Ideas | Give 25 video ideas for the channel niche with title and hook.
+Video Script Writer | Write a full video script with hook, sections, b-roll notes and ending.
+Thumbnail Concepts | Describe 8 thumbnail concepts with text, face, colours and contrast.
+Title and Description Writer | Write 10 titles and a keyword aware description with chapters.
+Shorts Idea Generator | Give 20 short video ideas with the first 3 seconds script.
+Video Editing Checklist | Give an editing checklist for pace, audio, captions and export.
+Channel Growth Plan | Make a 90 day plan to grow the channel with uploads and experiments.
+Interview Question Planner | Write questions for an interview video with follow-ups.
+Storyboard Maker | Create a shot-by-shot storyboard for the scene or ad.
+Voiceover Script | Write a voiceover script timed to the length.
+Podcast Episode Planner | Plan a podcast episode with segments, questions and timing.
+Video Hook Writer | Write 15 opening lines that stop the scroll honestly.
+Caption and Subtitle Writer | Turn the transcript into clean captions with line breaks.
+Camera Setup Guide | Explain a low-cost setup for lighting, sound and framing.
+Video Content Repurposing | Show how to turn one video into 8 pieces of content.
+Sponsorship Pitch | Write a pitch to a brand with audience details and package options.
+Viewer Retention Fixes | Suggest edits to improve watch time using the described drop-offs.
+Documentary Outline | Outline a short documentary with acts, interviews and visuals.
+Live Stream Plan | Plan a live stream run of show with interaction points.
+Video Brief Writer | Write a brief for an editor or videographer with clear deliverables.
+## Music and Audio
+Song Idea Generator | Give 10 original song concepts with theme, mood and hook idea.
+Original Lyrics Writer | Write original lyrics on the theme with verse, chorus and bridge. No copied lines.
+Chord Progression Ideas | Suggest chord progressions for the mood and key with how to play them.
+Learn an Instrument Plan | Make a 30 day beginner plan for the instrument with daily practice.
+Music Theory Explainer | Explain the music theory topic with simple examples.
+Raga Basics | Explain the basics of the raga named: notes, mood and time, as generally taught.
+Playlist Maker | Describe a playlist by mood and activity with genre mixes, not copying lyrics.
+Podcast Intro Script | Write a podcast intro and outro script.
+Rhythm Practice Guide | Give rhythm exercises with counting for the level.
+Singing Warm-ups | Give safe vocal warm-ups and care tips.
+Music Practice Routine | Design a daily practice routine with goals and recording tips.
+Jingle Writer | Write a short original jingle for the brand.
+Music Career Guide | Explain paths in music and how to start building an audience.
+Home Recording Setup | Explain a basic setup for recording and mixing.
+Dance Routine Planner | Plan a short dance routine with counts and formation.
+Lullaby Writer | Write an original gentle lullaby.
+Band Name Ideas | Give 25 original band names with the vibe of each.
+Audio Mixing Basics | Explain mixing steps: levels, EQ, compression and reverb for beginners.
+Concert Event Plan | Plan a small concert: venue, sound, schedule and promotion.
+Ear Training Games | Give exercises to train the ear by level.
+## Gaming
+Game Idea Generator | Give 10 original game concepts with core loop and hook.
+Game Design Document | Write a short design document: concept, mechanics, levels, art and scope.
+Level Design Ideas | Suggest level layouts and challenges for the mechanic.
+Game Story Writer | Write the story and characters for an original game.
+Esports Practice Plan | Give a practice plan for improving at the game with review habits.
+Board Game Rules Writer | Write clear rules for an original board game from the idea.
+Quest and Mission Writer | Write quests with objectives, rewards and dialogue.
+Game Balance Checker | Review the stats pasted for balance problems and suggestions.
+Gaming Setup Guide | Explain how to choose parts or devices for the budget.
+Healthy Gaming Habits | Give habits to enjoy games without harming sleep or studies.
+Unity Beginner Plan | Give a learning plan and first project steps.
+Python Game Starter | Write a simple Python game with comments and run steps.
+Tabletop RPG Adventure | Write an original adventure with encounters, maps described and rewards.
+Game Jam Plan | Plan a 48 hour game jam with scope and timeline.
+Puzzle Game Mechanic Ideas | Give original puzzle mechanics with examples.
+Game Review Writer | Write a balanced review from the notes provided.
+Trivia Game Maker | Create a trivia game with rounds and questions on the topic.
+Character Class Designer | Design original character classes with skills and trade-offs.
+Game Marketing Plan | Plan marketing for an indie game with timeline and channels.
+Retro Game Ideas | Give original ideas in a retro style with mechanics.
+## Productivity
+Daily Planner | Plan the day with priorities, time blocks and buffer from the tasks listed.
+Weekly Planner | Plan the week with goals, deadlines and review time.
+Task Prioritiser | Rank the tasks using impact and effort and give the order to do them.
+Pomodoro Plan | Create a Pomodoro plan for the tasks with break ideas.
+Goal to Action Plan | Turn the goal into milestones and weekly actions.
+Project Planner | Break the project into tasks, owners, dates and risks.
+Email Inbox Zero Plan | Give a system to clear and keep the inbox under control.
+Meeting Agenda Maker | Create a tight agenda with owners and times.
+Time Audit | Analyse how time is spent and suggest 5 changes.
+Focus Environment Setup | Give changes to make the workspace and phone support focus.
+Decision Journal Template | Create a template to record decisions and review later.
+Second Brain Setup | Explain a simple note system for ideas, tasks and references.
+Automation Ideas for Daily Tasks | List repetitive tasks to automate and the tools to try.
+Weekly Review Template | Build a weekly review with wins, lessons and next week plan.
+Deep Work Schedule | Design deep work blocks around the energy pattern described.
+Habit Stacking Ideas | Suggest habit stacks that fit the routine.
+Reading List Planner | Plan reading goals and a schedule to finish the books.
+Say No Filter | Give a test to decide what to refuse and how to say it.
+Travel Day Productivity | Give ways to work effectively while travelling.
+Project Retrospective | Run a retrospective with questions and action items.
+## Decision and Thinking
+Pros and Cons Analyser | List weighted pros and cons for the decision and say what would change the answer.
+Decision Matrix | Build a weighted decision matrix with criteria, scores and a result.
+Pre-mortem Planner | Imagine the plan failed and list likely causes and how to prevent each.
+First Principles Breakdown | Break the problem to basic facts and rebuild a solution.
+Bias Checker | Check the reasoning for common biases and give debiasing questions.
+Devil's Advocate | Argue the strongest case against the plan so it can be tested.
+Scenario Planner | Build best, likely and worst scenarios with signals to watch.
+Second Order Effects | List the second and third order consequences of the decision.
+Regret Minimiser | Compare options by how you would feel in 10 years and in 10 months.
+Argument Mapper | Map the argument pasted into claim, reasons, evidence and gaps.
+Logical Fallacy Finder | Find fallacies in the text and explain each in plain words.
+Question Asker | List 15 questions that clarify the problem before deciding.
+Root Cause 5 Whys | Run a 5 whys on the problem and propose fixes.
+Mental Models Coach | Apply 5 relevant mental models to the situation with examples.
+Priority Matrix | Place tasks in an Eisenhower style matrix and give an action plan.
+Risk and Reward Table | Build a table of risks and rewards with rough likelihood labels.
+Opportunity Cost Explainer | Explain what each option gives up and what is the real cost.
+Assumption Tester | List hidden assumptions in the plan and cheap ways to test each.
+Both Sides Explainer | Explain the best case of each side in a debate fairly.
+Wise Friend Advice | Give calm, practical advice on the situation, weighing both short and long term.
+## Puzzles and Brain Games
+Riddle Maker | Write 15 original riddles with answers at the difficulty asked.
+Logic Puzzle Maker | Create an original logic puzzle with clues and a unique solution.
+Sudoku Strategy Coach | Teach solving techniques for sudoku with examples.
+Word Game Ideas | Give word games for groups with rules.
+Math Magic Tricks | Explain number tricks and why they work.
+Brain Teaser Quiz | Ask brain teasers one at a time with hints before answers.
+Memory Game Maker | Create memory games with increasing difficulty.
+Crossword Clue Writer | Write original clues for the word list.
+Escape Room Puzzle Ideas | Design puzzles for a home escape room with a theme.
+Pattern Puzzle Practice | Write number and shape pattern puzzles with solutions described.
+Lateral Thinking Stories | Write situation puzzles with a hidden solution and hints.
+Chess Learning Plan | Give a plan to learn chess with openings, tactics and practice.
+Trivia Night Builder | Build trivia rounds with answers on the themes.
+Scavenger Hunt Clues | Write clues for an indoor or outdoor scavenger hunt.
+Kids Puzzle Pack | Write simple puzzles for children by age.
+Anagram Maker | Create anagram puzzles on a theme with answers.
+Cipher Fun | Explain simple ciphers and make a coded message to solve.
+Quiz by Topic | Write a 10 question quiz with answers on the topic.
+Daily Brain Workout | Give a 10 minute daily workout of mixed mental tasks.
+Would You Rather Questions | Write 25 thoughtful would you rather questions for the group.
+## Events and Parties
+Party Planner | Plan the party with timeline, food, activities and budget.
+Wedding Planning Checklist | Give a month-by-month wedding checklist for the type of wedding.
+Event Run of Show | Write a minute-by-minute run of show for the event.
+Invitation Writer | Write the invitation text in the tone and language needed.
+Icebreaker Games | Give icebreakers for the group size and setting.
+Anchor Script | Write an anchor script for the event with transitions.
+Farewell Party Ideas | Plan a farewell with a speech outline and gift ideas.
+Gift Idea Finder | Give gift ideas by budget and interests with where to look.
+College Fest Planner | Plan a fest with events, teams, sponsors and budget.
+Budget Event Planner | Plan the event on a small budget with priorities.
+Housewarming Ideas | Plan a housewarming with a simple menu and rituals respected.
+Corporate Event Plan | Plan a team event with goals, agenda and feedback form.
+Toast and Speech Writer | Write a short toast for the occasion.
+Festival Celebration Plan | Plan the festival celebration with traditions and activities.
+Party Games for Adults | Give games for adults that work in a small room.
+Volunteer Coordination | Plan roles, shifts and a briefing sheet for volunteers.
+Event Feedback Form | Write a feedback form and a plan to use the answers.
+Reunion Planner | Plan a reunion: reaching people, venue, activities and memory book.
+Birthday Surprise Plan | Plan a surprise with a timeline and backup ideas.
+Thank You Messages for Guests | Write thank you messages after an event.
+## Shopping and Consumer
+Product Comparison | Compare the products on the points that matter and say who each suits.
+Buying Checklist | Give a checklist to evaluate the product before buying.
+Smartphone Buying Guide | Explain what to look for in a phone for the budget and use.
+Laptop Buying Guide | Explain how to choose a laptop for the use and budget.
+Deal Checker | Give a method to check if a discount is real.
+Fake Review Spotter | Explain signs of fake reviews and how to judge the product pasted.
+Warranty Explainer | Explain warranty terms and what to keep for claims.
+Return and Refund Steps | Give steps to return a product and escalate if refused.
+Gift Budget Planner | Plan gifts for the people listed within the budget.
+Second Hand Buying Guide | Give checks for buying used items safely.
+Online Shopping Safety | Give safe payment and seller checks.
+Minimalist Shopping Rules | Give rules to avoid impulse buying.
+Price Tracking Method | Explain how to track prices and decide the right time to buy.
+Grocery Savings Plan | Give ways to cut the grocery bill without losing quality.
+Subscription Audit | Explain how to list and cancel unneeded subscriptions.
+Consumer Complaint Template | Write a complaint to the seller with the facts and demand.
+Electronics Care Tips | Give care tips to extend the life of the device.
+Eco Friendly Choices | Give practical greener swaps with honest impact notes.
+Brand Comparison Questions | Give questions to ask when comparing brands.
+Festival Shopping Plan | Plan festival shopping with a budget and list.
+## Real Estate
+Home Buying Checklist | Give a step-by-step checklist for buying a home with documents to verify.
+Rent vs Buy Framework | Compare renting and buying with a method and the numbers to collect.
+Property Document Checklist | List documents to check and verify with a lawyer before buying.
+Home Loan Questions | List what to ask and compare in a home loan.
+Site Visit Checklist | Give a checklist of what to inspect when visiting a property.
+Landlord Tenant Notice | Draft a notice for common situations as a template.
+Rent Receipt Format | Create a clear rent receipt format.
+Property Listing Writer | Write an honest, appealing property listing.
+Neighbourhood Evaluation | Give factors and questions to evaluate an area.
+Interior Budget Estimator Method | Explain how to estimate interior costs and a template to fill.
+Real Estate Terms Explainer | Explain common real estate terms simply.
+First Home Planning | Plan savings, loan and timeline for the first home.
+Co-living Evaluation | Give questions to judge a PG or co-living place.
+Home Inspection Report Reader | Explain the report pasted and which items are urgent.
+Agreement Negotiation Tips | Give ways to negotiate rent or price politely.
+Society Meeting Agenda | Write an agenda and minutes template for a residents meeting.
+Property Investment Basics | Explain basic ideas and risks, general information only.
+Plot Purchase Checks | List checks to make before buying a plot.
+Move-in Checklist | Give a checklist for the first week in a new place.
+Vacating Checklist | Give steps to leave a rented home and get the deposit back.
+## Automobile
+Car Buying Guide | Explain how to choose a car by need and budget with checks.
+Used Car Inspection | Give a checklist to inspect a used car and paperwork.
+Bike Maintenance Schedule | Give a maintenance schedule for a motorcycle or scooter.
+Car Maintenance Basics | Explain basic car care and warning signs.
+Fuel Saving Tips | Give habits that improve mileage.
+Road Trip Car Check | Give a pre-trip vehicle checklist.
+EV Basics | Explain electric vehicle basics, charging and costs generally.
+Driving Test Prep | Give a plan to prepare for the driving test with rules and practice.
+Road Safety Rules | Explain key road rules and safe habits.
+Accident Steps Guide | Explain what to do after an accident and what to document.
+Insurance Claim Steps | Explain steps to claim vehicle insurance.
+Vehicle Documents Checklist | List documents to carry and renew dates to track.
+Tyre Care Guide | Explain tyre pressure, wear checks and replacement signs.
+Mechanic Questions | Give questions to ask a mechanic to avoid overcharging.
+Learning to Drive Plan | Make a 30 day plan to learn driving.
+Bike Buying Guide | Explain how to choose a bike by use and budget.
+Car vs Cab Cost Method | Show how to compare owning and using cabs with numbers to fill.
+Vehicle Sale Checklist | Give steps and papers to sell a vehicle safely.
+Dashboard Warning Lights | Explain common warning lights and what to do.
+Cycling Commute Plan | Plan a safe cycling commute with gear and route tips.
+## Engineering
+Engineering Concept Explainer | Explain the concept with intuition, a formula and an example.
+Circuit Problem Solver | Solve the circuit problem step by step with laws used.
+Mechanics Problem Solver | Solve the mechanics problem with a free body diagram described and equations.
+Thermodynamics Helper | Explain and solve the thermodynamics problem with assumptions stated.
+Engineering Drawing Basics | Explain drawing rules and views with examples.
+Project Report Outline | Write an engineering project report outline with what to include.
+Final Year Project Ideas | Give project ideas for the branch with scope and tools.
+Material Selection Guide | Explain how to choose a material for the need and trade-offs.
+Civil Engineering Basics | Explain basics of the civil topic with simple examples.
+Control Systems Basics | Explain feedback, stability and the example asked.
+Signals and Systems Helper | Explain the concept with an intuition and a solved example.
+Fluid Mechanics Helper | Explain the concept and solve the numerical.
+Engineering Viva Questions | Ask viva questions on the subject with model answers.
+Safety Rules for Labs | Give lab safety rules and why each matters.
+Estimation Practice | Teach quick engineering estimation with worked examples.
+Data Sheet Reader | Explain how to read a component data sheet and what to check.
+GATE Preparation Plan | Plan GATE preparation by branch with revision and tests.
+Engineering Maths Helper | Explain the maths topic used in engineering with applications.
+Quality Control Basics | Explain QC tools like control charts with a small example.
+CAD Learning Plan | Give a plan to learn CAD with beginner projects.
+## Electronics and IoT
+Arduino Project Ideas | Give project ideas with components list and difficulty.
+Arduino Code Writer | Write commented Arduino code for the project with wiring notes.
+Raspberry Pi Starter | Give first projects and setup steps for Raspberry Pi.
+Sensor Guide | Explain how the sensor works and how to connect it.
+Circuit Explainer | Explain the circuit in plain words and what each part does.
+Component Chooser | Suggest components for the need with values and reasons.
+Breadboard Debugging | Give a checklist to debug a circuit that does not work.
+IoT System Design | Design an IoT system with sensors, network, cloud and dashboard.
+Home Automation Plan | Plan a safe low-cost home automation setup.
+Battery and Power Guide | Explain battery choices, charging and safety.
+Soldering Basics | Explain soldering steps and safety.
+ESP32 Project Starter | Write a starter project for ESP32 with code and wiring.
+PCB Design Basics | Explain steps and rules in making a simple PCB.
+Electronics Terms Dictionary | Explain the terms in simple words with examples.
+Smart Farming IoT Idea | Plan a soil and irrigation monitor with parts and logic.
+Solar Charger Project | Plan a small solar charger with parts and safety.
+Voltage Divider Calculator Guide | Explain and compute voltage dividers with the values given.
+Electronics Viva Questions | Ask viva questions with model answers.
+Wearable Gadget Ideas | Give ideas for simple wearables with parts and features.
+Troubleshoot My Gadget | Give a systematic troubleshooting path for the gadget problem.
+## Robotics and Space
+Robot Project Ideas | Give robot ideas for the level with parts and challenges.
+Line Follower Guide | Explain how a line follower works and how to build it.
+Obstacle Avoider Plan | Plan an obstacle avoiding robot with sensors and logic.
+Robot Arm Basics | Explain joints, servos and control for a robot arm.
+Drone Basics | Explain how drones fly and safety and legal points to check.
+ROS Starter | Explain the first steps in ROS with a small example.
+Computer Vision Starter | Explain a beginner computer vision project with steps.
+Space Facts Explainer | Explain the space topic with scale and well-established facts.
+Rocket Science Basics | Explain how rockets work with the key equations simply.
+Satellite Basics | Explain how satellites work and what they are used for.
+Robotics Competition Plan | Plan the team roles, design and timeline for a competition.
+Motor Selection Guide | Explain how to pick motors for the robot.
+PID Control Explainer | Explain PID control with an intuition and tuning steps.
+Space Careers Guide | Explain paths into space and robotics careers in India.
+Astronomy Observation Plan | Plan sky watching with what to see and how.
+Robot Safety Rules | Give safety rules while building and testing robots.
+3D Printing Basics | Explain 3D printing basics and common problems.
+Mars Mission Explainer | Explain what we know about Mars missions in simple terms.
+Robotics Quiz | Write a quiz on robotics with answers.
+Space Story Ideas | Give original science fiction story ideas about space exploration.
+## Environment and Energy
+Carbon Footprint Reducer | Give a plan to reduce a personal footprint with the biggest wins first.
+Waste Segregation Guide | Explain waste segregation and composting at home.
+Solar Panel Basics | Explain home solar basics, sizing method and questions to ask installers.
+Energy Audit Home | Give a home energy audit checklist.
+Plastic Free Living | Give swaps and a month long plan to cut plastic.
+Water Conservation Plan | Give a plan to cut water use at home or school.
+Tree Planting Guide | Explain how to plant and care for trees with local species advice to check.
+Climate Change Explainer | Explain climate change with well-established science and what individuals can do.
+Environmental Project Ideas | Give school or college project ideas with methods.
+Recycling Business Ideas | List recycling ideas with first steps.
+Rainwater Harvesting Guide | Explain how harvesting works and a basic setup.
+Pollution Awareness Talk | Write a short talk on air or water pollution with actions.
+Green Campus Plan | Plan sustainability steps for a campus.
+Renewable Energy Comparison | Compare solar, wind and others with pros and limits.
+Eco Event Planning | Plan a low-waste event.
+Energy Saving Habits | Give habits that save power with an estimate method.
+Biodiversity Explainer | Explain why biodiversity matters with examples.
+Sustainable Fashion Tips | Give ways to buy less and care for clothes.
+Environmental Essay Helper | Outline an essay on an environmental topic with evidence types.
+Community Cleanup Plan | Plan a cleanup drive with roles, supplies and safety.
+## History and Culture
+History Timeline Maker | Build a clear timeline of the period with causes and effects.
+Historical Event Explainer | Explain the event: background, key people, outcome and legacy using well-established facts.
+Cause and Effect Chart | Show the causes and consequences of the event in a chart format.
+Freedom Movement Notes | Make notes on the movement with phases, leaders and key events, verifying details.
+Cultural Festival Explainer | Explain the festival's meaning, traditions and regional variations respectfully.
+Ancient Civilisation Guide | Explain the civilisation's society, achievements and decline.
+Historical Figure Profile | Write a balanced profile with achievements and controversies.
+Heritage Site Guide | Explain the heritage site's history and what to see.
+History Quiz | Write a history quiz with answers on the topic.
+Compare Two Periods | Compare two historical periods on politics, economy and society.
+Museum Visit Plan | Plan a museum visit with questions to explore.
+Folk Tales Retelling | Retell a traditional folk tale in simple words with its moral.
+Language and Culture Basics | Explain customs and etiquette of a culture respectfully.
+Primary Source Reader | Explain how to read a historical source critically with questions.
+History Essay Outline | Outline an essay with argument, evidence and counterarguments.
+Local History Project Plan | Plan a project on local history with interview questions and sources.
+Art and Architecture Styles | Explain styles with identifying features.
+Historical Map Helper | Describe how to read a historical map and what to note.
+Myth vs Fact History | Check a popular historical claim against well-established history.
+Oral History Interview Guide | Give a guide to record family or community history.
+## Philosophy and Ethics
+Philosophy Concept Explainer | Explain the concept with a simple example and the main objections.
+Ethical Dilemma Analyser | Analyse the dilemma using several ethical frameworks fairly.
+Debate Case Builder | Build arguments for the side given with evidence types and likely rebuttals.
+Thought Experiment Maker | Create a thought experiment on the topic with questions.
+Stoicism Daily Practice | Give practical stoic exercises for daily life.
+Meaning of Life Discussion Guide | Give a discussion guide with different perspectives respectfully.
+Moral Story Writer | Write a short story that explores a moral question without preaching.
+Critical Thinking Exercises | Give exercises to practise evaluating claims.
+Philosophers Compared | Compare two thinkers on key ideas and differences.
+Essay on Ethics | Outline an essay on the ethical topic with strong arguments.
+Values Clarifier | Give questions to help find personal values and conflicts between them.
+Respectful Disagreement Guide | Give ways to disagree without hostility.
+Ethics of AI Discussion | Give discussion points on AI ethics with real concerns and balance.
+Philosophy for Kids | Explain a big question to children simply with a conversation starter.
+Bhagavad Gita Themes Study | Explain commonly discussed themes of the text respectfully and in general terms.
+World Religions Overview | Explain core ideas of the traditions fairly without ranking them.
+Paradox Explainer | Explain the paradox and why it is puzzling.
+Meditation and Reflection Prompts | Give reflective prompts for a quiet half hour.
+Argument Strength Rater | Rate how strong the argument is and what would improve it.
+Ethics Case Study Pack | Write short case studies with questions for class discussion.
+## Public Speaking
+Speech Writer | Write a speech with an opening, 3 points, stories and a close for the occasion.
+Speech Outline | Outline a talk with timing for each section.
+Stage Fear Plan | Give a practical plan to calm nerves before speaking.
+Voice and Delivery Coach | Give exercises on pace, pause, volume and emphasis.
+Presentation Slide Plan | Plan slides with one message each and what to say.
+Elevator Pitch | Write a 30 and 60 second self-introduction.
+Q and A Preparation | List likely questions after a talk and strong answers.
+Storytelling for Talks | Show how to build a story with a point for the talk.
+Debate Speech | Write a debate speech with rebuttals and a strong close.
+Toastmaster Practice Topics | Give 25 impromptu topics with a structure to answer.
+Body Language Tips | Give posture, gesture and eye contact tips for speaking.
+Seminar Presentation Guide | Plan a college seminar with structure and handouts.
+Welcome Speech | Write a welcome speech for an event with names and thanks.
+Vote of Thanks | Write a graceful vote of thanks.
+Motivational Talk Writer | Write a motivational talk that is grounded and specific.
+Interview Speaking Drill | Give daily drills to improve clarity and confidence in interviews.
+Talk Feedback Checklist | Give a checklist to review a recorded talk.
+Humour in Speeches | Give safe ways to add light humour to a speech.
+Podcast Speaking Tips | Give tips to speak naturally to a microphone.
+Online Presentation Tips | Give tips for presenting on video calls and sharing slides.
+## Fun and Roleplay
+Roleplay Partner | Play the character described and stay in character, keeping it safe and kind.
+Practice Interview Roleplay | Act as the interviewer and ask one question at a time with feedback after each answer.
+Language Roleplay | Act as a shopkeeper or friend in the target language and correct gently after.
+Joke Writer | Write clean original jokes on the topic.
+Funny Caption Maker | Write funny captions for the photo described.
+Superhero Creator | Create an original superhero with powers, weakness and origin.
+Fantasy Name Generator | Generate original names for people and places in the style.
+Meme Idea Generator | Describe original meme ideas with text and format, avoiding hurtful content.
+Trivia About Me | Create fun quiz questions about a person from the facts provided.
+Horoscope Style Fun Note | Write a playful, clearly fictional daily note for entertainment only.
+Rap Rhyme Helper | Suggest rhymes and flow for original verses.
+Pun Maker | Write puns on the topic.
+Story Chain Game | Continue a story one paragraph at a time and invite the next line.
+Time Traveller Chat | Play a time traveller from the era named, with accurate historical flavour.
+Character Chat | Chat as an original character with personality traits given.
+Funny Speech for Friends | Write a light, kind funny speech roasting no one cruelly.
+Birthday Rhymes | Write rhyming birthday verses.
+Nickname Ideas | Give friendly nickname ideas from the details given.
+Dare and Truth Questions | Write safe, fun truth or dare cards for friends.
+Game Show Host | Run a quick quiz game as an energetic host.
 """
 
+_K_TOOLS = {}
+_K_CATS = []
+
+
+def _k_slug(s):
+    return re.sub(r"[^a-z0-9]+", "_", str(s).lower()).strip("_")
+
+
+_k_cat = ""
+for _k_ln in _K_RAW.splitlines():
+    _k_ln = _k_ln.strip()
+    if not _k_ln:
+        continue
+    if _k_ln.startswith("## "):
+        _k_cat = _k_ln[3:].strip()
+        _K_CATS.append(_k_cat)
+        continue
+    if "|" not in _k_ln or not _k_cat:
+        continue
+    _k_title, _k_instr = [x.strip() for x in _k_ln.split("|", 1)]
+    _k_name = "k~" + _k_slug(_k_cat) + "_" + _k_slug(_k_title)
+    if _k_title and _k_instr and _k_name not in _K_TOOLS:
+        _K_TOOLS[_k_name] = {"title": _k_title, "cat": _k_cat, "instr": _k_instr,
+                             "hay": (_k_title + " " + _k_cat + " " + _k_instr).lower()}
+K_TOTAL = len(_K_TOOLS)
+
+_K_FORMAT = (" Give a clear, well-organised result with headings or numbered steps and concrete examples. If the user gave little detail, "
+             "state your assumptions briefly and still deliver the best general result; do not ask questions first.")
+
+
+def k_get(name):
+    t = _K_TOOLS.get(str(name))
+    if not t:
+        return None
+    safe = globals().get("_Z_SAFE", " Never invent facts, figures, quotes or links. For health, legal, tax or money topics give general information only and suggest a qualified professional.")
+    return {"name": name, "cat": t["cat"], "desc": "%s (%s)" % (t["title"], t["cat"]),
+            "prompt": "Tool: %s. Category: %s. %s%s%s" % (t["title"], t["cat"], t["instr"], _K_FORMAT, safe),
+            "ph": "Describe your situation, paste your text, or give the details (optional)"}
+
+
+def k_search(q, limit=60):
+    words = re.findall(r"[a-z0-9]+", str(q).lower())
+    if not words:
+        return []
+    scored = []
+    for n, t in _K_TOOLS.items():
+        hits = sum(1 for w in words if w in t["hay"])
+        if not hits:
+            continue
+        in_title = sum(1 for w in words if w in t["title"].lower())
+        scored.append((-(hits == len(words)), -hits, -in_title, t["title"], n))
+    scored.sort()
+    return [{"name": n, "cat": _K_TOOLS[n]["cat"], "desc": "%s (%s)" % (_K_TOOLS[n]["title"], _K_TOOLS[n]["cat"]),
+             "ph": "Describe your situation, paste your text, or give the details (optional)"}
+            for *_, n in scored[:limit]]
+
+
+_ai_tool_run_base51 = ai_tool_run
+
+
+def ai_tool_run(name, text):
+    t = k_get(name)
+    if not t:
+        return _ai_tool_run_base51(name, text)
+    text = str(text or "").strip()[:12000] or "Use sensible assumptions and give the best general result."
+    out = chat([{"role": "system", "content": AI_TOOLS_SYSTEM + "\n\nTASK: " + t["prompt"]},
+                {"role": "user", "content": text}], 0.4, 4000, smart=True)
+    return _plain_tool_text(hide_keys(plain_math(collapse_repeats(out))))
+
+
+@app.get("/api/aitools/k")
+def api_aitools_k51():
+    if denied():
+        return jsonify(error="locked"), 401
+    if request.args.get("cats"):
+        cnt = {}
+        for t in _K_TOOLS.values():
+            cnt[t["cat"]] = cnt.get(t["cat"], 0) + 1
+        return jsonify(total=K_TOTAL, cats=[{"name": c, "n": cnt.get(c, 0)} for c in _K_CATS])
+    return jsonify(total=K_TOTAL, tools=k_search(request.args.get("q", "")[:80]))
+
+
 try:
-    _i51 = PAGE.rfind("</body>")
-    if _i51 > 0:
-        PAGE = PAGE[:_i51] + _brand17(_OFF51_HTML) + PAGE[_i51:]
-    print("Pack 51 ready: off-screen mode")
+    TOOLS_PAGE = TOOLS_PAGE.replace("</body></html>", r"""<script>
+(function(){
+  const q=document.querySelector('#q'),L=document.querySelector('#list');
+  if(!q||!L)return;
+  let t=null;
+  function pick(x){cur=x;try{stopSpeak()}catch(e){}document.querySelector('#tt').textContent=x.desc;document.querySelector('#td').textContent='Category: '+x.cat;document.querySelector('#in').placeholder=x.ph}
+  q.addEventListener('input',()=>{clearTimeout(t);t=setTimeout(go,750)});
+  async function go(){
+    const f=q.value.trim();if(f.length<2)return;
+    try{
+      const j=await api('/api/aitools/k?q='+encodeURIComponent(f));
+      if(!j.tools.length)return;
+      const h=document.createElement('div');h.className='muted';h.style.padding='8px 10px';
+      h.textContent='More free tools ('+j.total.toLocaleString()+' hand-made, 51 categories):';L.appendChild(h);
+      j.tools.forEach(x=>{const b=document.createElement('button');b.className='it';b.textContent=x.desc;b.onclick=()=>pick(x);L.appendChild(b)});
+    }catch(e){}
+  }
+  (async function chips(){
+    try{
+      const j=await api('/api/aitools/k?cats=1');
+      const w=document.createElement('div');w.style.cssText='display:flex;flex-wrap:wrap;gap:6px;padding:8px 10px';
+      j.cats.forEach(c=>{const b=document.createElement('button');b.className='it';b.style.cssText='width:auto;padding:4px 10px;border-radius:99px;font-size:12px';
+        b.textContent=c.name+' · '+c.n;b.onclick=()=>{q.value=c.name;q.dispatchEvent(new Event('input'))};w.appendChild(b)});
+      L.parentNode.insertBefore(w,L);
+    }catch(e){}
+  })();
+})();
+</script></body></html>""", 1)
 except Exception as _e51:
-    print("Pack 51: could not add off-screen mode:", _e51)
+    print("Pack 51: could not extend the tools page:", _e51)
+
+try:
+    _G_CHAT.update({"/api/aitools/k"})
+except NameError:
+    pass
+
+print("Pack 51 added: %d hand-made AI tools in %d categories" % (K_TOTAL, len(_K_CATS)))
 # ================= END PACK 51 =================
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "ingest":
