@@ -25635,6 +25635,130 @@ def _agent_run(jid, goal, history, opts=None):
 
 print("Pack 57 ready: database-down survival, Agent recovery, no invented URLs")
 # ================= END PACK 57 =================
+# ================= PACK 58: FIX "tool_use_failed" + SEARCH TIMEOUTS =================
+# Error 1 (screenshots 1 and 3): gpt-oss tried to call a built-in "search" tool, and Groq rejected it
+#   with 400 "Tool choice is none, but model called a tool". Now: we retry once with a "no tools" note,
+#   and if it still happens we turn the model's own tool call into the JSON step the Agent expects.
+# Error 2 (screenshots 2 and 4): DuckDuckGo / Mojeek time out from Render. Now: Bing RSS is tried first
+#   (fast, no key), DuckDuckGo only as a second choice with a short timeout and a 5 minute pause after
+#   repeated failures, then Wikipedia / Google News as before.
+
+# ---------- 1. tool_use_failed ----------
+_call_base58 = _call
+_NOTOOL58 = {"role": "system", "content":
+             "IMPORTANT: you have NO tools, no browser and no functions in this chat. Never call a function named search, browser or similar. "
+             "Reply only with the plain text or the single JSON object that was asked for."}
+
+
+def _from_failed58(err, messages):
+    """Turn the model's rejected tool call into the Agent's JSON step, when we can."""
+    s = str(err)
+    if "Deep OQ Agent" not in " ".join(str(m.get("content", ""))[:400] for m in messages if m.get("role") == "system"):
+        return None
+    q = re.search(r'"query"\s*:\s*"((?:[^"\\]|\\.)+)"', s)
+    if not q:
+        q = re.search(r'"url"\s*:\s*"((?:[^"\\]|\\.)+)"', s)
+        return None if not q else json.dumps({"thought": "Reading a page.", "tool": "read", "input": q.group(1)})
+    return json.dumps({"thought": "Searching the web.", "tool": "search", "input": q.group(1)[:200]})
+
+
+def _call(model, messages, temperature, max_tokens, effort=None):
+    try:
+        return _call_base58(model, messages, temperature, max_tokens, effort)
+    except Exception as e:
+        s = str(e)
+        if "tool_use_failed" not in s and "Tool choice is none" not in s:
+            raise
+        print("Pack 58: model tried a tool, retrying without tools")
+        try:
+            return _call_base58(model, [_NOTOOL58] + list(messages), temperature, max_tokens, "low")
+        except Exception as e2:
+            fixed = _from_failed58(e2, messages) or _from_failed58(e, messages)
+            if fixed:
+                return fixed
+            raise
+
+
+# ---------- 2. web search that works from Render ----------
+_DDG58 = {"fails": 0, "until": 0.0}
+_BINGUA58 = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+
+
+def _bing_rss58(query, n=6):
+    url = "https://www.bing.com/search?format=rss&count=%d&q=%s" % (n + 4, urllib.parse.quote(str(query)[:200]))
+    req = urllib.request.Request(url, headers={"User-Agent": _BINGUA58, "Accept": "application/rss+xml,text/xml,*/*"})
+    with urllib.request.urlopen(req, timeout=7) as r:
+        root = ET.fromstring(r.read(1_500_000))
+    out = []
+    for it in root.iter("item"):
+        t = (it.findtext("title") or "").strip()
+        link = (it.findtext("link") or "").strip()
+        d = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", _html.unescape(it.findtext("description") or ""))).strip()
+        if t and link.startswith("http"):
+            out.append({"title": t[:140], "body": d[:400], "url": link})
+        if len(out) >= n:
+            break
+    return out
+
+
+def _ddg58(query, n):
+    from concurrent.futures import ThreadPoolExecutor
+    try:
+        from ddgs import DDGS
+    except ImportError:
+        try:
+            from duckduckgo_search import DDGS
+        except ImportError:
+            return []
+
+    def go():
+        try:
+            d = DDGS(timeout=6)
+        except TypeError:
+            d = DDGS()
+        return [{"title": r.get("title", ""), "body": r.get("body", ""), "url": r.get("href", "")} for r in d.text(query, max_results=n)]
+    ex = ThreadPoolExecutor(max_workers=1)
+    try:
+        return ex.submit(go).result(timeout=9)
+    finally:
+        ex.shutdown(wait=False, cancel_futures=True)
+
+
+def web_search(query, n=5):
+    key = (str(query).lower().strip(), n)
+    hit = _WS56.get(key)
+    if hit and time.time() - hit[0] < 600:
+        return hit[1]
+    res = []
+    try:
+        res = _bing_rss58(query, max(n, 6))
+    except Exception as e:
+        print("bing search failed:", str(e)[:90])
+    if len(res) < 2 and time.time() > _DDG58["until"]:
+        try:
+            res = res + _ddg58(query, n)
+            _DDG58["fails"] = 0
+        except Exception as e:
+            _DDG58["fails"] += 1
+            if _DDG58["fails"] >= 3:
+                _DDG58["until"] = time.time() + 300      # stop trying DuckDuckGo for 5 minutes
+                _DDG58["fails"] = 0
+            print("duckduckgo failed:", str(e)[:90])
+    seen, uniq = set(), []
+    for h in res:
+        if h["url"] not in seen:
+            seen.add(h["url"])
+            uniq.append(h)
+    res = uniq or _backup_search(query, n)
+    if res:
+        if len(_WS56) > 500:
+            _WS56.clear()
+        _WS56[key] = (time.time(), res)
+    return res[:max(n, 6)]
+
+
+print("Pack 58 ready: tool_use_failed fixed, Bing-first web search")
+# ================= END PACK 58 =================
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "ingest":
         ingest(sys.argv[2:])
