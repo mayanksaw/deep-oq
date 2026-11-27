@@ -1550,7 +1550,7 @@ SMART_MODEL = "openai/gpt-oss-120b"
 # Hard questions try these in order (an unavailable model just moves on to the next one).
 SMART_CANDIDATES = []
 # your own list first (DEEP_OQ_SMART_MODELS=model1,model2), then the largest models Groq offers, biggest first
-for _m in ([SMART_MODEL, "openai/gpt-oss-120b", "minimaxai/minimax-m2.7", "meta-models/muse-spark-open",
+for _m in ([SMART_MODEL, "openai/gpt-oss-120b",
               "llama-3.3-70b-versatile", "qwen/qwen3.8-27b", "qwen/qwen3.6-27b"]):
     if _m not in SMART_CANDIDATES:
         SMART_CANDIDATES.append(_m)
