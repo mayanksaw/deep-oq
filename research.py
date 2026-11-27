@@ -138,7 +138,9 @@ def _gemini(system, prompt, max_out):
 
 def llm(prompt, system="You are a careful, thorough research assistant.", max_out=SECTION_TOKENS):
     prompt = prompt[: MAX_IN_TOKENS * 4]
-    _wait_for_budget(est_tokens(prompt) + est_tokens(system) + max_out)
+       _wait_for_budget(est_tokens(prompt) + est_tokens(system) + max_out)
+    if LLM_OVERRIDE:
+        return LLM_OVERRIDE(prompt, system, max_out)
     messages = [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
     for attempt in range(3):
         text = _groq(messages, max_out) or _gemini(system, prompt, max_out)
