@@ -21377,7 +21377,7 @@ header.top .oqtg .btn:last-child:nth-child(odd){grid-column:1/-1}
 </style>
 <script>
 (function(){
-const IDS=['dailyBtn','coachBtn','studioBtn','devBtn','abBtn'];
+const IDS=['dailyBtn','coachBtn','studioBtn','devBtn','abBtn','brBtn','spBtn'];
 function pack(){
   const found=IDS.map(i=>document.getElementById(i)).filter(Boolean);
   if(!found.length)return;
