@@ -24239,6 +24239,87 @@ except NameError:
 
 print("Pack 51 added: %d hand-made AI tools in %d categories" % (K_TOTAL, len(_K_CATS)))
 # ================= END PACK 51 =================
+# ================= PACK 52: CONNECT GUIDE in "My devices" (Windows, Mac, Android, iPhone / iPad) =================
+# PASTE THIS WHOLE BLOCK in deep_oq.py just ABOVE the line:   if __name__ == "__main__":
+# It must stay BELOW Pack 39 (the My devices window). It adds a step-by-step guide with copy-ready commands
+# (your real site address and link code are filled in) under the "Link a new device" button.
+_DEVGUIDE52_HTML = r"""
+<style>
+#dvguide .dvt{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
+#dvguide .devcmd{cursor:pointer;position:relative}
+#dvguide .devcmd:after{content:"tap to copy";position:absolute;right:8px;top:4px;font:10px system-ui;color:#A3A9D1}
+#dvguide ol{margin:6px 0 6px 18px;padding:0}#dvguide li{margin:6px 0}
+#dvguide .dvw{border-left:3px solid #F2A02E;padding:4px 10px;margin:8px 0;font-size:13px}
+</style>
+<script>
+(function(){
+const E=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const PL=[['win','🪟 Windows'],['mac','🍎 Mac'],['and','🤖 Android'],['ios','📱 iPhone / iPad']];
+let plat=(function(){const u=navigator.userAgent||'';return /iPhone|iPad|iPod/.test(u)?'ios':/Android/.test(u)?'and':/Mac/.test(u)?'mac':'win'})();
+const codeNow=()=>{const d=document.querySelector('#dvc'),m=d&&/Code:\s*(\S+)/.exec(d.textContent||'');return m?m[1]:'YOURCODE'};
+const cmd=s=>'<div class="devcmd" title="Tap to copy">'+E(s)+'</div>';
+function body(p){
+  const o=location.origin,c=codeNow();
+  const link=(py,share)=>cmd(py+' oq_device.py '+o+' '+c+' --share '+share);
+  const common='<div class="dvw">Press <b>Link a new device</b> first to get a real code (it lasts 10 minutes and works once). Keep the window open while you want Deep OQ to reach the device. Press <b>Ctrl+C</b> to stop. You can unlink any time. Deep OQ only reads folders you share and asks y/n before each file.</div>';
+  if(p==='win')return '<ol>'
+    +'<li>Install <b>Python 3</b> from python.org. On the first screen tick <b>Add Python to PATH</b>.</li>'
+    +'<li>Press <b>Download oq_device.py</b> above. It lands in your Downloads folder.</li>'
+    +'<li>Open <b>Command Prompt</b> and go to Downloads:'+cmd('cd Downloads')+'</li>'
+    +'<li>Link and start it (first time only needs the code):'+link('python','~/Documents')+'If <b>python</b> is not found, use <b>py</b> instead.</li>'
+    +'<li>Next time just run:'+cmd('python oq_device.py')+'</li></ol>'+common;
+  if(p==='mac')return '<ol>'
+    +'<li>Check Python 3 in <b>Terminal</b>:'+cmd('python3 --version')+'If it asks to install developer tools, accept, or install Python from python.org.</li>'
+    +'<li>Press <b>Download oq_device.py</b> above, then:'+cmd('cd ~/Downloads')+'</li>'
+    +'<li>Link and start it:'+link('python3','~/Documents')+'If macOS asks to let Terminal access Documents or Desktop, choose <b>Allow</b>.</li>'
+    +'<li>Next time just run:'+cmd('python3 oq_device.py')+'</li>'
+    +'<li>Optional, keeps the Mac awake while it runs:'+cmd('caffeinate -i python3 oq_device.py')+'</li></ol>'+common
+    +'<div class="oqmuted">Linux works the same way as Mac: use python3.</div>';
+  if(p==='and')return '<ol>'
+    +'<li>Install <b>Termux</b> from F-Droid (the Play Store copy is old and may not work).</li>'
+    +'<li>Open Termux and run:'+cmd('pkg update && pkg install python')+'</li>'
+    +'<li>Let Termux see your files (tap Allow):'+cmd('termux-setup-storage')+'</li>'
+    +'<li>In your phone browser press <b>Download oq_device.py</b>, then in Termux:'+cmd('cd ~/storage/downloads')+'</li>'
+    +'<li>Link and start it:'+link('python','~/storage/shared/Documents')+'To share more, add another <b>--share ~/storage/shared/Download</b>.</li>'
+    +'<li>Stop Android from putting Termux to sleep:'+cmd('termux-wake-lock')+'Next time just run <b>python oq_device.py</b>.</li></ol>'+common;
+  return '<div class="dvw"><b>iPhone and iPad are limited.</b> Apple does not let apps run in the background, so Deep OQ can only reach the device while the app below stays open on the screen, and only files that app can see. I have not tested this path, so treat it as experimental.</div>'
+    +'<ol><li>Install the free <b>a-Shell</b> app from the App Store (it includes Python).</li>'
+    +'<li>In Safari press <b>Download oq_device.py</b>, then in the download sheet choose <b>Save to Files</b> and move it into the a-Shell folder (or Share, then a-Shell).</li>'
+    +'<li>Open a-Shell and run:'+link('python3','~/Documents')+'To add a folder from Files, run <b>pickFolder</b> first and share that folder.</li>'
+    +'<li>Keep a-Shell open and the screen on while using it.</li></ol>'
+    +'<div class="oqmuted">Easier on iPhone: in the chat press <b>+</b> and attach the file or photo directly. That works without any setup.</div>';
+}
+function render(g){
+  g.innerHTML='<h4>How to connect your device</h4><div class="oqmuted">Pick your device type. The commands already contain your site address and your link code.</div>'
+   +'<div class="dvt">'+PL.map(x=>'<button type="button" class="oqbtn'+(x[0]===plat?' pri':'')+'" data-p="'+x[0]+'">'+x[1]+'</button>').join('')+'</div><div id="dvg">'+body(plat)+'</div>';
+  g.dataset.code=codeNow();g.dataset.plat=plat;
+  g.querySelectorAll('[data-p]').forEach(b=>b.onclick=()=>{plat=b.dataset.p;render(g)});
+  g.querySelectorAll('.devcmd').forEach(d=>d.onclick=()=>{
+    try{navigator.clipboard.writeText(d.textContent);const t=d.style.outline;d.style.outline='1px solid #7CFFD0';setTimeout(()=>d.style.outline=t,600)}catch(e){}
+  });
+}
+let busy=false;
+function ensure(){
+  busy=false;
+  const dvc=document.querySelector('#dvc');
+  if(!dvc||!document.querySelector('#dvnew'))return;
+  dvc.querySelectorAll('.oqmuted').forEach(x=>{if(/iPhone is not supported/.test(x.textContent))x.remove()});
+  let g=document.querySelector('#dvguide');
+  if(!g){g=document.createElement('div');g.id='dvguide';g.className='stucard';dvc.insertAdjacentElement('afterend',g);render(g)}
+  else if(g.dataset.code!==codeNow()||g.dataset.plat!==plat)render(g);
+}
+new MutationObserver(()=>{if(!busy){busy=true;requestAnimationFrame(ensure)}}).observe(document.body,{childList:true,subtree:true});
+})();
+</script>
+"""
+try:
+    _i52g = PAGE.rfind("</body>")
+    if _i52g > 0:
+        PAGE = PAGE[:_i52g] + _brand17(_DEVGUIDE52_HTML) + PAGE[_i52g:]
+    print("Pack 52 ready: device connect guide")
+except Exception as _e52g:
+    print("Pack 52: could not add the device guide:", _e52g)
+# ================= END PACK 52 =================
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "ingest":
         ingest(sys.argv[2:])
