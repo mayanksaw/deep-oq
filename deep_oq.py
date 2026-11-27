@@ -22911,6 +22911,136 @@ try:
 except Exception as _e49:
     print("Pack 49 failed:", _e49)
 # ================= END PACK 49 =================
+# ================= PACK 50: ERROR HUNTER =================
+HUNT50_DAILY = _env_num("DEEP_OQ_HUNT_DAILY", 80)
+_HUNT50 = {}
+_HUNT50_LOCK = threading.Lock()
+_HUNT50_SUBJECTS = ("Maths", "Physics", "Chemistry", "Biology", "Python code", "Indian polity", "Indian history")
+
+
+def _hunt50_get(hid, user):
+    with _HUNT50_LOCK:
+        now = time.time()
+        for k in [k for k, v in _HUNT50.items() if now - v["t"] > 3600]:
+            _HUNT50.pop(k, None)
+        h = _HUNT50.get(str(hid))
+    return h if h and h["user"] == user else None
+
+
+@app.post("/api/studio/hunt")
+def api_studio_hunt50():
+    if denied():
+        return jsonify(error="locked"), 401
+    u = login_session.get("user") or "guest"
+    d = request.get_json(silent=True) or {}
+    action = _s21_clean(d.get("action"), 10)
+    if HUNT50_DAILY > 0 and _limit_hit("hunt50", HUNT50_DAILY):
+        return jsonify(error="Daily limit reached. Come back tomorrow."), 429
+    try:
+        if action == "start":
+            subj = _s21_clean(d.get("subject"), 20)
+            subj = subj if subj in _HUNT50_SUBJECTS else "Maths"
+            level = _s21_clean(d.get("level"), 30) or "Class 9-10"
+            lang = {"hindi": "Hindi", "hinglish": "Hinglish (Hindi in English letters)"}.get(_s21_clean(d.get("lang"), 20).lower(), "English")
+            j = _s21_ai(
+                "Create an error-spotting exercise. Subject: %s. Level: %s. Language: %s. Write a short problem and a worked solution in 5 to 7 numbered steps. "
+                "Exactly ONE step must contain a realistic, subtle mistake (a wrong sign, wrong formula, wrong fact, off-by-one, wrong date or wrong article) that a "
+                "student could plausibly make. All other steps must be fully correct. Use only well-established facts. Reply ONLY JSON: "
+                "{\"title\": \"...\", \"problem\": \"...\", \"steps\": [5 to 7 short strings, no numbering], \"wrong_step\": index starting at 0, "
+                "\"correct_version\": \"what that step should say\", \"why\": \"why the wrong step is wrong, max 40 words\"}" % (subj, level, lang), 2200, 0.8)
+            steps = [_s21_clean(s, 300) for s in (j.get("steps") or []) if str(s).strip()][:7]
+            w = int(j.get("wrong_step"))
+            if not 5 <= len(steps) <= 7 or not 0 <= w < len(steps) or not j.get("correct_version"):
+                return jsonify(error="Could not build a good exercise. Try again."), 500
+            n = len(steps)
+            hs = max(0, min(n - 3, w - random.randint(0, 2)))
+            hid = uuid.uuid4().hex[:12]
+            with _HUNT50_LOCK:
+                _HUNT50[hid] = {"user": u, "t": time.time(), "wrong": w, "fix": _s21_clean(j.get("correct_version"), 400),
+                                "why": _s21_clean(j.get("why"), 400), "tries": 0, "hints": 0, "hint_start": hs, "n": n, "steps": steps}
+            return jsonify(id=hid, title=_s21_clean(j.get("title"), 90), problem=_s21_clean(j.get("problem"), 700), steps=steps)
+        h = _hunt50_get(d.get("id"), u)
+        if not h:
+            return jsonify(error="That exercise expired. Start a new one."), 400
+        if action == "hint":
+            h["hints"] = min(h["hints"] + 1, 2)
+            return jsonify(range=[h["hint_start"], h["hint_start"] + 2], hints=h["hints"])
+        if action == "guess":
+            g = int(_s21_num(d.get("step"), 0, h["n"] - 1, 0))
+            h["tries"] += 1
+            if g == h["wrong"]:
+                score = max(20, 100 - 20 * h["hints"] - 30 * (h["tries"] - 1))
+                with _HUNT50_LOCK:
+                    _HUNT50.pop(str(d.get("id")), None)
+                return jsonify(done=True, found=True, score=score, wrong=h["wrong"], fix=h["fix"], why=h["why"], tries=h["tries"], hints=h["hints"])
+            if h["tries"] >= 2:
+                with _HUNT50_LOCK:
+                    _HUNT50.pop(str(d.get("id")), None)
+                return jsonify(done=True, found=False, score=0, wrong=h["wrong"], fix=h["fix"], why=h["why"], tries=h["tries"], hints=h["hints"])
+            return jsonify(done=False, message="Not that one. You have one try left.")
+        return jsonify(error="Unknown action."), 400
+    except Exception as e:
+        print("hunt failed:", str(e)[:150])
+        return jsonify(error="Could not prepare an exercise. Try again."), 500
+
+
+try:
+    _G_CHAT.update({"/api/studio/hunt"})
+except NameError:
+    pass
+
+_HUNT50_HTML = r"""
+<script>
+(function(){
+const S=window.OQSTU;if(!S)return;
+const {V,TABS,call,E,opt,run}=S;
+V.hunt=function(el){
+  let best=0,played=0;try{best=+localStorage.oqHuntBest||0;played=+localStorage.oqHuntN||0}catch(e){}
+  el.innerHTML='<p class="oqmuted">A worked solution has exactly one wrong step. Find it. You get 2 tries. Hints cost 20 points, a second try costs 30.'
+   +(played?' Your best: <b>'+best+'</b> in '+played+' games.':'')+'</p>'
+   +'<div class="stuf"><div class="stu2"><label>Subject<select id="h5s">'+opt(['Maths','Physics','Chemistry','Biology','Python code','Indian polity','Indian history'])+'</select></label>'
+   +'<label>Level<select id="h5v">'+opt(['Class 6-8','Class 9-10','Class 11-12','College','UPSC or competitive exam'])+'</select></label>'
+   +'<label>Language<select id="h5l"><option>English</option><option>Hindi</option><option>Hinglish</option></select></label></div>'
+   +'<button type="button" class="oqbtn pri" id="h5b">New exercise</button></div><div id="h5o"></div>';
+  const out=el.querySelector('#h5o'),st={id:'',steps:[],range:null,msg:''};
+  function draw(){
+    out.innerHTML='<div class="stucard"><h4>'+E(st.title)+'</h4><div class="stutxt">'+E(st.problem)+'</div></div>'
+     +'<div class="stucard"><h4>Tap the wrong step</h4>'+st.steps.map((s,i)=>'<button type="button" class="oqopt" data-i="'+i+'" style="'+(st.range&&i>=st.range[0]&&i<=st.range[1]?'border-color:#F2A02E':st.range?'opacity:.45':'')+'"><b>'+(i+1)+'.</b> '+E(s)+'</button>').join('')
+     +'<div class="oqmuted" style="margin-top:6px">'+E(st.msg)+'</div><div class="ivrow"><button type="button" class="oqbtn" id="h5h">💡 Hint (-20)</button></div></div>';
+    out.querySelectorAll('.oqopt').forEach(b=>b.onclick=async()=>{
+      try{
+        const j=await call('/api/studio/hunt',{action:'guess',id:st.id,step:+b.dataset.i});
+        if(!j.done){st.msg=j.message;draw();return}
+        try{localStorage.oqHuntN=played+1;if(j.score>best)localStorage.oqHuntBest=j.score}catch(e){}
+        out.innerHTML='<div class="stucard"><div class="stubig">'+(j.found?'🎯 Found it! '+j.score+' / 100':'❌ Missed it')+'</div><div class="oqmuted">'+j.tries+' tries · '+j.hints+' hints</div></div>'
+         +'<div class="stucard"><h4>Solution with the mistake marked</h4>'+st.steps.map((s,i)=>'<div style="margin:6px 0">'+(i===j.wrong?'❌ ':'✅ ')+'<b>'+(i+1)+'.</b> '+E(s)+'</div>').join('')+'</div>'
+         +'<div class="stucard"><h4>It should say</h4>'+E(j.fix)+'<div class="oqmuted" style="margin-top:6px">'+E(j.why)+'</div></div>'
+         +'<div class="ivrow"><button type="button" class="oqbtn pri" id="h5r">Another one</button></div>';
+        out.querySelector('#h5r').onclick=()=>V.hunt(el);
+      }catch(e){st.msg=e.message;draw()}
+    });
+    out.querySelector('#h5h').onclick=async()=>{
+      try{const j=await call('/api/studio/hunt',{action:'hint',id:st.id});st.range=j.range;st.msg='The mistake is somewhere in steps '+(j.range[0]+1)+' to '+(j.range[1]+1)+'.';draw()}
+      catch(e){st.msg=e.message;draw()}
+    };
+  }
+  run(el.querySelector('#h5b'),out,async()=>{
+    const j=await call('/api/studio/hunt',{action:'start',subject:el.querySelector('#h5s').value,level:el.querySelector('#h5v').value,lang:el.querySelector('#h5l').value});
+    Object.assign(st,{id:j.id,title:j.title,problem:j.problem,steps:j.steps,range:null,msg:''});draw();
+  });
+};
+TABS.push(['hunt','🔍 Error Hunter']);
+})();
+</script>
+"""
+try:
+    _i50 = PAGE.rfind("</body>")
+    if _i50 > 0:
+        PAGE = PAGE[:_i50] + _brand17(_HUNT50_HTML) + PAGE[_i50:]
+    print("Pack 50 ready: Error Hunter")
+except Exception as _e50:
+    print("Pack 50 failed:", _e50)
+# ================= END PACK 50 =================
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "ingest":
         ingest(sys.argv[2:])
