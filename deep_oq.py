@@ -20399,7 +20399,10 @@ def main():
     ap.add_argument("--auto-read", action="store_true")
     ap.add_argument("--ask", action="store_true")
     ap.add_argument("--name")
+    ap.add_argument("--auto-browser", action="store_true")
     a = ap.parse_args()
+    if a.auto_browser:
+        globals()["BROWSER_OK"] = True
     c = load()
     if a.server and a.code:
         c = {"server": a.server.rstrip("/")}
@@ -21074,6 +21077,7 @@ def api_browse_run42():
     return (jsonify(data=data) if ok else (jsonify(error=data), 400))
 
 _ACT42 = r"""
+BROWSER_OK = False   # becomes True after you allow once
 _PW = {}
 _PW_Q = None
 
@@ -21208,11 +21212,19 @@ def op_act(arg):
         show.append({"goto": "open " + str(s.get("url")), "click": "click '%s'" % s.get("text"),
                      "type": "type '%s' into '%s'" % (s.get("text"), s.get("label")), "press": "press " + str(s.get("key")),
                      "wait": "wait %ss" % s.get("sec"), "read": "read the page text"}.get(d, "?"))
-    if not (sys.stdin and sys.stdin.isatty()):
-        raise PermissionError("Run oq_device.py in a terminal so you can approve browser actions.")
-    print("\nDeep OQ wants to control your browser:\n  - " + "\n  - ".join(show))
-    if input("Allow these steps? [y/N] ").strip().lower() not in ("y", "yes"):
-        raise PermissionError("You declined on the device.")
+    global BROWSER_OK
+    if BROWSER_OK:
+        print("\nRunning: " + "; ".join(show))
+    else:
+        if not (sys.stdin and sys.stdin.isatty()):
+            raise PermissionError("Run oq_device.py in a terminal so you can approve browser actions.")
+        print("\nDeep OQ wants to control your browser:\n  - " + "\n  - ".join(show))
+        ans = input("Allow? [y = this time only / a = always until I close this window / N = no] ").strip().lower()
+        if ans in ("a", "always"):
+            BROWSER_OK = True
+            print("OK. Browser commands will now run without asking until you stop oq_device.py.")
+        elif ans not in ("y", "yes"):
+            raise PermissionError("You declined on the device.")
     try:
         import playwright  # noqa: F401
     except ImportError:
