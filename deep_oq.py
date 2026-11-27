@@ -18841,20 +18841,28 @@ if USE_PG:
     except Exception as _e:
         print("Pack 24: could not build the new database pool, keeping the old one:", str(_e)[:150])
 
+    _PG_DOWN = {"until": 0.0}
+
     def _pg(sql, params=(), fetch=None):
         import psycopg
         import psycopg_pool
+        if time.time() < _PG_DOWN["until"]:
+            raise RuntimeError("database connection problem: the database is not answering, cooling down")
         for attempt in (1, 2):
             try:
-                with PG.connection() as conn:
+                with PG.connection(timeout=4) as conn:
                     cur = conn.execute(sql, params)
                     if fetch == "one":
-                        return cur.fetchone()
-                    if fetch == "all":
-                        return cur.fetchall()
-                    return None
+                        r = cur.fetchone()
+                    elif fetch == "all":
+                        r = cur.fetchall()
+                    else:
+                        r = None
+                _PG_DOWN["until"] = 0.0
+                return r
             except (psycopg.OperationalError, psycopg.InterfaceError, psycopg_pool.PoolTimeout) as e:
                 if attempt == 2:
+                    _PG_DOWN["until"] = time.time() + 15
                     raise
                 print("database connection problem, retrying:", str(e)[:120])
                 time.sleep(0.5)
