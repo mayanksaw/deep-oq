@@ -3940,6 +3940,48 @@ def api_chats():
 
 @app.get("/api/chat")
 def api_chat():
+  import research as _rs
+_rs.LLM_OVERRIDE = lambda p, s, m: chat(
+    [{"role": "system", "content": s}, {"role": "user", "content": p}], 0.3, m)
+
+_rjobs = {}
+
+@app.post("/research")
+def start_research():
+    if denied():
+        return jsonify(error="locked"), 401
+    d = request.get_json(silent=True) or {}
+    topic = str(d.get("topic", "")).strip()[:300]
+    if len(topic) < 5:
+        return jsonify(error="Type a topic first."), 400
+    try:
+        sections = max(2, min(int(d.get("sections", 6)), 10))
+    except (TypeError, ValueError):
+        sections = 6
+    user = login_session.get("user") or "guest"
+    now = time.time()
+    for k in [k for k, v in _rjobs.items() if now - v["t"] > 3600]:
+        _rjobs.pop(k, None)
+    if any(v["user"] == user and v["report"] is None for v in _rjobs.values()):
+        return jsonify(error="Your research is still running."), 429
+    job_id = uuid.uuid4().hex[:12]
+    _rjobs[job_id] = {"user": user, "t": now, "log": [], "report": None}
+
+    def run():
+        try:
+            _rjobs[job_id]["report"] = _rs.research(
+                topic, sections=sections, progress=_rjobs[job_id]["log"].append)
+        except Exception as e:
+            _rjobs[job_id]["report"] = "Research failed: " + hide_ai(str(e))[:200]
+    threading.Thread(target=run, daemon=True).start()
+    return jsonify(job=job_id)
+
+@app.get("/research/<job_id>")
+def research_status(job_id):
+    j = _rjobs.get(job_id)
+    if denied() or not j or j["user"] != (login_session.get("user") or "guest"):
+        return jsonify(error="Research job not found."), 404
+    return jsonify(log=j["log"], report=j["report"])
     if denied():
         return jsonify(error="locked"), 401
     sess = _my_prefix() + str(request.args.get("sid", ""))
