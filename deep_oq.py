@@ -3940,16 +3940,35 @@ def api_chats():
 
 @app.get("/api/chat")
 def api_chat():
-  import research as _rs
-_rs.LLM_OVERRIDE = lambda p, s, m: chat(
-    [{"role": "system", "content": s}, {"role": "user", "content": p}], 0.3, m)
+    if denied():
+        return jsonify(error="locked"), 401
+    sess = _my_prefix() + str(request.args.get("sid", ""))
+    if USE_PG:
+        rows = _pg("SELECT role, content FROM oq_messages WHERE session=%s ORDER BY id LIMIT 400", (sess,), "all")
+    else:
+        rows = DB.execute("SELECT role, content FROM messages WHERE session=? ORDER BY id LIMIT 400",
+                          (sess,)).fetchall()
+    return jsonify(messages=[{"role": r, "content": c} for r, c in rows])
+
+
+# ---- deep research (needs a research.py file next to deep_oq.py)
+try:
+    import research as _rs
+    _rs.LLM_OVERRIDE = lambda p, s, m: chat(
+        [{"role": "system", "content": s}, {"role": "user", "content": p}], 0.3, m)
+except Exception as _e:
+    _rs = None
+    print("research module not loaded:", _e)
 
 _rjobs = {}
+
 
 @app.post("/research")
 def start_research():
     if denied():
         return jsonify(error="locked"), 401
+    if _rs is None:
+        return jsonify(error="Deep research is not set up on this server."), 503
     d = request.get_json(silent=True) or {}
     topic = str(d.get("topic", "")).strip()[:300]
     if len(topic) < 5:
@@ -3975,6 +3994,7 @@ def start_research():
             _rjobs[job_id]["report"] = "Research failed: " + hide_ai(str(e))[:200]
     threading.Thread(target=run, daemon=True).start()
     return jsonify(job=job_id)
+
 
 @app.get("/research/<job_id>")
 def research_status(job_id):
