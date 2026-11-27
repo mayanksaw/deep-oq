@@ -21417,6 +21417,41 @@ def op_act(arg):
 
     return _on_pw(run_steps)
 """
+import urllib.parse
+from playwright.sync_api import sync_playwright
+
+_pw = None
+_ctx = None
+
+def play_youtube(query):
+    global _pw, _ctx
+    url = "https://www.youtube.com/results?search_query=" + urllib.parse.quote_plus(query)
+
+    # Start once and keep it alive (don't use a `with` block, it closes the window on exit)
+    if _ctx is None:
+        _pw = sync_playwright().start()
+        _ctx = _pw.chromium.launch_persistent_context(
+            user_data_dir=r"C:\Users\HP\.oq_edge_profile",
+            channel="msedge",
+            headless=False,
+            no_viewport=True,
+            args=[
+                "--app=https://www.youtube.com",
+                "--autoplay-policy=no-user-gesture-required",
+                "--start-maximized",
+            ],
+        )
+
+    page = _ctx.pages[0] if _ctx.pages else _ctx.new_page()
+    page.goto(url)
+
+    # first real video result (skips the search box, ads and shorts)
+    page.wait_for_selector("ytd-video-renderer a#video-title", timeout=15000)
+    page.locator("ytd-video-renderer a#video-title").first.click()
+
+    # make sure it is playing
+    page.wait_for_selector("video", timeout=15000)
+    page.evaluate("document.querySelector('video').play()")
 try:
     _DEVICE_PY = (_DEVICE_PY.replace("def handle(j, roots, auto):", _ACT42 + "\n\ndef handle(j, roots, auto):", 1)
                   .replace('if j["op"] != "info" and not roots:', 'if j["op"] not in ("info", "act") and not roots:', 1)
