@@ -21418,8 +21418,6 @@ def op_act(arg):
     return _on_pw(run_steps)
 """
 
-from playwright.sync_api import sync_playwright
-
 _pw = None
 _ctx = None
 
