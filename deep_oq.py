@@ -6617,7 +6617,7 @@ function speakText(raw,btn){
       if(rs.status===404){add('<div class="agplan">'+esc(s.error||'Task lost.')+'</div>');return end()}
       (s.events||[]).forEach(draw);since=s.next;tm.textContent=s.seconds+' s';
       if(s.state!=='working'){
-        else if(s.state==='error'){add('<div class="agplan">'+esc(s.error||'The agent could not finish.')+'</div>');
+        if(s.state==='error'){add('<div class="agplan">'+esc(s.error||'The agent could not finish.')+'</div>');
         if(/restarted/.test(s.error||'')&&!go.retried){go.retried=true;end();return go()}}
         else if(s.state==='stopped')add('<div class="agplan">Stopped.</div>');
         else{
