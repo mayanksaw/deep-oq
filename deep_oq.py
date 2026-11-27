@@ -18819,7 +18819,7 @@ except Exception as _e23:
 if USE_PG:
     def _pg_open2():
         from psycopg_pool import ConnectionPool
-        kw = dict(min_size=3, max_size=10, open=False, max_lifetime=1800, max_idle=1800,
+        kw = dict(min_size=3, max_size=20, open=False, max_lifetime=1800, max_idle=1800,
                   reconnect_timeout=20, timeout=10, num_workers=2,
                   kwargs={"autocommit": True, "connect_timeout": 10, "keepalives": 1, "keepalives_idle": 30,
                           "keepalives_interval": 10, "keepalives_count": 5})
