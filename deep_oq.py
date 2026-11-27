@@ -3839,6 +3839,8 @@ def api_transcribe():
             if text is None and isinstance(r, str):
                 text = r
             det = lang
+            if (text or "").strip().lower().strip(" .!") in {"thank you", "thanks for watching", "you", "bye"}:
+                text = ""
             return jsonify(text=(text or "").strip(), lang=det)
         except Exception as e:
             last = e
@@ -5148,10 +5150,10 @@ function speakText(raw,btn){
   let rec=null,chunks=[],stream=null,timer=null,prev='';
   const stopTracks=()=>{if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}};
   async function start(){
-    try{stream=await navigator.mediaDevices.getUserMedia({audio:true})}
+    try{stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true,channelCount:1}})}
     catch(e){alert('Allow the microphone for this site (click the lock icon next to the web address), then try again.');return}
     const mt=['audio/webm;codecs=opus','audio/webm','audio/mp4','audio/ogg'].find(t=>MediaRecorder.isTypeSupported(t))||'';
-    rec=new MediaRecorder(stream,mt?{mimeType:mt,audioBitsPerSecond:24000}:{audioBitsPerSecond:24000});chunks=[];prev=box.placeholder;
+    rec=new MediaRecorder(stream,mt?{mimeType:mt,audioBitsPerSecond:64000}:{audioBitsPerSecond:64000});chunks=[];prev=box.placeholder;
     rec.ondataavailable=e=>{if(e.data.size)chunks.push(e.data)};
     rec.onstop=async()=>{
       clearTimeout(timer);mic.classList.remove('rec');stopTracks();
@@ -5167,7 +5169,7 @@ function speakText(raw,btn){
         if(!r.ok||j.error)throw new Error(j.error||'Could not understand the recording.');
         const t=(j.text||'').trim();
         if(!t)alert('I could not hear anything. Speak closer to the microphone and try again.');
-        else{box.value=(box.value?box.value.trimEnd()+' ':'')+t;box.dispatchEvent(new Event('input'));if(!busy)submit()}
+        else{box.value=(box.value?box.value.trimEnd()+' ':'')+t;box.dispatchEvent(new Event('input'))}
       }catch(e){alert(e.message)}
       mic.disabled=false;box.placeholder=prev;
     };
@@ -5264,7 +5266,7 @@ function speakText(raw,btn){
   function newRec(){
     chunks=[];
     mt=['audio/webm;codecs=opus','audio/webm','audio/mp4','audio/ogg'].find(t=>MediaRecorder.isTypeSupported(t))||'';
-    rec=new MediaRecorder(stream,mt?{mimeType:mt,audioBitsPerSecond:24000}:{audioBitsPerSecond:24000});
+    rec=new MediaRecorder(stream,mt?{mimeType:mt,audioBitsPerSecond:64000}:{audioBitsPerSecond:64000});
     const mine=chunks;rec.ondataavailable=e=>{if(e.data.size)mine.push(e.data)};
     rec.start();recStart=Date.now();voiced=false;loud=0;silenceMs=0;f0s=[];
   }
@@ -18544,7 +18546,7 @@ V.interview=function(el){
     if(m)m.onclick=async()=>{
       if(rec&&rec.state==='recording'){rec.stop();return}
       try{synth&&synth.cancel()}catch(e){}
-      try{stream=await navigator.mediaDevices.getUserMedia({audio:true})}
+      try{stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true,channelCount:1}})}
       catch(e){stt.textContent='The microphone is blocked. Click the lock icon next to the web address, allow Microphone, then try again.';return}
       const mt=['audio/webm;codecs=opus','audio/webm','audio/mp4','audio/ogg'].find(t=>MediaRecorder.isTypeSupported(t))||'';
       const chunks=[];
@@ -19793,7 +19795,7 @@ V.teach2=function(el){
     const send=out.querySelector('#t2n'),fin=out.querySelector('#t2f'),er=out.querySelector('#t2e'),mb=out.querySelector('#t2m');
     if(mb)mb.onclick=async()=>{
       if(rec&&rec.state==='recording'){rec.stop();return}
-      try{stream=await navigator.mediaDevices.getUserMedia({audio:true})}catch(e){er.textContent='The microphone is blocked. Allow it for this site and try again.';return}
+      try{stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true,channelCount:1}})}catch(e){er.textContent='The microphone is blocked. Allow it for this site and try again.';return}
       const mt=['audio/webm;codecs=opus','audio/webm','audio/mp4','audio/ogg'].find(t=>MediaRecorder.isTypeSupported(t))||'',ch=[];
       try{rec=new MediaRecorder(stream,mt?{mimeType:mt}:{})}catch(e){er.textContent='This browser cannot record. Please type.';return}
       rec.ondataavailable=e=>{if(e.data&&e.data.size)ch.push(e.data)};
