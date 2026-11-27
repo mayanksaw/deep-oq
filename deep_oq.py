@@ -18823,7 +18823,7 @@ if USE_PG:
         from psycopg_pool import ConnectionPool
         kw = dict(min_size=3, max_size=20, open=False, max_lifetime=1800, max_idle=1800,
                   reconnect_timeout=20, timeout=10, num_workers=2,
-                  kwargs={"autocommit": True, "connect_timeout": 10, "keepalives": 1, "keepalives_idle": 30,
+                  kwargs={"autocommit": True, "connect_timeout": 20, "keepalives": 1, "keepalives_idle": 30,
                           "keepalives_interval": 10, "keepalives_count": 5})
         chk = getattr(ConnectionPool, "check_connection", None)   # drops dead connections before they are used (newer psycopg_pool)
         if chk:
@@ -18850,9 +18850,9 @@ if USE_PG:
         import psycopg_pool
         if time.time() < _PG_DOWN["until"]:
             raise RuntimeError("database connection problem: the database is not answering, cooling down")
-        for attempt in (1, 2):
+        for attempt in (1, 2, 3):
             try:
-                with PG.connection(timeout=4) as conn:
+                with PG.connection(timeout=25) as conn:
                     cur = conn.execute(sql, params)
                     if fetch == "one":
                         r = cur.fetchone()
@@ -18863,12 +18863,11 @@ if USE_PG:
                 _PG_DOWN["until"] = 0.0
                 return r
             except (psycopg.OperationalError, psycopg.InterfaceError, psycopg_pool.PoolTimeout) as e:
-                if attempt == 2:
-                    _PG_DOWN["until"] = time.time() + 15
+                if attempt == 3:
+                    _PG_DOWN["until"] = time.time() + 3
                     raise
                 print("database connection problem, retrying:", str(e)[:120])
-                time.sleep(0.5)
-
+                time.sleep(2)
 
 def _soft(fn, default, label):
     """Wrap a database helper so a failure never kills the answer."""
