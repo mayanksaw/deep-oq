@@ -161,13 +161,15 @@ def _pg_open():
     from psycopg_pool import ConnectionPool  # pip install "psycopg[binary,pool]"
     pool = ConnectionPool(
         DATABASE_URL,
-        min_size=2, max_size=30, open=False,
-        max_lifetime=900,        # was 240: reconnecting every 4 minutes was too often
-        max_idle=300,            # was 30
+        min_size=1, max_size=8, open=False,
+        max_lifetime=900,
+        max_idle=240,
         reconnect_timeout=30,
-        timeout=30,              # wait longer before giving up
+        timeout=20,                      # allows for Neon cold start
         num_workers=3,
+        check=ConnectionPool.check_connection,
         kwargs={"autocommit": True, "connect_timeout": 15,
+                "prepare_threshold": None,   # needed for Neon's -pooler host
                 "keepalives": 1, "keepalives_idle": 30,
                 "keepalives_interval": 10, "keepalives_count": 5},
     )
@@ -18956,7 +18958,7 @@ if USE_PG:
             raise RuntimeError("database connection problem: the database is not answering, cooling down")
         for attempt in (1, 2, 3):
             try:
-                with PG.connection(timeout=25) as conn:
+                with PG.connection(timeout=20) as conn:
                     cur = conn.execute(sql, params)
                     if fetch == "one":
                         r = cur.fetchone()
