@@ -21371,6 +21371,7 @@ except Exception as _e42:
 # ==========================================================================
 _TG43_HTML = r"""
 <style>
+header.top #kbBtn,header.top #memBtn,header.top #offBtn,header.top .mrow{display:none!important}
 header.top .oqtg{order:4;display:grid;grid-template-columns:1fr 1fr;gap:4px;width:100%;margin:2px 0;box-sizing:border-box}
 header.top .oqtg .btn{width:100%!important;min-width:0;order:0!important;padding:4px 6px!important;font-size:12px!important;line-height:1.3;border-radius:8px!important;justify-content:center;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 header.top .oqtg .btn:last-child:nth-child(odd){grid-column:1/-1}
