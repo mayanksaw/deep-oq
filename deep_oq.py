@@ -21205,16 +21205,14 @@ def _pw_worker():
         from playwright.sync_api import sync_playwright
         if p is None:
             p = sync_playwright().start()
-        profile = os.path.join(os.path.expanduser("~"), ".oq_edge_profile")
-        ctx = p.chromium.launch_persistent_context(
-            profile, channel="msedge", headless=False,
-            chromium_sandbox=True,
+        _PW["br"] = p.chromium.launch(
+            channel="msedge", headless=False,
             ignore_default_args=["--enable-automation"],
             args=["--autoplay-policy=no-user-gesture-required",
-                  "--disable-blink-features=AutomationControlled"])
-        b = ctx
-        pg = ctx.pages[0] if ctx.pages else ctx.new_page()
-
+                  "--disable-blink-features=AutomationControlled",
+                  "--start-maximized"])
+        b = _PW["br"].new_context(no_viewport=True)   # fresh window, no sign-in, no cookies
+        pg = b.new_page()
     try:
         launch()
     except Exception as e:
