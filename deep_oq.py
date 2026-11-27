@@ -25342,6 +25342,299 @@ AGENT_SYSTEM += ("\n\nLIMITS: do at most 3 searches per sub-question. If search 
                  "saying clearly what is unconfirmed. Prefer the AUTO RESEARCH sources when they are given.")
 print("Pack 56 v2 ready: database fail-fast, device cache, resumable Agent, deep research + verification")
 # ================= END PACK 56 =================
+# ================= PACK 57: DATABASE-DOWN SURVIVAL + AGENT RECOVERY + NO INVENTED URLS =================
+# 1. Device link keeps working from a local token cache when the database is unreachable (no more 500 spam).
+# 2. Agent jobs are also saved to a local file; a lost task restarts itself instead of "not found".
+# 3. Database pool backs off (3-20 s) instead of piling up requests.
+# 4. The Agent may only read URLs that came from search results or from your own message.
+# 5. /api/admin/dbcheck shows if the database answers.
+
+# ---------- 1. database circuit breaker with back-off ----------
+if USE_PG:
+    _PGD57 = {"until": 0.0, "n": 0}
+
+    def _pg(sql, params=(), fetch=None):
+        import psycopg
+        import psycopg_pool
+        if time.time() < _PGD57["until"]:
+            raise RuntimeError("database connection problem: cooling down")
+        for attempt in (1, 2):
+            try:
+                with PG.connection(timeout=12) as conn:
+                    cur = conn.execute(sql, params)
+                    r = cur.fetchone() if fetch == "one" else cur.fetchall() if fetch == "all" else None
+                _PGD57["n"] = 0
+                return r
+            except psycopg_pool.PoolTimeout:
+                _PGD57["n"] += 1
+                _PGD57["until"] = time.time() + min(20, 3 * _PGD57["n"])
+                raise
+            except (psycopg.OperationalError, psycopg.InterfaceError):
+                if attempt == 2:
+                    _PGD57["n"] += 1
+                    _PGD57["until"] = time.time() + min(20, 3 * _PGD57["n"])
+                    raise
+                time.sleep(0.5)
+
+
+@app.get("/api/admin/dbcheck")
+def admin_dbcheck57():
+    bad = _adm_guard()
+    if bad:
+        return bad
+    t0 = time.time()
+    try:
+        if USE_PG:
+            _PGD57["until"] = 0.0          # test for real, ignore the cool-down
+            _pg("SELECT 1", (), "one")
+        else:
+            DB.execute("SELECT 1").fetchone()
+        return jsonify(ok=True, ms=int((time.time() - t0) * 1000), database="PostgreSQL" if USE_PG else "SQLite")
+    except Exception as e:
+        return jsonify(ok=False, ms=int((time.time() - t0) * 1000), error=hide_keys(str(e))[:250],
+                       hint="Open your Neon / Render database dashboard: it may be suspended, over its free limit, or the DATABASE_URL changed.")
+
+
+# ---------- 2. device login cache that survives a database outage ----------
+_DEVF57 = os.path.join(tempfile.gettempdir(), "oq_devcache.json")
+
+
+def _devf_load57():
+    try:
+        with open(_DEVF57, encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+_DEVC57 = _devf_load57()       # token hash -> [device id, username, time checked]
+
+
+def _devf_save57():
+    try:
+        tmp = _DEVF57 + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(_DEVC57, f)
+        os.replace(tmp, _DEVF57)
+    except Exception as e:
+        print("device cache save failed:", str(e)[:80])
+
+
+def _dev_auth():
+    tok = request.headers.get("X-Device-Token", "")
+    if len(tok) < 20:
+        return None
+    th = hashlib.sha256(tok.encode()).hexdigest()
+    now = time.time()
+    hit = _DEVC57.get(th)
+    if hit and now - hit[2] < 1800:                      # only ask the database every 30 minutes
+        return {"id": hit[0], "user": hit[1]}
+    try:
+        r = _q16("SELECT id,username FROM devices WHERE th=?", "SELECT id,username FROM oq_devices WHERE th=%s", (th,), True)
+    except Exception:
+        if hit and now - hit[2] < 12 * 3600:             # database down: trust the earlier answer for up to 12 hours
+            return {"id": hit[0], "user": hit[1]}
+        raise
+    if r:
+        _DEVC57[th] = [r[0][0], r[0][1], now]
+        _devf_save57()
+        return {"id": r[0][0], "user": r[0][1]}
+    _DEVC57.pop(th, None)
+    _devf_save57()
+    return None
+
+
+_LP57 = {}
+
+
+def _soft503_57(name):
+    orig = app.view_functions.get(name)
+    if orig is None:
+        return
+
+    def inner(*a, **k):
+        try:
+            return orig(*a, **k)
+        except Exception as e:
+            now = time.time()
+            if now - _LP57.get(name, 0) > 60:            # one log line a minute, not one per poll
+                _LP57[name] = now
+                print("device endpoint busy (database?):", name, type(e).__name__, str(e)[:90])
+            return jsonify(error="busy"), 503            # the device program just waits and retries
+    inner.__name__ = name
+    app.view_functions[name] = inner
+
+
+for _n57 in ("api_device_c_poll39", "api_device_c_result39", "api_device_c_pair39"):
+    _soft503_57(_n57)
+
+_ul_prev57 = app.view_functions.get("api_device_unlink39")
+if _ul_prev57:
+    def _ul57():
+        r = _ul_prev57()
+        _DEVC57.clear()
+        _devf_save57()
+        return r
+    app.view_functions["api_device_unlink39"] = _ul57
+
+# ---------- 3. Agent jobs saved to a local file as well ----------
+_AJD57 = os.path.join(tempfile.gettempdir(), "oq_ajobs")
+try:
+    os.makedirs(_AJD57, exist_ok=True)
+except OSError:
+    pass
+
+
+def _ajp57(jid):
+    return os.path.join(_AJD57, re.sub(r"[^a-zA-Z0-9]", "", str(jid))[:40] + ".json")
+
+
+def _ajprune57():
+    try:
+        cut = time.time() - 8 * 3600
+        for f in os.listdir(_AJD57):
+            p = os.path.join(_AJD57, f)
+            if os.path.getmtime(p) < cut:
+                os.remove(p)
+    except Exception:
+        pass
+
+
+_ajprune57()
+_AJDB57 = {}
+
+
+def _aj_save(jid, j):
+    try:
+        keep = {k: j.get(k) for k in ("t", "user", "state", "events", "final", "plan", "error", "goal", "history", "opts", "fids", "resumes")}
+        if j.get("state") != "working":
+            keep["images"], keep["apps"] = j.get("images", []), j.get("apps", [])
+    except Exception as e:
+        print("agent save failed:", str(e)[:100])
+        return
+    try:
+        p = _ajp57(jid)
+        with open(p + ".tmp", "w", encoding="utf-8") as f:
+            json.dump(keep, f, default=str)
+        os.replace(p + ".tmp", p)
+    except Exception as e:
+        print("agent file save failed:", str(e)[:100])
+    now = time.time()
+    if j.get("state") == "working" and now - _AJDB57.get(jid, 0) < 20:
+        return                                           # while working, the database gets one save per 20 s
+    _AJDB57[jid] = now
+    if len(_AJDB57) > 500:
+        _AJDB57.clear()
+    if random.random() < 0.02:
+        _ajprune57()
+    try:
+        _q16("INSERT OR REPLACE INTO ajobs(id,username,data,ts) VALUES(?,?,?,?)",
+             "INSERT INTO oq_ajobs(id,username,data,ts) VALUES(%s,%s,%s,%s) ON CONFLICT (id) DO UPDATE SET data=EXCLUDED.data, ts=EXCLUDED.ts",
+             (jid, j.get("user", ""), json.dumps(keep, default=str), now))
+    except Exception as e:
+        print("agent database save failed (the file copy is kept):", str(e)[:100])
+
+
+def _aj_load(jid):
+    try:
+        with open(_ajp57(jid), encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        pass
+    try:
+        r = _q16("SELECT data FROM ajobs WHERE id=?", "SELECT data FROM oq_ajobs WHERE id=%s", (jid,), True)
+        return json.loads(r[0][0]) if r else None
+    except Exception as e:
+        print("agent database load failed:", str(e)[:100])
+        return None
+
+
+# a lost task is reported as an error that contains "restarted", so the page starts it again by itself
+_stat_prev57 = app.view_functions.get("agent_status")
+if _stat_prev57:
+    def _agent_status57(jid):
+        r = _stat_prev57(jid)
+        if isinstance(r, tuple) and len(r) > 1 and r[1] == 404:
+            return jsonify(state="error", events=[], next=0, seconds=0, final="", images=[], apps=[],
+                           error="The server restarted while the agent was working. Starting it again.")
+        return r
+    app.view_functions["agent_status"] = _agent_status57
+
+# ---------- 4. the Agent may only read addresses it really saw ----------
+_URLRE57 = re.compile(r"https?://[^\s|,<>\"')\]]+")
+
+
+def _norm57(u):
+    return str(u).strip().rstrip(".,;:)").split("#")[0].rstrip("/").lower()
+
+
+def _seen57():
+    s = getattr(_tl, "seen_urls", None)
+    if s is None:
+        s = set()
+        _tl.seen_urls = s
+    return s
+
+
+def _allowed57():
+    return _seen57() | {_norm57(x) for x in _URLRE57.findall(getattr(_tl, "last_digest", "") or "")}
+
+
+_NOURL57 = ("That address did not appear in any search result or in your message, so it may not exist (made-up addresses often open a "
+            "different page). Search for the page and use a URL copied exactly from the results, or answer from the search snippets.")
+
+
+def _rec57(fn):
+    def inner(x):
+        out = fn(x)
+        try:
+            for u in _URLRE57.findall(str(out)):
+                _seen57().add(_norm57(u))
+        except Exception:
+            pass
+        return out
+    return inner
+
+
+_agent_search = _rec57(_agent_search)
+_agent_news = _rec57(_agent_news)
+for _n57b in ("web_search", "news_headlines", "deep_research", "arxiv_search", "hacker_news_top", "book_search"):
+    if _n57b in TOOLBOX:
+        TOOLBOX[_n57b]["fn"] = _rec57(TOOLBOX[_n57b]["fn"])
+
+_agent_read_base57 = _agent_read
+
+
+def _agent_read(url):
+    u = str(url or "").strip()
+    if _norm57(u) not in _allowed57():
+        return _NOURL57
+    return _agent_read_base57(u)
+
+
+if "read_many" in TOOLBOX:
+    _rm_base57 = TOOLBOX["read_many"]["fn"]
+
+    def _rm_guard57(x):
+        al = _allowed57()
+        good = [u for u in _URLRE57.findall(str(x or "")) if _norm57(u) in al]
+        if not good:
+            return _NOURL57
+        return _rm_base57(" ".join(good))
+    TOOLBOX["read_many"]["fn"] = _rm_guard57
+
+_agent_run_base57 = _agent_run
+
+
+def _agent_run(jid, goal, history, opts=None):
+    src = str((opts or {}).get("sources", ""))
+    _tl.seen_urls = {_norm57(u) for u in _URLRE57.findall(str(goal) + " " + src)}
+    return _agent_run_base57(jid, goal, history, opts)
+
+
+print("Pack 57 ready: database-down survival, Agent recovery, no invented URLs")
+# ================= END PACK 57 =================
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "ingest":
         ingest(sys.argv[2:])
