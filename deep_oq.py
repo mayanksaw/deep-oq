@@ -23041,6 +23041,192 @@ try:
 except Exception as _e50:
     print("Pack 50 failed:", _e50)
 # ================= END PACK 50 =================
+# ================= PACK 51: OFF-SCREEN MODE (black screen, AI still listens: open palm or say "Deep OQ") =================
+# PASTE THIS WHOLE BLOCK in deep_oq.py just ABOVE the line:   if __name__ == "__main__":
+# It must stay below Pack 35 (Pack 35 removes the old gesture code; this block is new and is not removed).
+_OFF51_HTML = r"""
+<style>
+#offBtn.rec{background:var(--accent);color:var(--accent-ink)}
+#oqoff{position:fixed;inset:0;z-index:100010;background:#000;display:none;cursor:pointer;touch-action:manipulation;
+ -webkit-user-select:none;user-select:none;font:600 13px var(--ui)}
+#oqoff.on{display:block}
+#oqoff .oh{position:absolute;left:16px;right:16px;bottom:24px;text-align:center;color:#000;transition:color .4s;line-height:1.6}
+#oqoff.hint .oh{color:#9aa3c7}
+#oqoff .od{position:absolute;top:14px;right:14px;width:5px;height:5px;border-radius:50%;background:#0b1a14}
+#oqoff.live .od{background:#0f6b48}
+#oqoffv{position:fixed;left:0;top:0;width:64px;height:48px;opacity:.01;pointer-events:none;z-index:1}
+</style>
+<script>
+(function(){
+const vc=document.getElementById('vcBtn');
+if(!vc)return;
+const WAKE=/\b(hey |ok |okay )?deep\s?(o\s?q|oak|ok|okay|cue|queue|kyu)\b|\bwake up\b/i;
+const LIB='https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14';
+const MODEL='https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
+const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+const CAM=!!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia);
+
+const btn=document.createElement('button');
+btn.type='button';btn.className='mic';btn.id='offBtn';btn.textContent='🌙';
+btn.title='Off-screen mode: screen goes black, show your open palm or say "Deep OQ" to start';
+btn.setAttribute('aria-label','Off-screen mode');
+vc.parentNode.insertBefore(btn,vc);
+
+const ov=document.createElement('div');ov.id='oqoff';
+ov.innerHTML='<i class="od"></i><div class="oh"></div>';
+const hint=ov.querySelector('.oh');
+const vid=document.createElement('video');vid.id='oqoffv';vid.muted=true;vid.playsInline=true;vid.setAttribute('playsinline','');
+document.body.append(vid,ov);
+
+let on=false,stream=null,landmarker=null,timer=null,poll=null,lock=null,sr=null,noSR=false;
+let last='',run=0,coolUntil=0,hideT=null,lastTap=0;
+
+const voiceOn=()=>!!document.querySelector('.vc');
+function say(t,ms){
+  hint.textContent=t;ov.classList.add('hint');
+  clearTimeout(hideT);hideT=setTimeout(()=>ov.classList.remove('hint'),ms||4000);
+}
+function buzz(p){try{if(navigator.vibrate)navigator.vibrate(p)}catch(e){}}
+
+/* ---- keep the page alive: the screen is black, but the phone must not really sleep ---- */
+async function keep(){
+  try{if('wakeLock' in navigator&&!lock&&!document.hidden){
+    lock=await navigator.wakeLock.request('screen');
+    lock.addEventListener('release',()=>{lock=null});
+  }}catch(e){}
+}
+function unkeep(){try{if(lock)lock.release()}catch(e){}lock=null}
+
+/* ---- trigger: start voice chat (the screen stays black, the AI talks) ---- */
+function trigger(why){
+  if(voiceOn()||Date.now()<coolUntil)return;
+  coolUntil=Date.now()+2500;
+  stopSpeech();buzz([25]);
+  ov.classList.add('live');
+  vc.click();
+}
+
+/* ---- hand gesture (same detector as before): open palm = start, fist = stop ---- */
+function shape(lm){
+  const d=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y),w=lm[0];
+  let ext=0,curl=0;
+  [[8,6],[12,10],[16,14],[20,18]].forEach(([t,p])=>{
+    const r=d(w,lm[t])/d(w,lm[p]);
+    if(r>1.15)ext++;
+    if(r<1.05)curl++;
+  });
+  if(ext===4)return 'open';
+  if(ext===0&&curl>=3)return 'fist';
+  return 'other';
+}
+function step(){
+  if(!on||!landmarker||vid.readyState<2)return;
+  let res;
+  try{res=landmarker.detectForVideo(vid,performance.now())}catch(e){return}
+  const lm=res&&res.landmarks&&res.landmarks[0];
+  const s=lm?shape(lm):'none';
+  if(s===last)run++;else{last=s;run=1}
+  if(run<5||Date.now()<coolUntil)return;
+  if(s==='open'&&!voiceOn())trigger('palm');
+  else if(s==='fist'&&voiceOn()){
+    coolUntil=Date.now()+2000;buzz([15,30,15]);
+    const e=document.querySelector('.vc .vc-end');if(e)e.click();
+  }
+}
+async function loadModel(){
+  const T=await import(LIB+'/vision_bundle.mjs');
+  const fs=await T.FilesetResolver.forVisionTasks(LIB+'/wasm');
+  const mk=d=>T.HandLandmarker.createFromOptions(fs,{
+    baseOptions:{modelAssetPath:MODEL,delegate:d},runningMode:'VIDEO',numHands:1});
+  try{return await mk('GPU')}catch(e){return await mk('CPU')}
+}
+async function openCam(){
+  if(!CAM||stream)return;
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:{ideal:480},height:{ideal:360}},audio:false});
+    vid.srcObject=stream;await vid.play().catch(()=>{});
+    if(!landmarker)landmarker=await loadModel();
+    clearInterval(timer);timer=setInterval(step,100);
+  }catch(e){
+    closeCam();
+    say('Camera not available. Say "Deep OQ" to wake me.',6000);
+  }
+}
+function closeCam(){
+  clearInterval(timer);timer=null;
+  if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}
+  vid.srcObject=null;
+}
+
+/* ---- voice wake word: say "Deep OQ" ---- */
+function startSpeech(){
+  if(!SR||sr||noSR||!on||voiceOn())return;
+  try{
+    sr=new SR();sr.continuous=true;sr.interimResults=true;sr.lang='en-IN';
+    sr.onresult=e=>{
+      let t='';
+      for(let i=e.resultIndex;i<e.results.length;i++)t+=e.results[i][0].transcript+' ';
+      if(WAKE.test(t))trigger('voice');
+    };
+    sr.onerror=e=>{if(e.error==='not-allowed'||e.error==='service-not-allowed')noSR=true};
+    sr.onend=()=>{sr=null;if(on&&!voiceOn()&&!noSR)setTimeout(startSpeech,500)};
+    sr.start();
+  }catch(e){sr=null}
+}
+function stopSpeech(){
+  if(sr){const s=sr;sr=null;s.onend=null;try{s.abort()}catch(e){}}
+}
+
+/* ---- turn the mode on / off ---- */
+async function start(){
+  on=true;noSR=false;last='';run=0;coolUntil=0;
+  btn.classList.add('rec');btn.setAttribute('aria-pressed','true');
+  ov.classList.add('on');ov.classList.toggle('live',voiceOn());
+  say('Off-screen mode. Show your open palm ✋ or say "Deep OQ". Double-tap to turn the screen on.',6000);
+  keep();
+  /* the voice chat button needs the mic, so ask for it once now, while the tap is still fresh */
+  poll=setInterval(()=>{
+    if(!on)return;
+    if(voiceOn()){stopSpeech();ov.classList.add('live')}
+    else{ov.classList.remove('live');startSpeech()}
+  },600);
+  startSpeech();
+  await openCam();
+}
+function stop(){
+  on=false;
+  clearInterval(poll);poll=null;
+  stopSpeech();closeCam();unkeep();
+  ov.classList.remove('on','hint','live');
+  btn.classList.remove('rec');btn.setAttribute('aria-pressed','false');
+}
+
+btn.onclick=()=>{on?stop():start()};
+ov.addEventListener('click',()=>{
+  const n=Date.now();
+  if(n-lastTap<450){lastTap=0;stop();return}
+  lastTap=n;
+  say(voiceOn()?'Close your fist ✊ to stop. Double-tap to turn the screen on.':'Show your open palm ✋ or say "Deep OQ". Double-tap to turn the screen on.',4000);
+});
+
+/* when the browser itself pauses the page (app switched or the power button pressed) the camera stops; bring it back */
+document.addEventListener('visibilitychange',()=>{
+  if(!on)return;
+  if(document.hidden){closeCam();stopSpeech()}
+  else{keep();openCam();startSpeech()}
+});
+})();
+</script>
+"""
+
+try:
+    _i51 = PAGE.rfind("</body>")
+    if _i51 > 0:
+        PAGE = PAGE[:_i51] + _brand17(_OFF51_HTML) + PAGE[_i51:]
+    print("Pack 51 ready: off-screen mode")
+except Exception as _e51:
+    print("Pack 51: could not add off-screen mode:", _e51)
+# ================= END PACK 51 =================
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "ingest":
         ingest(sys.argv[2:])
