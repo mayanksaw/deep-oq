@@ -161,7 +161,7 @@ def _pg_open():
     from psycopg_pool import ConnectionPool  # pip install "psycopg[binary,pool]"
     pool = ConnectionPool(
         DATABASE_URL,
-        min_size=2, max_size=20, open=False,
+        min_size=2, max_size=30, open=False,
         max_lifetime=900,        # was 240: reconnecting every 4 minutes was too often
         max_idle=300,            # was 30
         reconnect_timeout=30,
