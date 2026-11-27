@@ -24200,34 +24200,31 @@ def api_aitools_k51():
         for t in _K_TOOLS.values():
             cnt[t["cat"]] = cnt.get(t["cat"], 0) + 1
         return jsonify(total=K_TOTAL, cats=[{"name": c, "n": cnt.get(c, 0)} for c in _K_CATS])
+    if request.args.get("all"):
+        return jsonify(total=K_TOTAL, cats=_K_CATS,
+                       tools=[{"name": n, "cat": t["cat"], "desc": "%s (%s)" % (t["title"], t["cat"])} for n, t in _K_TOOLS.items()])
     return jsonify(total=K_TOTAL, tools=k_search(request.args.get("q", "")[:80]))
 
 
 try:
     TOOLS_PAGE = TOOLS_PAGE.replace("</body></html>", r"""<script>
+/* Pack 51: put the 51 new topics in the ☰ menu and their tool names in the list */
 (function(){
-  const q=document.querySelector('#q'),L=document.querySelector('#list');
-  if(!q||!L)return;
-  let t=null;
-  function pick(x){cur=x;try{stopSpeak()}catch(e){}document.querySelector('#tt').textContent=x.desc;document.querySelector('#td').textContent='Category: '+x.cat;document.querySelector('#in').placeholder=x.ph}
-  q.addEventListener('input',()=>{clearTimeout(t);t=setTimeout(go,750)});
-  async function go(){
-    const f=q.value.trim();if(f.length<2)return;
+  let K=[],KC=[];
+  const PH='Describe your situation, paste your text, or give the details (optional)';
+  const _cats=cats,_draw=draw;
+  cats=function(c){const o=Object.assign({},c);KC.forEach(n=>{if(!(n in o))o[n]=1});_cats(o)};
+  draw=function(){
+    if(K.length&&!T._k){T=T.concat(K);T._k=1}
+    _draw()
+  };
+  (async function(){
     try{
-      const j=await api('/api/aitools/k?q='+encodeURIComponent(f));
-      if(!j.tools.length)return;
-      const h=document.createElement('div');h.className='muted';h.style.padding='8px 10px';
-      h.textContent='More free tools ('+j.total.toLocaleString()+' hand-made, 51 categories):';L.appendChild(h);
-      j.tools.forEach(x=>{const b=document.createElement('button');b.className='it';b.textContent=x.desc;b.onclick=()=>pick(x);L.appendChild(b)});
-    }catch(e){}
-  }
-  (async function chips(){
-    try{
-      const j=await api('/api/aitools/k?cats=1');
-      const w=document.createElement('div');w.style.cssText='display:flex;flex-wrap:wrap;gap:6px;padding:8px 10px';
-      j.cats.forEach(c=>{const b=document.createElement('button');b.className='it';b.style.cssText='width:auto;padding:4px 10px;border-radius:99px;font-size:12px';
-        b.textContent=c.name+' · '+c.n;b.onclick=()=>{q.value=c.name;q.dispatchEvent(new Event('input'))};w.appendChild(b)});
-      L.parentNode.insertBefore(w,L);
+      const j=await api('/api/aitools/k?all=1');
+      K=j.tools.map(x=>Object.assign({ph:PH},x));KC=j.cats;
+      T._k=0;
+      const cur2={};T.forEach(t=>{if(t.cat&&!cur2[t.cat])cur2[t.cat]=1});
+      cats(cur2);draw();
     }catch(e){}
   })();
 })();
