@@ -2941,7 +2941,7 @@ def chat(messages, temperature=0.3, max_tokens=4096, smart=False, prefer=None):
                 if text:
                     _smart["model"] = m
                     return text
-            except Exception as e:
+        except Exception as e:
             if "skipped" not in str(e):
                 print(f"smart model {m} failed:", e)
         print("all smart models failed, using fast models")
