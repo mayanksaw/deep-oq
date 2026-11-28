@@ -26891,6 +26891,21 @@ PAGE = PAGE.replace(
     "const j=await call('/api/device/pair/new',{});if(!j.code)throw new Error('Could not make a code. Wait a few seconds and press Link a new device again.');", 1)
 print("Pack 61 ready: link code no longer depends on the database")
 # ================= END PACK 61 =================
+def _db_why():
+    try:
+        import psycopg
+        url = os.environ.get("DATABASE_URL", "").strip()
+        if url.startswith("postgres://"):
+            url = url.replace("postgres://", "postgresql://", 1)
+        host = url.split("@")[-1].split("/")[0] if "@" in url else "(DATABASE_URL is empty)"
+        print("DBWHY host:", host, flush=True)
+        with psycopg.connect(url, connect_timeout=15) as c:
+            print("DBWHY ok:", c.execute("select 1").fetchone(), flush=True)
+    except Exception as e:
+        print("DBWHY error:", type(e).__name__, str(e)[:400], flush=True)
+
+
+threading.Thread(target=_db_why, daemon=True).start()
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "ingest":
         ingest(sys.argv[2:])
