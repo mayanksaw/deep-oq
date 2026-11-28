@@ -26720,10 +26720,14 @@ def p60_health():
         "has_DATABASE_URL": bool(os.environ.get("DATABASE_URL")),
     }
 # ===================== END PACK 60 ULTRA =====================
-try:
-    p60_query("CREATE INDEX IF NOT EXISTS idx_devices_owner ON devices(owner)", fetch=False)
-except Exception as e:
-    print("index skipped:", e, flush=True)
+for _ix in ("CREATE INDEX IF NOT EXISTS idx_oq_devices_user ON oq_devices(username)",
+            "CREATE INDEX IF NOT EXISTS idx_oq_devices_th ON oq_devices(th)",
+            "CREATE INDEX IF NOT EXISTS idx_oq_mistakes_user ON oq_mistakes(username)",
+            "CREATE INDEX IF NOT EXISTS idx_oq_signals_user ON oq_signals(username)"):
+    try:
+        p60_query(_ix, fetch=False)
+    except Exception as e:
+        print("index skipped:", e, flush=True)
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "ingest":
         ingest(sys.argv[2:])
