@@ -27972,11 +27972,11 @@ _LABS_BTN62 = ('<a id="oqlabs" href="/labs" title="Debate, timeline, PC agent" s
                '<script>fetch("/api/labs/life/due",{headers:{"X-Access-Key":localStorage.ak||""}}).then(function(r){return r.json()}).then(function(j){'
                'if(j&&j.due>0){var b=document.getElementById("oqlb");b.textContent=j.due;b.style.display="inline"}}).catch(function(){})</script>')
 try:
-    if "oqlabs" not in PAGE and "</body>" in PAGE:
-        PAGE = PAGE.replace("</body>", _LABS_BTN62 + "</body>", 1)
+    _i62b = PAGE.rfind("</body>")
+    if "oqlabs" not in PAGE and _i62b > 0:
+        PAGE = PAGE[:_i62b] + _LABS_BTN62 + PAGE[_i62b:]
 except Exception as _e62p:
     print("Pack 62: could not add the Labs button:", _e62p, flush=True)
-print("Pack 62 ready: /labs (AI debate, life timeline, PC agent, self-improving AI)", flush=True)
 # ================= END PACK 62 =================
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "ingest":
