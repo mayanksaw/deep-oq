@@ -3281,17 +3281,29 @@ def _deep_oq_raw(session, question, force_exam=False, emit=None):
         if _same_answer(fa, fb):  # two different models reached the same answer: confident
             return ta
         try:  # a third model breaks the tie: two out of three agreeing wins
-            if _has_gemini():
-                c = _gemini_parts([{"text": user + solve_txt + tag}], 0.2, 6144, sysmsg)
-            else:
-                c = solve(EXAM_THIRD_MODEL)
+            c = None
+            for _try in range(3):
+                try:
+                    if _has_gemini():
+                        c = _gemini_parts([{"text": user + solve_txt + tag}], 0.2, 6144, sysmsg)
+                    else:
+                        c = solve(EXAM_THIRD_MODEL)
+                    break
+                except Exception as e2:
+                    s2 = str(e2).lower()
+                    if "503" in s2 or "429" in s2 or "unavailable" in s2:
+                        time.sleep(2 * (_try + 1))
+                        continue
+                    raise
+            if c is None:
+                raise RuntimeError("busy")
             fc, tc = _split_final(c)
             if _same_answer(fc, fa):
                 return ta
             if _same_answer(fc, fb):
                 return tb
-        except Exception as e:
-            print("exam third solver failed:", e)
+        except Exception:
+            print("exam tie-break skipped (third model busy), using the reviewer instead")
         ref = chat([{"role": "system", "content": sysmsg}, {"role": "user", "content":
             f"{user}\n\nSOLUTION 1:\n{ta}\n\nSOLUTION 2:\n{tb}\n\nThe two solutions end with different "
             f"answers ({fa or 'none'} and {fb or 'none'}). Find the mistake by re-working the key steps "
