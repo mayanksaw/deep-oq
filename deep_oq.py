@@ -3587,13 +3587,29 @@ def admin_sessions():
     want = request.args.get("user", "")
     names = _adm_names()
     owner_want = "" if (want == "(guests)" and want not in names) else want
-    mine = [(s, n, str(last or "")) for s, n, last in _adm_sessions() if _adm_owner(s, names) == owner_want]
-    mine.sort(key=lambda x: x[2], reverse=True)
+    # ONE query for every chat + its first user message (was 1 query per chat, which hogged the pool)
+    if owner_want:
+        like = owner_want.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + ":%"
+        rows = _adm_q(
+            "SELECT m.session, COUNT(*), MAX(m.ts), (SELECT x.content FROM messages x WHERE x.session=m.session "
+            "AND x.role='user' ORDER BY x.id LIMIT 1) FROM messages m WHERE m.session LIKE ? ESCAPE '\\' "
+            "GROUP BY m.session ORDER BY MAX(m.ts) DESC LIMIT 400",
+            "SELECT m.session, COUNT(*), MAX(m.ts), (SELECT x.content FROM oq_messages x WHERE x.session=m.session "
+            "AND x.role='user' ORDER BY x.id LIMIT 1) FROM oq_messages m WHERE m.session LIKE %s "
+            "GROUP BY m.session ORDER BY MAX(m.ts) DESC LIMIT 400", (like,))
+    else:
+        rows = _adm_q(
+            "SELECT m.session, COUNT(*), MAX(m.ts), (SELECT x.content FROM messages x WHERE x.session=m.session "
+            "AND x.role='user' ORDER BY x.id LIMIT 1) FROM messages m GROUP BY m.session ORDER BY MAX(m.ts) DESC",
+            "SELECT m.session, COUNT(*), MAX(m.ts), (SELECT x.content FROM oq_messages x WHERE x.session=m.session "
+            "AND x.role='user' ORDER BY x.id LIMIT 1) FROM oq_messages m GROUP BY m.session ORDER BY MAX(m.ts) DESC")
     out = []
-    for s, n, last in mine[:200]:
-        r = _adm_q("SELECT content FROM messages WHERE session=? AND role='user' ORDER BY id LIMIT 1",
-                   "SELECT content FROM oq_messages WHERE session=%s AND role='user' ORDER BY id LIMIT 1", (s,))
-        out.append({"session": s, "count": n, "last": last, "preview": ((r[0][0] if r else "") or "")[:90]})
+    for s, n, last, first in rows:
+        if _adm_owner(s, names) != owner_want:
+            continue
+        out.append({"session": s, "count": n, "last": str(last or ""), "preview": (first or "")[:90]})
+        if len(out) >= 200:
+            break
     return jsonify(sessions=out)
 
 
@@ -3609,105 +3625,202 @@ def admin_messages():
                   "SELECT role, content, ts FROM oq_messages WHERE session=%s ORDER BY id LIMIT 500", (s,))
     return jsonify(messages=[{"role": r[0], "content": (r[1] or "")[:8000], "ts": str(r[2] or "")} for r in rows])
 
-
 ADMIN_PAGE = r"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<meta name="theme-color" content="#05060f">
 <title>Deep OQ Admin</title>
 <style>
-:root{--bg:#04050d;--line:rgba(255,255,255,.12);--text:#eef0ff;--muted:#8e94b8;--a:#7c5cff}
+:root{--bg:#05060f;--p1:rgba(255,255,255,.035);--p2:rgba(255,255,255,.07);--line:rgba(255,255,255,.09);--text:#eef0ff;--muted:#8d93b8;--a:#7c5cff;--b:#22d3ee;--ok:#34d399;--bad:#fb7185}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--text);font:15px system-ui,-apple-system,"Segoe UI",sans-serif;height:100vh;display:flex;flex-direction:column}
-header{display:flex;gap:12px;align-items:center;padding:12px 18px;border-bottom:1px solid var(--line)}
-header h1{font-size:18px;margin:0;flex:1}
-a.back,button.ref{color:var(--text);background:rgba(255,255,255,.07);border:1px solid var(--line);border-radius:10px;padding:8px 14px;text-decoration:none;cursor:pointer;font:inherit}
-.stats{color:var(--muted);font-size:13px}
-main{flex:1;display:grid;grid-template-columns:300px 320px 1fr;min-height:0}
-@media(max-width:900px){main{grid-template-columns:1fr;grid-auto-rows:minmax(240px,1fr);overflow:auto}}
-.col{border-right:1px solid var(--line);overflow:auto;min-height:0;padding:10px}
-.col h2{font-size:12px;letter-spacing:1px;text-transform:uppercase;color:var(--muted);margin:4px 6px 10px}
-.item{display:block;width:100%;text-align:left;background:none;border:1px solid transparent;color:var(--text);border-radius:12px;padding:10px 12px;margin-bottom:6px;cursor:pointer;font:inherit}
-.item:hover{background:rgba(255,255,255,.06)}
-.item.on{background:rgba(124,92,255,.22);border-color:var(--a)}
-.item b{font-weight:600;overflow-wrap:anywhere}
-.item small{display:block;color:var(--muted);font-size:12px;margin-top:3px}
-input.s{width:100%;padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:rgba(255,255,255,.05);color:var(--text);margin-bottom:10px;font:inherit}
-.msg{margin:0 0 12px;padding:10px 14px;border-radius:14px;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.5;max-width:92%}
-.msg.user{background:#2a3192;margin-left:auto}
-.msg.assistant{background:rgba(255,255,255,.07)}
-.msg time{display:block;color:var(--muted);font-size:11px;margin-top:6px}
-.empty{color:var(--muted);padding:10px 6px;margin:0}
+html,body{height:100%}
+body{margin:0;color:var(--text);font:14.5px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;display:flex;flex-direction:column;
+  background:radial-gradient(900px 500px at 12% -10%,rgba(124,92,255,.22),transparent 60%),radial-gradient(800px 500px at 100% 0,rgba(34,211,238,.14),transparent 55%),var(--bg)}
+header{display:flex;gap:14px;align-items:center;padding:14px 22px;border-bottom:1px solid var(--line);backdrop-filter:blur(10px)}
+.logo{width:34px;height:34px;border-radius:11px;background:linear-gradient(135deg,var(--a),var(--b));display:grid;place-items:center;font-weight:800;box-shadow:0 6px 20px rgba(124,92,255,.45)}
+header h1{font-size:17px;margin:0;font-weight:700;letter-spacing:.2px}
+header h1 small{display:block;font-weight:500;color:var(--muted);font-size:11.5px;letter-spacing:.4px}
+.sp{flex:1}
+.btn{color:var(--text);background:var(--p2);border:1px solid var(--line);border-radius:11px;padding:8px 14px;text-decoration:none;cursor:pointer;font:inherit;font-size:13.5px;transition:.15s}
+.btn:hover{background:rgba(255,255,255,.12);transform:translateY(-1px)}
+.btn.pri{background:linear-gradient(135deg,var(--a),#5b8cff);border-color:transparent}
+.btn.spin::before{content:"";display:inline-block;width:11px;height:11px;margin-right:7px;border:2px solid rgba(255,255,255,.35);border-top-color:#fff;border-radius:50%;animation:r .7s linear infinite;vertical-align:-1px}
+@keyframes r{to{transform:rotate(360deg)}}
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;padding:16px 22px 4px}
+.kpi{background:var(--p1);border:1px solid var(--line);border-radius:16px;padding:14px 16px;position:relative;overflow:hidden}
+.kpi::after{content:"";position:absolute;right:-20px;top:-20px;width:80px;height:80px;border-radius:50%;background:var(--g,var(--a));opacity:.16;filter:blur(8px)}
+.kpi span{color:var(--muted);font-size:11.5px;letter-spacing:.8px;text-transform:uppercase}
+.kpi b{display:block;font-size:26px;margin-top:4px;font-weight:700}
+main{flex:1;min-height:0;display:grid;grid-template-columns:310px 330px 1fr;gap:12px;padding:12px 22px 22px}
+.col{background:var(--p1);border:1px solid var(--line);border-radius:18px;display:flex;flex-direction:column;min-height:0;overflow:hidden}
+.col>h2{display:flex;align-items:center;gap:8px;font-size:11.5px;letter-spacing:1.1px;text-transform:uppercase;color:var(--muted);margin:0;padding:14px 16px 10px;font-weight:600}
+.col>h2 .bk{display:none}
+.col>h2 .cnt{margin-left:auto;background:var(--p2);border-radius:20px;padding:2px 9px;letter-spacing:0;font-size:11.5px;color:var(--text)}
+.list{overflow:auto;padding:0 10px 10px;flex:1;min-height:0}
+.list::-webkit-scrollbar{width:8px}.list::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:8px}
+input.s{width:calc(100% - 20px);margin:0 10px 10px;padding:10px 13px;border-radius:12px;border:1px solid var(--line);background:rgba(255,255,255,.05);color:var(--text);font:inherit;outline:none;transition:.15s}
+input.s:focus{border-color:var(--a);box-shadow:0 0 0 3px rgba(124,92,255,.22)}
+.item{display:flex;gap:11px;align-items:center;width:100%;text-align:left;background:none;border:1px solid transparent;color:var(--text);border-radius:14px;padding:10px 11px;margin-bottom:5px;cursor:pointer;font:inherit;transition:.14s}
+.item:hover{background:var(--p2)}
+.item.on{background:linear-gradient(135deg,rgba(124,92,255,.28),rgba(34,211,238,.10));border-color:rgba(124,92,255,.7)}
+.av{flex:none;width:38px;height:38px;border-radius:12px;display:grid;place-items:center;font-weight:700;font-size:15px;color:#fff}
+.tx{min-width:0;flex:1}
+.tx b{display:block;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tx small{display:block;color:var(--muted);font-size:12px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pill{flex:none;background:var(--p2);border-radius:20px;padding:2px 9px;font-size:11.5px;color:var(--muted)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--ok);flex:none;box-shadow:0 0 8px var(--ok)}
+.empty{color:var(--muted);padding:26px 14px;margin:0;text-align:center}
+.err{color:var(--bad);padding:18px 14px;text-align:center}
+.err .btn{margin-top:10px}
+.sk{height:58px;border-radius:14px;margin-bottom:6px;background:linear-gradient(100deg,var(--p1) 30%,var(--p2) 50%,var(--p1) 70%);background-size:300% 100%;animation:sh 1.2s infinite}
+@keyframes sh{to{background-position:-300% 0}}
+.msg{margin:0 0 14px;max-width:88%;width:fit-content}
+.msg .who{font-size:11px;letter-spacing:.8px;text-transform:uppercase;color:var(--muted);margin:0 6px 4px}
+.bub{padding:11px 15px;border-radius:16px;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.55}
+.msg.user{margin-left:auto}.msg.user .who{text-align:right}
+.msg.user .bub{background:linear-gradient(135deg,#4a3fd6,#3157d6);border-bottom-right-radius:5px}
+.msg.assistant .bub{background:var(--p2);border:1px solid var(--line);border-bottom-left-radius:5px}
+.msg time{display:block;color:var(--muted);font-size:11px;margin:4px 6px 0}
+.msg.user time{text-align:right}
+.mh{padding:0 16px 12px;border-bottom:1px solid var(--line);margin-bottom:12px}
+.mh b{display:block;font-size:15px;overflow-wrap:anywhere}.mh small{color:var(--muted)}
+.mb{padding:0 16px 16px}
+@media(max-width:1000px){
+  .kpis{grid-template-columns:repeat(2,1fr);padding:12px 14px 0}
+  main{grid-template-columns:1fr;padding:12px 14px 16px}
+  .col{display:none}
+  main[data-v=people] #c1,main[data-v=chats] #c2,main[data-v=msgs] #c3{display:flex}
+  .col>h2 .bk{display:inline-block;padding:4px 10px;font-size:12px}
+  header{padding:12px 14px}.msg{max-width:96%}
+}
 </style></head><body>
-<header><a class="back" href="/">&larr; Deep OQ</a><h1>Admin</h1><span class="stats" id="stats"></span><button class="ref" id="ref" type="button">Refresh</button></header>
-<main>
-<section class="col"><h2>People</h2><input class="s" id="q" placeholder="Search people" aria-label="Search people"><div id="users"></div></section>
-<section class="col"><h2>Chats</h2><div id="sess"><p class="empty">Choose a person.</p></div></section>
-<section class="col" style="border-right:0"><h2>Messages</h2><div id="msgs"><p class="empty">Choose a chat.</p></div></section>
+<header>
+  <div class="logo">OQ</div>
+  <h1>Deep OQ Admin<small id="stamp">read-only</small></h1>
+  <span class="sp"></span>
+  <a class="btn" href="/admin/stats">Stats</a><a class="btn" href="/admin/ops">Ops</a>
+  <a class="btn" href="/">&larr; Back to app</a>
+  <button class="btn pri" id="ref" type="button">Refresh</button>
+</header>
+<div class="kpis">
+  <div class="kpi" style="--g:#7c5cff"><span>People</span><b id="k1">-</b></div>
+  <div class="kpi" style="--g:#22d3ee"><span>Chats</span><b id="k2">-</b></div>
+  <div class="kpi" style="--g:#34d399"><span>Messages</span><b id="k3">-</b></div>
+  <div class="kpi" style="--g:#fbbf24"><span>Active today</span><b id="k4">-</b></div>
+</div>
+<main id="main" data-v="people">
+  <section class="col" id="c1"><h2>People <span class="cnt" id="n1">0</span></h2>
+    <input class="s" id="q" placeholder="Search people" aria-label="Search people" autocomplete="off">
+    <div class="list" id="users"></div></section>
+  <section class="col" id="c2"><h2><button class="btn bk" id="b2" type="button">&larr; People</button>Chats <span class="cnt" id="n2">0</span></h2>
+    <div class="list" id="sess"><p class="empty">Choose a person.</p></div></section>
+  <section class="col" id="c3"><h2><button class="btn bk" id="b3" type="button">&larr; Chats</button>Messages <span class="cnt" id="n3">0</span></h2>
+    <div class="list" id="msgs"><p class="empty">Choose a chat.</p></div></section>
 </main>
 <script>
 const $=s=>document.querySelector(s);
 const el=(t,c,x)=>{const e=document.createElement(t);if(c)e.className=c;if(x!==undefined)e.textContent=x;return e};
-async function api(u){
-  const go=()=>fetch(u,{headers:{'X-Access-Key':localStorage.ak||''}});
-  let r=await go();
+const wait=ms=>new Promise(r=>setTimeout(r,ms));
+async function api(u,tries){
+  tries=tries||0;
+  const go=()=>{const c=new AbortController();const t=setTimeout(()=>c.abort(),30000);
+    return fetch(u,{headers:{'X-Access-Key':localStorage.ak||''},signal:c.signal}).finally(()=>clearTimeout(t))};
+  let r;
+  try{r=await go()}catch(e){throw new Error('The server did not answer in time. Press Refresh.')}
   if(r.status===401){localStorage.ak=prompt('Enter the access key')||'';r=await go()}
   const j=await r.json().catch(()=>({}));
-  if(!r.ok)throw new Error(j.error||'Request failed');
+  if(!r.ok)throw new Error(j.error||('Request failed ('+r.status+')'));
+  if(j.degraded){                       /* server answered with its "database busy" fallback */
+    if(tries<3){await wait(2500);return api(u,tries+1)}
+    throw new Error('The database is busy right now. Press Refresh in a moment.');
+  }
   return j;
 }
-const label=n=>n.startsWith('google:')?n.slice(7)+' (Google)':n;
-const when=t=>t?t.replace('T',' ').slice(0,16):'never';
-let users=[],curUser=null,curSess=null;
+const label=n=>n.startsWith('google:')?n.slice(7):n;
+const parse=t=>{if(!t)return null;let s=String(t).replace(' ','T');if(!/[zZ]|[+-]\d\d:?\d\d$/.test(s))s+='Z';const d=new Date(s);return isNaN(d)?null:d};
+const when=t=>{const d=parse(t);if(!d)return 'never';const m=Math.round((Date.now()-d)/60000);
+  if(m<1)return 'just now';if(m<60)return m+' min ago';if(m<1440)return Math.floor(m/60)+' h ago';
+  if(m<10080)return Math.floor(m/1440)+' d ago';return d.toLocaleDateString()};
+const full=t=>{const d=parse(t);return d?d.toLocaleString():''};
+const hue=s=>{let h=0;for(const c of s)h=(h*31+c.charCodeAt(0))%360;return h};
+function avatar(name){const a=el('div','av',(label(name).replace(/[^A-Za-z0-9]/g,'')[0]||'?').toUpperCase());
+  a.style.background='linear-gradient(135deg,hsl('+hue(name)+' 70% 55%),hsl('+((hue(name)+50)%360)+' 70% 45%))';return a}
 function note(box,t){box.replaceChildren(el('p','empty',t))}
+function fail(box,msg,retry){const d=el('div','err',msg);if(retry){const b=el('button','btn','Try again');b.type='button';b.onclick=retry;d.append(el('br'),b)}box.replaceChildren(d)}
+function skel(box,n){box.replaceChildren();for(let i=0;i<n;i++)box.append(el('div','sk'))}
+function view(v){$('#main').dataset.v=v}
+let users=[],curUser=null,curSess=null;
+
 async function loadUsers(){
+  const box=$('#users');if(!users.length)skel(box,6);
   try{
     const j=await api('/api/admin/users');
+    if(!Array.isArray(j.users))throw new Error('Unexpected answer from the server. Press Refresh.');
     users=j.users;
-    $('#stats').textContent=j.users.length+' people, '+j.total_messages+' messages';
+    const today=new Date().toISOString().slice(0,10);
+    $('#k1').textContent=users.filter(u=>u.username!=='(guests)').length;
+    $('#k2').textContent=users.reduce((a,u)=>a+u.sessions,0);
+    $('#k3').textContent=j.total_messages||0;
+    $('#k4').textContent=users.filter(u=>(u.last||'').slice(0,10)===today).length;
+    $('#stamp').textContent='updated '+new Date().toLocaleTimeString();
     drawUsers();
-  }catch(e){note($('#users'),e.message)}
+  }catch(e){fail(box,e.message,loadUsers)}
 }
 function drawUsers(){
   const f=$('#q').value.trim().toLowerCase(),box=$('#users');box.replaceChildren();
   const list=users.filter(u=>label(u.username).toLowerCase().includes(f));
+  $('#n1').textContent=list.length;
   if(!list.length){note(box,'No one found.');return}
+  const today=new Date().toISOString().slice(0,10);
   list.forEach(u=>{
     const b=el('button','item'+(u.username===curUser?' on':''));b.type='button';
-    b.append(el('b','',label(u.username)),el('small','',u.messages+' messages, '+u.sessions+' chats, last '+when(u.last)));
-    b.onclick=()=>{curUser=u.username;curSess=null;drawUsers();loadSessions();note($('#msgs'),'Choose a chat.')};
+    const tx=el('div','tx');tx.append(el('b','',label(u.username)),el('small','',u.messages+' messages · '+when(u.last)));
+    b.append(avatar(u.username),tx);
+    if((u.last||'').slice(0,10)===today)b.append(el('span','dot'));else b.append(el('span','pill',u.sessions+' chats'));
+    b.onclick=()=>{curUser=u.username;curSess=null;drawUsers();loadSessions();note($('#msgs'),'Choose a chat.');$('#n3').textContent=0;view('chats')};
     box.append(b);
   });
 }
 async function loadSessions(){
-  const box=$('#sess');note(box,'Loading...');
+  const box=$('#sess');skel(box,5);
   try{
     const j=await api('/api/admin/sessions?user='+encodeURIComponent(curUser));
-    box.replaceChildren();
+    if(!Array.isArray(j.sessions))throw new Error('Unexpected answer from the server.');
+    box.replaceChildren();$('#n2').textContent=j.sessions.length;
     if(!j.sessions.length){note(box,'No chats.');return}
     j.sessions.forEach(s=>{
       const b=el('button','item'+(s.session===curSess?' on':''));b.type='button';
-      b.append(el('b','',s.preview||'(no text)'),el('small','',s.count+' messages, '+when(s.last)));
-      b.onclick=()=>{curSess=s.session;box.querySelectorAll('.item').forEach(x=>x.classList.remove('on'));b.classList.add('on');loadMsgs()};
+      const tx=el('div','tx');tx.append(el('b','',s.preview||'(no text)'),el('small','',when(s.last)));
+      b.append(tx,el('span','pill',s.count));
+      b.onclick=()=>{curSess=s.session;box.querySelectorAll('.item').forEach(x=>x.classList.remove('on'));b.classList.add('on');loadMsgs(s);view('msgs')};
       box.append(b);
     });
-  }catch(e){note(box,e.message)}
+  }catch(e){fail(box,e.message,loadSessions)}
 }
-async function loadMsgs(){
-  const box=$('#msgs');note(box,'Loading...');
+let curS=null;
+async function loadMsgs(s){
+  s=s||curS;curS=s;
+  const box=$('#msgs');skel(box,4);
   try{
     const j=await api('/api/admin/messages?session='+encodeURIComponent(curSess));
-    box.replaceChildren();
+    if(!Array.isArray(j.messages))throw new Error('Unexpected answer from the server.');
+    box.replaceChildren();$('#n3').textContent=j.messages.length;
     if(!j.messages.length){note(box,'Empty chat.');return}
+    const head=el('div','mh');head.append(el('b','',(s&&s.preview)||'Chat'),el('small','',label(curUser||'')+' · '+j.messages.length+' messages'));
+    const body=el('div','mb');
     j.messages.forEach(m=>{
-      const d=el('div','msg '+(m.role==='user'?'user':'assistant'),m.content);
-      d.append(el('time','',when(m.ts)));
-      box.append(d);
+      const u=m.role==='user',d=el('div','msg '+(u?'user':'assistant'));
+      d.append(el('div','who',u?'User':'Deep OQ'),el('div','bub',m.content));
+      const t=el('time','',full(m.ts));d.append(t);body.append(d);
     });
-    box.parentElement.scrollTop=0;
-  }catch(e){note(box,e.message)}
+    box.append(head,body);box.scrollTop=0;
+  }catch(e){fail(box,e.message,()=>loadMsgs(s))}
 }
 $('#q').addEventListener('input',drawUsers);
-$('#ref').onclick=()=>{loadUsers();if(curUser!==null)loadSessions();if(curSess)loadMsgs()};
+$('#b2').onclick=()=>view('people');$('#b3').onclick=()=>view('chats');
+$('#ref').onclick=async()=>{const b=$('#ref');b.classList.add('spin');
+  await Promise.all([loadUsers(),curUser!==null?loadSessions():0,curSess?loadMsgs():0]);b.classList.remove('spin')};
 loadUsers();
 </script>
 </body></html>
