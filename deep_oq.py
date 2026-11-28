@@ -182,23 +182,27 @@ def _pg_open():
     return pool
 
 
-def _pg(sql, params=(), fetch=None):
-    import psycopg
-    import psycopg_pool
-    for attempt in (1, 2, 3):
-        try:
-            with PG.connection() as conn:
-                cur = conn.execute(sql, params)
-                if fetch == "one":
-                    return cur.fetchone()
-                if fetch == "all":
-                    return cur.fetchall()
-                return None
-        except (psycopg.OperationalError, psycopg.InterfaceError, psycopg_pool.PoolTimeout) as e:
-            if attempt == 3:
+    def _pg(sql, params=(), fetch=None):
+        import psycopg
+        import psycopg_pool
+        for attempt in (1, 2):
+            try:
+                with PG.connection(timeout=8) as conn:
+                    cur = conn.execute(sql, params)
+                    r = cur.fetchone() if fetch == "one" else cur.fetchall() if fetch == "all" else None
+                _PGD57["n"] = 0
+                return r
+            except psycopg_pool.PoolTimeout:
+                _PGD57["n"] += 1
+                if _PGD57["n"] >= 2:
+                    _pg_heal57()
                 raise
-            print("database connection problem, retrying:", str(e)[:120])
-            time.sleep(1.0 * attempt)
+            except (psycopg.OperationalError, psycopg.InterfaceError):
+                if attempt == 2:
+                    _PGD57["n"] += 1
+                    raise
+                time.sleep(0.5)
+    
 
 
 def _kb_conn():
@@ -25488,6 +25492,34 @@ print("Pack 56 v2 ready: database fail-fast, device cache, resumable Agent, deep
 # ---------- 1. database circuit breaker with back-off ----------
 if USE_PG:
     _PGD57 = {"until": 0.0, "n": 0}
+    _HEAL57 = {"t": 0.0}
+    _HEAL57_LOCK = threading.Lock()
+
+    def _pg_heal57():
+        """Pool is stuck (dead connections after hours idle): replace it with a fresh one."""
+        global PG
+        if time.time() - _HEAL57["t"] < 60:
+            return
+        if not _HEAL57_LOCK.acquire(blocking=False):
+            return
+        try:
+            _HEAL57["t"] = time.time()
+            old = PG
+            try:
+                new = _pg_open56()
+            except Exception as e:
+                print("PG heal failed:", type(e).__name__, str(e)[:200], flush=True)
+                return
+            PG = new
+            _PGD57["until"] = 0.0
+            _PGD57["n"] = 0
+            print("PG heal: fresh pool created", flush=True)
+            try:
+                old.close(timeout=2)
+            except Exception:
+                pass
+        finally:
+            _HEAL57_LOCK.release()
 
     def _pg(sql, params=(), fetch=None):
         import psycopg
@@ -25504,6 +25536,8 @@ if USE_PG:
             except psycopg_pool.PoolTimeout:
                 _PGD57["n"] += 1
                 _PGD57["until"] = time.time() + min(20, 3 * _PGD57["n"])
+                if _PGD57["n"] >= 2:
+                    _pg_heal57()
                 raise
             except (psycopg.OperationalError, psycopg.InterfaceError):
                 if attempt == 2:
