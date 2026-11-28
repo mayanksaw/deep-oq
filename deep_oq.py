@@ -17207,11 +17207,33 @@ def _daily_content16():
     return data
 
 
+_daily_busy16 = {"on": False}
+
+
+def _daily_bg16():
+    try:
+        _daily_content16()
+    finally:
+        _daily_busy16["on"] = False
+
+
 @app.get("/api/daily")
 def api_daily16():
     u = login_session.get("user") or "guest"
-    s = _streak_get16(u)
-    d = _daily_content16()
+    try:
+        s = _streak_get16(u)
+    except Exception as e:
+        print("daily streak failed:", str(e)[:120], flush=True)
+        s = {"last": "", "streak": 0, "best": 0, "xp": 0}
+    day = _today16().isoformat()
+    with _daily_lock16:
+        d = _daily16["data"] if _daily16["day"] == day else None
+    if d is None:
+        # build the quiz in the background so the popup opens instantly
+        if not _daily_busy16["on"]:
+            _daily_busy16["on"] = True
+            threading.Thread(target=_daily_bg16, daemon=True).start()
+        d = {"news": [], "fact": "Today's quiz is being prepared. Reopen Daily in a few seconds.", "quiz": []}
     return jsonify(streak=s["streak"], best=s["best"], xp=s["xp"], level=s["xp"] // 100 + 1,
                    done=(s["last"] == _today16().isoformat()), news=d["news"], fact=d["fact"], quiz=d["quiz"])
 
@@ -18974,7 +18996,7 @@ if USE_PG:
                     _PG_DOWN["until"] = time.time() + 3
                     raise
                 print("database connection problem, retrying:", str(e)[:120])
-                time.sleep(2)
+                time.sleep(8)
 
 def _soft(fn, default, label):
     """Wrap a database helper so a failure never kills the answer."""
@@ -20561,7 +20583,7 @@ def main():
             for j in call(c, "GET", "/api/device/c/poll").get("jobs", []):
                 ok, data = handle(j, roots, auto_all)
                 call(c, "POST", "/api/device/c/result", {"job": j["id"], "ok": ok, "data": data})
-            time.sleep(2)
+            time.sleep(8)
         except urllib.error.HTTPError as e:
             if e.code == 401:
                 sys.exit("This device was unlinked. Link it again from the website.")
