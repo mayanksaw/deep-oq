@@ -26692,6 +26692,7 @@ if os.environ.get("P60_WORKER", "1") == "1":
 
 # ---------- friendly errors + health ----------
 def _p60_degraded(e):
+    print("PACK60 degraded:", type(e).__name__, str(e)[:300], flush=True)
     _p60_fail(e)
     return jsonify({"ok": True, "degraded": True, "devices": [], "items": [], "data": [],
                     "message": "Saving locally, syncing in a moment."}), 200
