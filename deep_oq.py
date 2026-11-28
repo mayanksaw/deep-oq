@@ -24941,8 +24941,8 @@ AGENT_MAX_STEPS = 24
 if USE_PG:
     def _pg_open56():
         from psycopg_pool import ConnectionPool
-        kw = dict(min_size=2, max_size=12, open=False, max_lifetime=900, max_idle=240,
-                  reconnect_timeout=30, timeout=8, num_workers=3,
+        kw = dict(min_size=1, max_size=5, open=False, max_lifetime=300, max_idle=60,
+                  reconnect_timeout=30, timeout=30, num_workers=3,
                   kwargs={"autocommit": True, "connect_timeout": 15, "prepare_threshold": None,   # needed for Neon -pooler
                           "keepalives": 1, "keepalives_idle": 30, "keepalives_interval": 10, "keepalives_count": 5})
         chk = getattr(ConnectionPool, "check_connection", None)
@@ -26548,6 +26548,8 @@ def p60_make_pool():
 
 
 def p60_rebuild():
+    if globals().get("PG") is not None:
+        return globals()["PG"]
     with _P60_LOCK:
         old = _P60["pool"]
         _P60["pool"] = None
@@ -26560,7 +26562,7 @@ def p60_rebuild():
 
 
 def _p60_run(sql, params=None, fetch=False):
-    pool = _P60["pool"] or p60_make_pool()
+    pool = globals().get("PG") or _P60["pool"] or p60_make_pool()
     if pool is None:
         raise RuntimeError("database pool unavailable")
     with pool.connection(timeout=_P60_POOL_WAIT) as conn:
@@ -26716,6 +26718,10 @@ def p60_health():
         "has_DATABASE_URL": bool(os.environ.get("DATABASE_URL")),
     }
 # ===================== END PACK 60 ULTRA =====================
+try:
+    p60_query("CREATE INDEX IF NOT EXISTS idx_devices_owner ON devices(owner)", fetch=False)
+except Exception as e:
+    print("index skipped:", e, flush=True)
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "ingest":
         ingest(sys.argv[2:])
