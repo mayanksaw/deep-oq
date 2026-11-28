@@ -18927,9 +18927,10 @@ except Exception as _e23:
 if USE_PG:
     def _pg_open2():
         from psycopg_pool import ConnectionPool
-        kw = dict(min_size=3, max_size=20, open=False, max_lifetime=1800, max_idle=1800,
-                  reconnect_timeout=20, timeout=10, num_workers=2,
-                  kwargs={"autocommit": True, "connect_timeout": 20, "keepalives": 1, "keepalives_idle": 30,
+        kw = dict(min_size=1, max_size=5, open=False, max_lifetime=300, max_idle=60,
+                  reconnect_timeout=30, timeout=30, num_workers=2,
+                  kwargs={"autocommit": True, "connect_timeout": 15, "prepare_threshold": None,
+                          "keepalives": 1, "keepalives_idle": 30,
                           "keepalives_interval": 10, "keepalives_count": 5})
         chk = getattr(ConnectionPool, "check_connection", None)   # drops dead connections before they are used (newer psycopg_pool)
         if chk:
@@ -18945,7 +18946,7 @@ if USE_PG:
             _old_pool.close(timeout=5)
         except Exception as _e:
             print("old database pool did not close cleanly:", str(_e)[:100])
-        print("Database pool ready: 3 to 10 connections, checked before use")
+        print("Database pool ready: 1 to 5 connections, checked before use")
     except Exception as _e:
         print("Pack 24: could not build the new database pool, keeping the old one:", str(_e)[:150])
 
