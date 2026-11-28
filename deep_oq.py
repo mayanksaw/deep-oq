@@ -182,26 +182,23 @@ def _pg_open():
     return pool
 
 
-    def _pg(sql, params=(), fetch=None):
-        import psycopg
-        import psycopg_pool
-        for attempt in (1, 2):
-            try:
-                with PG.connection(timeout=8) as conn:
-                    cur = conn.execute(sql, params)
-                    r = cur.fetchone() if fetch == "one" else cur.fetchall() if fetch == "all" else None
-                _PGD57["n"] = 0
-                return r
-            except psycopg_pool.PoolTimeout:
-                _PGD57["n"] += 1
-                if _PGD57["n"] >= 2:
-                    _pg_heal57()
+def _pg(sql, params=(), fetch=None):
+    import psycopg
+    import psycopg_pool
+    for attempt in (1, 2, 3):
+        try:
+            with PG.connection() as conn:
+                cur = conn.execute(sql, params)
+                if fetch == "one":
+                    return cur.fetchone()
+                if fetch == "all":
+                    return cur.fetchall()
+                return None
+        except (psycopg.OperationalError, psycopg.InterfaceError, psycopg_pool.PoolTimeout) as e:
+            if attempt == 3:
                 raise
-            except (psycopg.OperationalError, psycopg.InterfaceError):
-                if attempt == 2:
-                    _PGD57["n"] += 1
-                    raise
-                time.sleep(0.5)
+            print("database connection problem, retrying:", str(e)[:120])
+            time.sleep(1.0 * attempt)
     
 
 
