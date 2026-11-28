@@ -26720,6 +26720,7 @@ def p60_health():
         "has_DATABASE_URL": bool(os.environ.get("DATABASE_URL")),
     }
 # ===================== END PACK 60 ULTRA =====================
+app.view_functions["api_device_list39"] = p60_ttl(5)(app.view_functions["api_device_list39"])
 for _ix in ("CREATE INDEX IF NOT EXISTS idx_oq_devices_user ON oq_devices(username)",
             "CREATE INDEX IF NOT EXISTS idx_oq_devices_th ON oq_devices(th)",
             "CREATE INDEX IF NOT EXISTS idx_oq_mistakes_user ON oq_mistakes(username)",
