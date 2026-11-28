@@ -26729,6 +26729,33 @@ for _ix in ("CREATE INDEX IF NOT EXISTS idx_oq_devices_user ON oq_devices(userna
         p60_query(_ix, fetch=False)
     except Exception as e:
         print("index skipped:", e, flush=True)
+  # ================= PACK 61: LINK CODE ALWAYS WORKS =================
+def _pair_new61():
+    if denied():
+        return jsonify(error="locked"), 401
+    u = login_session.get("user") or ""
+    now = time.time()
+    for k in [k for k, v in _DEV_PAIR.items() if v[1] < now]:
+        _DEV_PAIR.pop(k, None)
+    if sum(1 for v in _DEV_PAIR.values() if v[0] == u) >= 5:
+        return jsonify(error="Too many unused codes. Wait 10 minutes."), 429
+    try:
+        if len(_dev_list(u)) >= 10:
+            return jsonify(error="You already have 10 devices. Unlink one first."), 400
+    except Exception as e:
+        print("pair/new: device count skipped (database busy):", str(e)[:100])
+    code = "".join(secrets.choice(_VR_ALPHA) for _ in range(8))
+    _DEV_PAIR[code] = (u, now + 600)          # kept in memory, no database needed
+    return jsonify(code=code)
+
+app.view_functions["api_device_pair_new39"] = _pair_new61
+
+# the page: never show an empty code
+PAGE = PAGE.replace(
+    "const j=await call('/api/device/pair/new',{});",
+    "const j=await call('/api/device/pair/new',{});if(!j.code)throw new Error('Could not make a code. Wait a few seconds and press Link a new device again.');", 1)
+print("Pack 61 ready: link code no longer depends on the database")
+# ================= END PACK 61 =================
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "ingest":
         ingest(sys.argv[2:])
