@@ -10207,8 +10207,8 @@ def live_news(query="", cat="top", n=12):
         try:
             return [dict(it, source=it["source"] or f[0]) for it in _fetch_rss(f[1])[:25]]
         except Exception as e:
-        if "empty feed" not in str(e):
-            print("feed failed:", f[0], e)
+            if "empty feed" not in str(e):
+                print("feed failed:", f[0], e)
             return []
     with ThreadPoolExecutor(max_workers=8) as ex:
         groups = list(ex.map(grab, feeds))
