@@ -24703,7 +24703,7 @@ function modal(){
   let timer=null;
   const k=e=>{if(e.key==='Escape')close()},close=()=>{clearInterval(timer);o.remove();document.removeEventListener('keydown',k)};
   document.addEventListener('keydown',k);o.addEventListener('click',e=>{if(e.target===o||e.target.closest('.oqx'))close()});
-  o._setTimer=f=>{clearInterval(timer);timer=setInterval(()=>{if(document.body.contains(o)&&!document.hidden)f()},30000)};
+  o._setTimer=f=>{clearInterval(timer);timer=setInterval(()=>{if(document.body.contains(o)&&!document.hidden)f()},60000)};
   return o;
 }
 function raceHTML(g){
@@ -26406,6 +26406,316 @@ AGENT_SYSTEM += ("\n\nDEEP READING: to go through a whole website use the toolbo
                  "write 'not confirmed' instead. The system adds the final 'Confidence' line itself, so do not write one.")
 print("Pack 59 ready: relevant sources only, fallback page reader, crawl_site, batched notes, computed confidence")
 # ================= END PACK 59 =================
+# ============================================================
+# PACK 60 ULTRA - NEVER-DB-ERROR LAYER (replaces the first pack60.py)
+# Paste ABOVE the `if __name__` line. Needs: app (Flask), psycopg, psycopg_pool
+#
+# Users never see a database error because:
+#   READ  fails -> last good answer comes from a local cache
+#   WRITE fails -> saved in a local outbox, replayed when DB is back
+#   Pool breaks -> it is rebuilt automatically
+#   Any DB exception that still escapes -> friendly JSON, not HTTP 500
+#   Keep-alive  -> app + DB are pinged so they sleep less
+# ============================================================
+import os, time, json, sqlite3, threading, functools, urllib.request
+from flask import jsonify
+
+try:
+    import psycopg
+    from psycopg_pool import ConnectionPool, PoolTimeout, PoolClosed
+    _P60_CONN_ERRS = (psycopg.OperationalError, PoolTimeout, PoolClosed, OSError)
+except Exception:  # library missing -> still run, only fallback works
+    psycopg = ConnectionPool = None
+    _P60_CONN_ERRS = (OSError,)
+
+_P60 = {"fails": 0, "open_until": 0.0, "last_error": "", "last_ok": 0.0, "pool": None}
+_P60_LOCK = threading.Lock()
+_P60_SQL_LOCK = threading.Lock()
+_P60_FALLBACK = os.environ.get("P60_FALLBACK_DB", "/tmp/deep_oq_fallback.db")
+# ---- all limits are env variables now; set them in Render -> Environment ----
+_P60_POOL_MAX = int(os.environ.get("P60_POOL_MAX", "5"))      # connections (your DB plan may cap this)
+_P60_POOL_WAIT = int(os.environ.get("P60_POOL_WAIT", "30"))   # seconds to wait for a connection
+_P60_RETRIES = int(os.environ.get("P60_RETRIES", "3"))         # tries per call before fallback
+_P60_COOLDOWN = int(os.environ.get("P60_COOLDOWN", "10"))       # seconds of pause after failures (0 = none)
+_P60_REPLAY_BATCH = int(os.environ.get("P60_REPLAY_BATCH", "50"))
+
+
+# ---------- helpers ----------
+def p60_is_conn_err(e):
+    if isinstance(e, _P60_CONN_ERRS):
+        return True
+    m = str(e).lower()
+    return isinstance(e, RuntimeError) and "database" in m or "couldn't get a connection" in m
+
+
+def _p60_fail(e):
+    with _P60_LOCK:
+        _P60["fails"] += 1
+        _P60["last_error"] = f"{type(e).__name__}: {e}"[:300]
+        if _P60_COOLDOWN > 0 and _P60["fails"] >= 3:
+            _P60["open_until"] = time.time() + _P60_COOLDOWN
+
+
+def _p60_ok():
+    with _P60_LOCK:
+        _P60["fails"] = 0
+        _P60["open_until"] = 0.0
+        _P60["last_ok"] = time.time()
+
+
+def p60_db_open():
+    return time.time() < _P60["open_until"]
+
+
+# ---------- local SQLite: cache + outbox + kv ----------
+def _lite():
+    c = sqlite3.connect(_P60_FALLBACK, timeout=10, check_same_thread=False)
+    c.execute("CREATE TABLE IF NOT EXISTS cache (k TEXT PRIMARY KEY, v TEXT, t REAL)")
+    c.execute("CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT, t REAL)")
+    c.execute("CREATE TABLE IF NOT EXISTS outbox (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+              " sql TEXT, params TEXT, t REAL, tries INTEGER DEFAULT 0)")
+    c.execute("CREATE TABLE IF NOT EXISTS outbox_dead (id INTEGER, sql TEXT, params TEXT, t REAL, err TEXT)")
+    return c
+
+
+def _lite_run(sql, args=(), fetch=False):
+    try:
+        with _P60_SQL_LOCK:
+            c = _lite()
+            try:
+                cur = c.execute(sql, args)
+                rows = cur.fetchall() if fetch else None
+                c.commit()
+                return rows
+            finally:
+                c.close()
+    except Exception as e:
+        print("PACK60 sqlite error:", e, flush=True)
+        return None
+
+
+def p60_kv_set(key, value):
+    return _lite_run("REPLACE INTO kv VALUES (?,?,?)", (key, json.dumps(value, default=str), time.time())) is None
+
+
+def p60_kv_get(key, default=None):
+    r = _lite_run("SELECT v FROM kv WHERE k=?", (key,), fetch=True)
+    return json.loads(r[0][0]) if r else default
+
+
+def _cache_put(key, val):
+    _lite_run("REPLACE INTO cache VALUES (?,?,?)", (key, json.dumps(val, default=str), time.time()))
+
+
+def _cache_get(key):
+    r = _lite_run("SELECT v FROM cache WHERE k=?", (key,), fetch=True)
+    return json.loads(r[0][0]) if r else None
+
+
+def _outbox_add(sql, params):
+    _lite_run("INSERT INTO outbox (sql, params, t) VALUES (?,?,?)",
+              (sql, json.dumps(list(params or ()), default=str), time.time()))
+
+
+# ---------- pool ----------
+def _p60_new_pool():
+    url = os.environ.get("DATABASE_URL", "")
+    if url.startswith("postgres://"):
+        url = url.replace("postgres://", "postgresql://", 1)
+    if url and "sslmode" not in url and "localhost" not in url:
+        url += ("&" if "?" in url else "?") + "sslmode=require"
+    pool = ConnectionPool(
+        conninfo=url, min_size=1, max_size=_P60_POOL_MAX, timeout=_P60_POOL_WAIT,
+        max_lifetime=300, max_idle=60, reconnect_timeout=30,
+        check=ConnectionPool.check_connection,
+        kwargs={"connect_timeout": 15, "prepare_threshold": None,
+                "keepalives": 1, "keepalives_idle": 30,
+                "keepalives_interval": 10, "keepalives_count": 3},
+        open=False)
+    pool.open(wait=False)
+    return pool
+
+
+def p60_make_pool():
+    """Use instead of your old ConnectionPool(...) line."""
+    with _P60_LOCK:
+        if _P60["pool"] is None:
+            try:
+                _P60["pool"] = _p60_new_pool()
+            except Exception as e:
+                print("PACK60 pool create failed:", e, flush=True)
+    return _P60["pool"]
+
+
+def p60_rebuild():
+    with _P60_LOCK:
+        old = _P60["pool"]
+        _P60["pool"] = None
+    try:
+        if old is not None:
+            old.close(timeout=1)
+    except Exception:
+        pass
+    return p60_make_pool()
+
+
+def _p60_run(sql, params=None, fetch=False):
+    pool = _P60["pool"] or p60_make_pool()
+    if pool is None:
+        raise RuntimeError("database pool unavailable")
+    with pool.connection(timeout=_P60_POOL_WAIT) as conn:
+        cur = conn.execute(sql, params or ())
+        if fetch:
+            cols = [d.name for d in cur.description]
+            return [dict(zip(cols, r)) for r in cur.fetchall()]
+        return cur.rowcount
+
+
+# ---------- the main function: use this for ALL database calls ----------
+def p60_query(sql, params=None, fetch=True, cache_key=None, default=None):
+    """READ : p60_query("SELECT * FROM devices WHERE u=%s", (uid,), cache_key=f"dev:{uid}", default=[])
+       WRITE: p60_query("INSERT INTO ...", (a, b), fetch=False)   # queued if DB is down
+       Never raises for connection problems. Real SQL mistakes still raise."""
+    if not p60_db_open():
+        for attempt in range(_P60_RETRIES):
+            try:
+                out = _p60_run(sql, params, fetch)
+                _p60_ok()
+                if fetch and cache_key:
+                    _cache_put(cache_key, out)
+                return out
+            except Exception as e:
+                if not p60_is_conn_err(e):
+                    raise
+                _p60_fail(e)
+                if attempt in (0, 2, 4):
+                    p60_rebuild()
+                time.sleep(min(0.5 * (attempt + 1), 3))
+    # DB is down -> fallback
+    if fetch:
+        cached = _cache_get(cache_key) if cache_key else None
+        return cached if cached is not None else default
+    _outbox_add(sql, params)
+    return -1  # -1 means "saved in outbox, will sync later"
+
+
+def p60_guard(fallback=None):
+    """Decorator for routes/functions that use the old DB code."""
+    def deco(fn):
+        @functools.wraps(fn)
+        def wrapper(*a, **kw):
+            try:
+                out = fn(*a, **kw)
+                _p60_ok()
+                return out
+            except Exception as e:
+                if not p60_is_conn_err(e):
+                    raise
+                _p60_fail(e)
+                return fallback() if callable(fallback) else fallback
+        return wrapper
+    return deco
+
+
+# ---------- short route cache: fewer DB hits for polling routes ----------
+_P60_MEM = {}
+
+
+def p60_ttl(seconds=5):
+    """Put under @app.route on READ-ONLY routes (like /api/device/list or /agent/...).
+    Same URL + same cookie within `seconds` -> answer from memory, DB not touched."""
+    def deco(fn):
+        @functools.wraps(fn)
+        def w(*a, **kw):
+            from flask import request
+            key = (fn.__name__, request.full_path, request.headers.get("Cookie", ""),
+                   request.headers.get("Authorization", ""))
+            hit = _P60_MEM.get(key)
+            if hit and time.time() - hit[0] < seconds:
+                return hit[1]
+            out = fn(*a, **kw)
+            if len(_P60_MEM) > 500:
+                _P60_MEM.clear()
+            _P60_MEM[key] = (time.time(), out)
+            return out
+        return w
+    return deco
+
+
+# ---------- outbox replay + keep-alive ----------
+def _p60_replay():
+    rows = _lite_run("SELECT id, sql, params, tries FROM outbox ORDER BY id LIMIT ?", (_P60_REPLAY_BATCH,), fetch=True) or []
+    for rid, sql, params, tries in rows:
+        try:
+            _p60_run(sql, tuple(json.loads(params)), False)
+            _lite_run("DELETE FROM outbox WHERE id=?", (rid,))
+            _p60_ok()
+        except Exception as e:
+            if p60_is_conn_err(e):
+                _p60_fail(e)
+                return
+            if tries + 1 >= 20:  # broken statement: move to outbox_dead, never delete data
+                _lite_run("INSERT INTO outbox_dead SELECT id, sql, params, t, ? FROM outbox WHERE id=?",
+                          (str(e)[:300], rid))
+                _lite_run("DELETE FROM outbox WHERE id=?", (rid,))
+            else:
+                _lite_run("UPDATE outbox SET tries=tries+1 WHERE id=?", (rid,))
+
+
+def _p60_worker():
+    time.sleep(20)
+    base = os.environ.get("RENDER_EXTERNAL_URL", "").rstrip("/")
+    last_ping = 0
+    while True:
+        try:
+            if not p60_db_open():
+                _p60_replay()
+            if time.time() - last_ping > 240:
+                last_ping = time.time()
+                if base:
+                    urllib.request.urlopen(base + "/api/db/health", timeout=20).read()
+                if os.environ.get("DATABASE_URL"):
+                    _p60_run("SELECT 1", None, True)
+                    _p60_ok()
+        except Exception as e:
+            if p60_is_conn_err(e):
+                _p60_fail(e)
+        time.sleep(15)
+
+
+if os.environ.get("P60_WORKER", "1") == "1":
+    threading.Thread(target=_p60_worker, daemon=True).start()
+
+
+# ---------- friendly errors + health ----------
+def _p60_degraded(e):
+    _p60_fail(e)
+    return jsonify({"ok": True, "degraded": True, "devices": [], "items": [], "data": [],
+                    "message": "Saving locally, syncing in a moment."}), 200
+
+
+def _p60_any_error(e):
+    if p60_is_conn_err(e):
+        return _p60_degraded(e)
+    raise e  # not a DB problem -> normal behaviour
+
+
+for _cls in _P60_CONN_ERRS:
+    app.register_error_handler(_cls, _p60_degraded)
+app.register_error_handler(RuntimeError, _p60_any_error)
+
+
+@app.route("/api/db/health")
+def p60_health():
+    pend = _lite_run("SELECT COUNT(*) FROM outbox", fetch=True)
+    return {
+        "state": "cooling_down" if p60_db_open() else ("ok" if _P60["fails"] == 0 else "degraded"),
+        "fails": _P60["fails"],
+        "last_error": _P60["last_error"],
+        "pending_writes": pend[0][0] if pend else None,
+        "has_DATABASE_URL": bool(os.environ.get("DATABASE_URL")),
+    }
+# ===================== END PACK 60 ULTRA =====================
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "ingest":
         ingest(sys.argv[2:])
