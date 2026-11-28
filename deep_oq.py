@@ -164,7 +164,7 @@ def _pg_open():
         min_size=1, max_size=8, open=False,
         max_lifetime=900,
         max_idle=240,
-        reconnect_timeout=30,
+        reconnect_timeout=8,
         timeout=20,                      # allows for Neon cold start
         num_workers=3,
         check=ConnectionPool.check_connection,
@@ -24965,7 +24965,7 @@ if USE_PG:
     def _pg_open56():
         from psycopg_pool import ConnectionPool
         kw = dict(min_size=1, max_size=5, open=False, max_lifetime=300, max_idle=60,
-                  reconnect_timeout=30, timeout=30, num_workers=3,
+                  reconnect_timeout=30, timeout=8, num_workers=3,
                   kwargs={"autocommit": True, "connect_timeout": 15, "prepare_threshold": None,   # needed for Neon -pooler
                           "keepalives": 1, "keepalives_idle": 30, "keepalives_interval": 10, "keepalives_count": 5})
         chk = getattr(ConnectionPool, "check_connection", None)
@@ -26549,7 +26549,7 @@ def _p60_new_pool():
         url += ("&" if "?" in url else "?") + "sslmode=require"
     pool = ConnectionPool(
         conninfo=url, min_size=1, max_size=_P60_POOL_MAX, timeout=_P60_POOL_WAIT,
-        max_lifetime=300, max_idle=60, reconnect_timeout=30,
+        max_lifetime=300, max_idle=60, reconnect_timeout=8,
         check=ConnectionPool.check_connection,
         kwargs={"connect_timeout": 15, "prepare_threshold": None,
                 "keepalives": 1, "keepalives_idle": 30,
