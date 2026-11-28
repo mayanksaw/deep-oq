@@ -24959,7 +24959,7 @@ if USE_PG:
             _old_pool56.close(timeout=5)
         except Exception:
             pass
-        print("Pack 56: database pool rebuilt (2-12 connections, checked before use)")
+        print("Pack 56: database pool rebuilt (1-5 connections, checked before use)")
     except Exception as _e56:
         print("Pack 56: keeping the old database pool:", str(_e56)[:150])
 
